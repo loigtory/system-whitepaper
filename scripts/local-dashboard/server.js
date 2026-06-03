@@ -875,6 +875,7 @@ function buildBatchActiveRun(run, systems, batch) {
   const failureSummary = batch?.failureSummary || { counts: {}, recoverable: 0, quotaSensitive: 0 };
   const diagnosis = batch?.diagnosis || null;
   const repairQueue = batch?.repairQueue || null;
+  const acceptance = batch?.acceptance || null;
   const repairFollowUp = batch?.repairFollowUp || null;
   return {
     mode: "batch",
@@ -891,6 +892,7 @@ function buildBatchActiveRun(run, systems, batch) {
     failureSummary,
     diagnosis,
     repairQueue,
+    acceptance,
     repairFollowUp,
     startedAt: run.startedAt || batch?.startedAt || "",
     runningMs:
@@ -1023,6 +1025,11 @@ function buildDashboardSnapshot(options = {}) {
     json: fileInfo(path.join(outputRoot, "_batch", "repair-queue.json")),
     markdown: fileInfo(path.join(outputRoot, "_batch", "repair-queue.md")),
   };
+  const batchAcceptanceReport = readOptionalJsonObject(path.join(outputRoot, "_batch", "acceptance-report.json"));
+  const batchAcceptanceArtifacts = {
+    json: fileInfo(path.join(outputRoot, "_batch", "acceptance-report.json")),
+    markdown: fileInfo(path.join(outputRoot, "_batch", "acceptance-report.md")),
+  };
   const batchRepairRunState = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-run-state.json"));
   const batchRepairRunPlan = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-run-plan.json"));
   const batchRepairClosure = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-closure.json"));
@@ -1059,6 +1066,17 @@ function buildDashboardSnapshot(options = {}) {
                 summary: batchRepairQueue.summary || {},
                 artifacts: { repairQueueJson: "repair-queue.json", repairQueueMarkdown: "repair-queue.md" },
                 generatedAt: batchRepairQueue.generatedAt || "",
+              }
+            : null),
+        acceptance:
+          batch.acceptance ||
+          (batchAcceptanceReport
+            ? {
+                status: batchAcceptanceReport.status || "",
+                canSubmitAll: Boolean(batchAcceptanceReport.canSubmitAll),
+                summary: batchAcceptanceReport.summary || {},
+                artifacts: { acceptanceJson: "acceptance-report.json", acceptanceMarkdown: "acceptance-report.md" },
+                generatedAt: batchAcceptanceReport.generatedAt || "",
               }
             : null),
         repairFollowUp:
@@ -1141,6 +1159,8 @@ function buildDashboardSnapshot(options = {}) {
     batchDiagnosisArtifacts,
     batchRepairQueue,
     batchRepairQueueArtifacts,
+    batchAcceptanceReport,
+    batchAcceptanceArtifacts,
     batchRepairRunState,
     batchRepairRunPlan,
     batchRepairClosure,

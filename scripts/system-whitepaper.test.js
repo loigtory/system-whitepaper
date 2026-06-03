@@ -7346,6 +7346,207 @@ test("repair follow-up loop consumes low-quota commands only", async () => {
   assert.equal(launchCount, 1);
 });
 
+test("batch acceptance report gates 95+ truth delivery without reading secrets", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    buildBatchAcceptanceReport,
+    renderBatchAcceptanceMarkdown,
+    runBatchAcceptanceCheck,
+  } = require("./check-batch-acceptance");
+  const { buildReadinessSourceArtifacts, loadReadinessInputs } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "batch-acceptance-"));
+  const outputRoot = path.join(dir, "outputs");
+  const systemOutput = path.join(outputRoot, "adp");
+  fs.mkdirSync(path.join(outputRoot, "_batch"), { recursive: true });
+  fs.mkdirSync(systemOutput, { recursive: true });
+  const configPath = path.join(dir, "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+      "    databaseProfile:",
+      "      enabled: true",
+      "      mode: metadata-file",
+      "      readOnly: true",
+      "      secretFile: ./secrets/db/adp.json",
+      "      metadataFile: ./secrets/db/adp-metadata.json",
+    ].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "quality-report.json"),
+    JSON.stringify({
+      canFinalize: true,
+      menuCoverage: 1,
+      corePageScreenshotCoverage: 1,
+      coreFunctionClassificationCoverage: 1,
+      writeOperationSafetyCompliance: 1,
+      unverifiedContentLabeling: 1,
+      coreConclusionTraceability: 1,
+      failures: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "verified-claims.json"),
+    JSON.stringify({
+      rules: {
+        lowConfidenceNotWritable: true,
+        databaseOnlyNotConfirmed: true,
+        databaseOnlyNotWritable: true,
+      },
+      metrics: { claimCount: 1, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0 },
+      writableClaimIds: ["function:保单任务:任务列表"],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "fact-check-report.json"),
+    JSON.stringify({
+      canFinalize: true,
+      failures: [],
+      metrics: {
+        claimCount: 1,
+        writableClaimCount: 1,
+        checkedAssertions: 1,
+        supportedAssertions: 1,
+        supportedRatio: 1,
+        coveredWritableClaimCount: 1,
+        missingWritableClaimCount: 0,
+        writableClaimCoverageRatio: 1,
+        minWritableClaimCoverage: 0.8,
+      },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "narrative-quality-report.json"),
+    JSON.stringify({ canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "database-profile.json"),
+    JSON.stringify({ artifactType: "database-profile", tables: [], safety: { secretRedacted: true } }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      artifactType: "truth-readiness-report",
+      version: 1,
+      threshold: 0.95,
+      score: 0.98,
+      scorePercent: 98,
+      canSubmitReview: true,
+      canFinalize: true,
+      gates: {
+        database: { pass: true, available: true },
+        factCheck: {
+          pass: true,
+          metrics: {
+            writableClaimCoverageRatio: 1,
+            minWritableClaimCoverage: 0.8,
+            missingWritableClaimCount: 0,
+          },
+        },
+      },
+      blockers: [],
+      improvementActions: [],
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+      generatedAt: "2026-06-03T00:01:00.000Z",
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(outputRoot, "_batch", "run-state.json"),
+    JSON.stringify({
+      artifactType: "batch-run-state",
+      status: "success",
+      batchId: "batch-accept",
+      concurrency: 4,
+      summary: { total: 1, completed: 1, failed: 0 },
+      systems: [{ code: "adp", status: "review-pending", runStatus: "completed" }],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(outputRoot, "_batch", "diagnosis.json"),
+    JSON.stringify({
+      artifactType: "batch-diagnosis",
+      status: "success",
+      generatedAt: "2026-06-03T00:02:00.000Z",
+      summary: { total: 1, ready: 1, blocked: 0, missingWritableClaims: 0 },
+      systems: [{ code: "adp", ready: true, missingWritableClaimCount: 0 }],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(outputRoot, "_batch", "repair-queue.json"),
+    JSON.stringify({
+      artifactType: "batch-repair-queue",
+      status: "success",
+      generatedAt: "2026-06-03T00:02:30.000Z",
+      summary: { total: 0, autoRunnable: 0, blocked: 0, requiresAgentWriting: 0 },
+      items: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(outputRoot, "_batch", "repair-closure.json"),
+    JSON.stringify({
+      artifactType: "batch-repair-closure",
+      status: "passed",
+      diagnosis: { generatedAt: "2026-06-03T00:02:00.000Z" },
+      repairQueue: { generatedAt: "2026-06-03T00:02:30.000Z" },
+      blockers: [],
+    }),
+    "utf8",
+  );
+
+  const accepted = runBatchAcceptanceCheck({ args: { config: configPath } });
+  assert.equal(accepted.status, "accepted");
+  assert.equal(accepted.canSubmitAll, true);
+  assert.equal(accepted.summary.accepted, 1);
+  assert.equal(accepted.summary.databaseBacked, 1);
+  assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "acceptance-report.json")), true);
+  assert.match(renderBatchAcceptanceMarkdown(accepted), /Batch Acceptance Report/);
+
+  fs.writeFileSync(path.join(systemOutput, "quality-report.json"), "{\"canFinalize\":false}", "utf8");
+  const stale = buildBatchAcceptanceReport({ args: { config: configPath } });
+  assert.equal(stale.status, "blocked");
+  assert.ok(stale.blockers.some((item) => item.id === "truth-readiness.stale-sources"));
+
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      ...accepted.systems[0],
+      artifactType: "truth-readiness-report",
+      scorePercent: 94,
+      score: 0.94,
+      canSubmitReview: true,
+      canFinalize: true,
+      gates: {
+        database: { available: true },
+        factCheck: { metrics: { writableClaimCoverageRatio: 1, minWritableClaimCoverage: 0.8, missingWritableClaimCount: 0 } },
+      },
+      blockers: [],
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
+  const belowTarget = buildBatchAcceptanceReport({ args: { config: configPath } });
+  assert.equal(belowTarget.status, "blocked");
+  assert.ok(belowTarget.blockers.some((item) => item.id === "truth-readiness.below-target"));
+});
+
 test("dashboard supports batch pipeline command and active run snapshot", () => {
   const {
     buildActiveRun,
@@ -7446,6 +7647,12 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
         summary: { total: 1, autoRunnable: 0, blocked: 1, requiresAgentWriting: 1 },
         artifacts: { repairQueueMarkdown: "repair-queue.md", repairQueueJson: "repair-queue.json" },
       },
+      acceptance: {
+        status: "blocked",
+        canSubmitAll: false,
+        summary: { total: 2, accepted: 1, blocked: 1, blockers: 1 },
+        artifacts: { acceptanceMarkdown: "acceptance-report.md", acceptanceJson: "acceptance-report.json" },
+      },
     },
   );
   assert.equal(batchActiveRun.mode, "batch");
@@ -7460,6 +7667,8 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(batchActiveRun.diagnosis.summary.ready, 1);
   assert.equal(batchActiveRun.repairQueue.summary.total, 1);
   assert.equal(batchActiveRun.repairQueue.summary.requiresAgentWriting, 1);
+  assert.equal(batchActiveRun.acceptance.status, "blocked");
+  assert.equal(batchActiveRun.acceptance.summary.accepted, 1);
 
   const fs = require("node:fs");
   const os = require("node:os");
@@ -7520,6 +7729,18 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "outputs", "_batch", "repair-queue.md"), "# Batch Repair Queue", "utf8");
+  fs.writeFileSync(
+    path.join(dir, "outputs", "_batch", "acceptance-report.json"),
+    JSON.stringify({
+      artifactType: "batch-acceptance-report",
+      status: "blocked",
+      canSubmitAll: false,
+      summary: { total: 1, accepted: 0, blocked: 1, blockers: 1 },
+      blockers: [{ id: "batch.repair-queue-not-empty", message: "Batch repair queue is not empty." }],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(dir, "outputs", "_batch", "acceptance-report.md"), "# Batch Acceptance Report", "utf8");
   fs.writeFileSync(
     path.join(dir, "outputs", "_batch", "repair-run-plan.json"),
     JSON.stringify({
@@ -7592,6 +7813,9 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(snapshot.batchDiagnosisArtifacts.markdown.exists, true);
   assert.equal(snapshot.batchRepairQueue.summary.total, 1);
   assert.equal(snapshot.batchRepairQueueArtifacts.markdown.exists, true);
+  assert.equal(snapshot.batchAcceptanceReport.status, "blocked");
+  assert.equal(snapshot.batchAcceptanceArtifacts.markdown.exists, true);
+  assert.equal(snapshot.activeRun.acceptance.summary.blockers, 1);
   assert.equal(snapshot.batchRepairRunPlan.summary.runnableGroups, 1);
   assert.equal(snapshot.batchRepairRunState.status, "dry-run");
   assert.equal(snapshot.batchRepairClosure.status, "blocked");
@@ -10889,6 +11113,7 @@ test("package manifest whitelists only skill runtime assets", () => {
     "scripts/build-database-model.js",
     "scripts/build-function-universe.js",
     "scripts/build-verified-claims.js",
+    "scripts/check-batch-acceptance.js",
     "scripts/check-truth-readiness.js",
     "scripts/fact-check-whitepaper.js",
     "scripts/system-whitepaper-lib.js",
@@ -10954,6 +11179,7 @@ test("npm pack dry-run excludes private and process-only assets", () => {
     "scripts/build-database-model.js",
     "scripts/build-function-universe.js",
     "scripts/build-verified-claims.js",
+    "scripts/check-batch-acceptance.js",
     "scripts/check-truth-readiness.js",
     "scripts/fact-check-whitepaper.js",
     "scripts/system-whitepaper-lib.js",
@@ -11038,6 +11264,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
       "scripts/build-database-model.js",
       "scripts/build-function-universe.js",
       "scripts/build-verified-claims.js",
+      "scripts/check-batch-acceptance.js",
       "scripts/check-truth-readiness.js",
       "scripts/fact-check-whitepaper.js",
       "scripts/system-whitepaper-lib.js",
@@ -11065,6 +11292,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
           'require("./scripts/build-database-model");',
           'require("./scripts/build-function-universe");',
           'require("./scripts/build-verified-claims");',
+          'require("./scripts/check-batch-acceptance");',
           'require("./scripts/check-truth-readiness");',
           'require("./scripts/fact-check-whitepaper");',
           'require("./scripts/system-whitepaper-lib");',
