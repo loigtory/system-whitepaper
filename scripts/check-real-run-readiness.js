@@ -241,23 +241,74 @@ function selectScopedReport(report, kind, selectedCodes = [], context = {}) {
   return { report, warnings: [] };
 }
 
-function hasAcceptedEvidence(acceptanceReport, deliveryReport) {
-  if (acceptanceReport?.status === "accepted" && acceptanceReport.canSubmitAll === true) return true;
-  const embeddedAcceptance = deliveryReport?.acceptance || {};
-  return embeddedAcceptance.status === "accepted" && embeddedAcceptance.canSubmitAll === true;
+function acceptanceReportIsAccepted(acceptanceReport) {
+  return acceptanceReport?.status === "accepted" && acceptanceReport.canSubmitAll === true;
+}
+
+function sameGeneratedAt(left, right) {
+  return Boolean(left && right && String(left) === String(right));
+}
+
+function parseGeneratedAtMs(value) {
+  if (!value) return null;
+  const ms = Date.parse(String(value));
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function bindDeliveryReportToAcceptance(deliveryReport, acceptanceReport) {
+  if (!deliveryReport) return { report: null, warnings: [] };
+  if (!acceptanceReport) {
+    return {
+      report: null,
+      warnings: [
+        reportScopeWarning(
+          "delivery",
+          "acceptance-missing",
+          "Ignored delivery report because the matching standalone acceptance report is missing.",
+        ),
+      ],
+    };
+  }
+  const embeddedAcceptance = deliveryReport.acceptance || {};
+  const statusMatches = embeddedAcceptance.status === acceptanceReport.status;
+  const canSubmitMatches = Boolean(embeddedAcceptance.canSubmitAll) === Boolean(acceptanceReport.canSubmitAll);
+  const generatedAtMatches = sameGeneratedAt(embeddedAcceptance.generatedAt, acceptanceReport.generatedAt);
+  if (!statusMatches || !canSubmitMatches || !generatedAtMatches) {
+    return {
+      report: null,
+      warnings: [
+        reportScopeWarning(
+          "delivery",
+          "acceptance-mismatch",
+          "Ignored delivery report because it was not generated from the current standalone acceptance report.",
+        ),
+      ],
+    };
+  }
+  const deliveryGeneratedAtMs = parseGeneratedAtMs(deliveryReport.generatedAt);
+  const acceptanceGeneratedAtMs = parseGeneratedAtMs(acceptanceReport.generatedAt);
+  if (deliveryGeneratedAtMs !== null && acceptanceGeneratedAtMs !== null && deliveryGeneratedAtMs < acceptanceGeneratedAtMs) {
+    return {
+      report: null,
+      warnings: [
+        reportScopeWarning(
+          "delivery",
+          "generated-before-acceptance",
+          "Ignored delivery report because it was generated before the current acceptance report.",
+        ),
+      ],
+    };
+  }
+  return { report: deliveryReport, warnings: [] };
 }
 
 function deriveStatus(preparationStatus, acceptanceReport, deliveryReport) {
   if (preparationStatus === "blocked") return "blocked";
   if (deliveryReport?.status === "blocked" || acceptanceReport?.status === "blocked") return "blocked";
-  if (
-    deliveryReport?.status === "ready" &&
-    deliveryReport.canDeliver === true &&
-    hasAcceptedEvidence(acceptanceReport, deliveryReport)
-  ) {
+  if (deliveryReport?.status === "ready" && deliveryReport.canDeliver === true && acceptanceReportIsAccepted(acceptanceReport)) {
     return "ready";
   }
-  if (acceptanceReport?.status === "accepted" && !deliveryReport) return "in-progress";
+  if (acceptanceReportIsAccepted(acceptanceReport) && !deliveryReport) return "in-progress";
   if (preparationStatus === "ready-to-run") return "ready-to-run";
   return "blocked";
 }
@@ -290,9 +341,10 @@ function buildRealRunReadinessReport(input = {}) {
   const rawDeliveryReport = input.deliveryReport || readJsonObjectIfExists(path.join(context.outputRoot, "_batch", "delivery-readiness-report.json"));
   const acceptanceSelection = selectScopedReport(rawAcceptanceReport, "acceptance", selectedCodes, context);
   const deliverySelection = selectScopedReport(rawDeliveryReport, "delivery", selectedCodes, context);
-  warnings.push(...acceptanceSelection.warnings, ...deliverySelection.warnings);
+  const boundDeliverySelection = bindDeliveryReportToAcceptance(deliverySelection.report, acceptanceSelection.report);
+  warnings.push(...acceptanceSelection.warnings, ...deliverySelection.warnings, ...boundDeliverySelection.warnings);
   const acceptanceReport = acceptanceSelection.report;
-  const deliveryReport = deliverySelection.report;
+  const deliveryReport = boundDeliverySelection.report;
   const preparationStatus = blockers.length ? "blocked" : "ready-to-run";
   const status = deriveStatus(preparationStatus, acceptanceReport, deliveryReport);
   return {
@@ -337,6 +389,8 @@ function buildRealRunReadinessReport(input = {}) {
     nextAction:
       status === "ready"
         ? "Deliver the latest whitepaper artifacts; delivery-readiness-report.json is ready."
+        : status === "in-progress"
+          ? "Run npm run delivery:check -- --systems <codes> to bind delivery readiness to the latest accepted batch report."
         : status === "ready-to-run"
           ? "Run npm run batch -- --systems <codes>, then consume repair:batch/repair:loop until delivery-readiness is ready."
           : "Resolve blockers, rerun the required pipeline or repair nodes, then rerun npm run real:check.",

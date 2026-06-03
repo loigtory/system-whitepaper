@@ -7804,6 +7804,12 @@ test("real run readiness unifies preflight and final delivery state", () => {
     configPath,
     outputRoot,
     generatedAt: "2026-06-03T00:01:00.000Z",
+    acceptance: {
+      status: "accepted",
+      canSubmitAll: true,
+      generatedAt: "2026-06-03T00:00:00.000Z",
+      summary: { total: 1, accepted: 1, blocked: 0, blockers: 0 },
+    },
     summary: { total: 1, ready: 1, blocked: 0, blockers: 0 },
     systems: [{ code: "adp", status: "ready" }],
   };
@@ -7970,6 +7976,41 @@ test("real run readiness unifies preflight and final delivery state", () => {
   });
   assert.equal(deliveryOnlyReady.status, "ready-to-run");
   assert.equal(deliveryOnlyReady.canDeliver, false);
+  assert.ok(deliveryOnlyReady.warnings.some((item) => item.id === "delivery.acceptance-missing"));
+
+  const acceptedWithoutDelivery = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport,
+  });
+  assert.equal(acceptedWithoutDelivery.status, "in-progress");
+  assert.equal(acceptedWithoutDelivery.canDeliver, false);
+  assert.match(acceptedWithoutDelivery.nextAction, /delivery:check/);
+
+  const staleDeliveryAcceptance = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport: {
+      ...acceptanceReport,
+      generatedAt: "2026-06-03T00:05:00.000Z",
+    },
+    deliveryReport,
+  });
+  assert.equal(staleDeliveryAcceptance.status, "in-progress");
+  assert.equal(staleDeliveryAcceptance.canDeliver, false);
+  assert.ok(staleDeliveryAcceptance.warnings.some((item) => item.id === "delivery.acceptance-mismatch"));
 
   const blockedWithStaleReady = buildRealRunReadinessReport({
     args: { systems: "adp" },
