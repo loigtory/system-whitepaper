@@ -103,6 +103,26 @@ function assertMetricEquals(metrics = {}, key, expected, fileName, containerName
   }
 }
 
+function artifactKeyText(value) {
+  return String(value || "").trim();
+}
+
+function functionUniverseFunctionKey(item = {}) {
+  return `${artifactKeyText(item.module)}::${artifactKeyText(item.name)}`;
+}
+
+function functionUniverseLinkFunctionKey(item = {}) {
+  return `${artifactKeyText(item.module)}::${artifactKeyText(item.function)}`;
+}
+
+function functionUniverseEntityKey(item = {}) {
+  return `${artifactKeyText(item.table)}::${artifactKeyText(item.name)}`;
+}
+
+function functionUniverseLinkEntityKey(item = {}) {
+  return `${artifactKeyText(item.table)}::${artifactKeyText(item.entity)}`;
+}
+
 function assertSourceArtifactObject(value, fileName) {
   assertJsonObject(value, `${fileName} sourceArtifacts must be a JSON object.`);
 }
@@ -298,7 +318,34 @@ function assertValidFunctionUniverseArtifact(value = {}) {
     "function-universe.json",
     "coverage",
   );
-  assertFiniteNumber(value.coverage.linkedFunctionCount, "function-universe.json coverage.linkedFunctionCount must be numeric.");
+  const functionKeys = new Set(value.functions.map(functionUniverseFunctionKey));
+  const entityKeys = new Set(value.entities.map(functionUniverseEntityKey));
+  const linkedFunctionKeys = new Set();
+  for (const [index, link] of value.links.entries()) {
+    assertJsonObject(link, `function-universe.json links[${index}] must be a JSON object.`);
+    const functionKey = functionUniverseLinkFunctionKey(link);
+    const entityKey = functionUniverseLinkEntityKey(link);
+    if (!artifactKeyText(link.module) || !artifactKeyText(link.function)) {
+      throw new Error(`function-universe.json links[${index}] must record module and function.`);
+    }
+    if (!functionKeys.has(functionKey)) {
+      throw new Error(`function-universe.json links[${index}] must reference an existing function.`);
+    }
+    if (!artifactKeyText(link.table) || !artifactKeyText(link.entity)) {
+      throw new Error(`function-universe.json links[${index}] must record table and entity.`);
+    }
+    if (!entityKeys.has(entityKey)) {
+      throw new Error(`function-universe.json links[${index}] must reference an existing entity.`);
+    }
+    linkedFunctionKeys.add(functionKey);
+  }
+  assertMetricEquals(
+    value.coverage,
+    "linkedFunctionCount",
+    linkedFunctionKeys.size,
+    "function-universe.json",
+    "coverage",
+  );
   assertJsonObject(value.rules, "function-universe.json rules must be a JSON object.");
   if (value.rules.noConclusion !== true) {
     throw new Error("function-universe.json must declare rules.noConclusion=true.");

@@ -13373,6 +13373,104 @@ test("build verified claims rejects forged function universe coverage", () => {
   assert.equal(fs.existsSync(path.join(dir, "verified-claims.json")), false);
 });
 
+test("build verified claims rejects forged function universe link coverage", () => {
+  const {
+    buildVerifiedClaimsArtifact,
+  } = require("./build-verified-claims");
+  const functionUniverse = {
+    artifactType: "function-universe",
+    version: 1,
+    generatedAt: "2026-06-03T00:00:00.000Z",
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    modules: [{ name: "保单任务" }],
+    functions: [{ module: "保单任务", name: "任务列表" }],
+    entities: [
+      {
+        name: "保单任务",
+        table: "adp_test.policy_task",
+        sources: [{ type: "db-table", id: "adp_test.policy_task" }],
+      },
+    ],
+    links: [
+      {
+        module: "保单任务",
+        function: "任务列表",
+        entity: "保单任务",
+        table: "adp_test.policy_task",
+      },
+    ],
+    entityRelations: [],
+    coverage: {
+      moduleCount: 1,
+      functionCount: 1,
+      entityCount: 1,
+      linkedFunctionCount: 2,
+      entityRelationCount: 0,
+    },
+    sourceArtifacts: {
+      evidenceSummary: { file: "evidence-summary.json", fingerprint: { exists: false, size: 0, sha256: "" } },
+    },
+    rules: { noConclusion: true },
+  };
+
+  assert.throws(
+    () => buildVerifiedClaimsArtifact({ functionUniverse }),
+    /coverage\.linkedFunctionCount must match the artifact body count/,
+  );
+});
+
+test("build verified claims rejects links without matching function or entity evidence", () => {
+  const {
+    buildVerifiedClaimsArtifact,
+  } = require("./build-verified-claims");
+  const functionUniverse = {
+    artifactType: "function-universe",
+    version: 1,
+    generatedAt: "2026-06-03T00:00:00.000Z",
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    modules: [{ name: "保单任务" }],
+    functions: [{ module: "保单任务", name: "任务列表" }],
+    entities: [
+      {
+        name: "保单任务",
+        table: "adp_test.policy_task",
+        sources: [{ type: "db-table", id: "adp_test.policy_task" }],
+      },
+    ],
+    links: [
+      {
+        module: "保单任务",
+        function: "不存在的功能",
+        entity: "保单任务",
+        table: "adp_test.policy_task",
+      },
+    ],
+    entityRelations: [],
+    coverage: {
+      moduleCount: 1,
+      functionCount: 1,
+      entityCount: 1,
+      linkedFunctionCount: 1,
+      entityRelationCount: 0,
+    },
+    sourceArtifacts: {
+      evidenceSummary: { file: "evidence-summary.json", fingerprint: { exists: false, size: 0, sha256: "" } },
+    },
+    rules: { noConclusion: true },
+  };
+
+  assert.throws(
+    () => buildVerifiedClaimsArtifact({ functionUniverse }),
+    /links\[0\] must reference an existing function/,
+  );
+  functionUniverse.links[0].function = "任务列表";
+  functionUniverse.links[0].entity = "不存在的实体";
+  assert.throws(
+    () => buildVerifiedClaimsArtifact({ functionUniverse }),
+    /links\[0\] must reference an existing entity/,
+  );
+});
+
 test("build verified claims never marks database-only claims writable", () => {
   const { claimIsWritable } = require("./build-verified-claims");
 
