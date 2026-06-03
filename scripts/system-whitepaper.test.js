@@ -89,6 +89,17 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
     }),
   });
   writeJsonIfMissing("verified-claims.json", {
+    artifactType: "verified-claims",
+    version: 1,
+    claims: [
+      {
+        id: "function:保单任务:任务列表",
+        subject: "任务列表",
+        module: "保单任务",
+        status: "confirmed",
+        writable: true,
+      },
+    ],
     rules: {
       lowConfidenceNotWritable: true,
       databaseOnlyNotConfirmed: true,
@@ -265,6 +276,17 @@ function writePassingTruthArtifacts(dir, options = {}) {
   fs.writeFileSync(
     path.join(dir, "verified-claims.json"),
     JSON.stringify({
+      artifactType: "verified-claims",
+      version: 1,
+      claims: [
+        {
+          id: "function:保单任务:任务列表",
+          subject: "任务列表",
+          module: "保单任务",
+          status: "confirmed",
+          writable: true,
+        },
+      ],
       rules: {
         lowConfidenceNotWritable: true,
         databaseOnlyNotConfirmed: true,
@@ -7948,15 +7970,17 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   );
   fs.writeFileSync(
     path.join(systemOutput, "verified-claims.json"),
-    JSON.stringify({
-      rules: {
-        lowConfidenceNotWritable: true,
-        databaseOnlyNotConfirmed: true,
-        databaseOnlyNotWritable: true,
-      },
-      metrics: { claimCount: 1, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0 },
-      writableClaimIds: ["function:保单任务:任务列表"],
-    }),
+    JSON.stringify(
+      verifiedClaimsFixture([
+        {
+          id: "function:保单任务:任务列表",
+          subject: "任务列表",
+          module: "保单任务",
+          status: "confirmed",
+          writable: true,
+        },
+      ]),
+    ),
     "utf8",
   );
   fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
@@ -13427,22 +13451,25 @@ test("truth readiness passes only when evidence claims fact-check and narrative 
     claims: {
       file: "verified-claims.json",
       status: "ok",
-      value: {
-        rules: {
-          lowConfidenceNotWritable: true,
-          databaseOnlyNotConfirmed: true,
-          databaseOnlyNotWritable: true,
-        },
-        metrics: {
-          claimCount: 2,
-          writableClaimCount: 1,
-          confirmedCount: 1,
-          inferredCount: 0,
-          weakCount: 0,
-          databaseOnlyClaimCount: 1,
-        },
-        writableClaimIds: ["function:保单任务:任务列表"],
-      },
+      value: verifiedClaimsFixture(
+        [
+          {
+            id: "function:保单任务:任务列表",
+            subject: "任务列表",
+            module: "保单任务",
+            status: "confirmed",
+            writable: true,
+          },
+          {
+            id: "database:policy_task",
+            subject: "policy_task",
+            module: "保单任务",
+            status: "weak",
+            writable: false,
+          },
+        ],
+        { metrics: { claimCount: 2, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0, weakCount: 0, databaseOnlyClaimCount: 1 } },
+      ),
     },
     factCheck: {
       file: "fact-check-report.json",
@@ -13499,15 +13526,15 @@ test("truth readiness requires real database profile when database evidence is m
     claims: {
       file: "verified-claims.json",
       status: "ok",
-      value: {
-        rules: {
-          lowConfidenceNotWritable: true,
-          databaseOnlyNotConfirmed: true,
-          databaseOnlyNotWritable: true,
+      value: verifiedClaimsFixture([
+        {
+          id: "function:保单任务:任务列表",
+          subject: "任务列表",
+          module: "保单任务",
+          status: "confirmed",
+          writable: true,
         },
-        metrics: { claimCount: 1, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0, weakCount: 0 },
-        writableClaimIds: ["function:保单任务:任务列表"],
-      },
+      ]),
     },
     factCheck: {
       file: "fact-check-report.json",
@@ -13630,15 +13657,15 @@ test("truth readiness rejects unsafe database profile evidence", () => {
     claims: {
       file: "verified-claims.json",
       status: "ok",
-      value: {
-        rules: {
-          lowConfidenceNotWritable: true,
-          databaseOnlyNotConfirmed: true,
-          databaseOnlyNotWritable: true,
+      value: verifiedClaimsFixture([
+        {
+          id: "function:保单任务:任务列表",
+          subject: "任务列表",
+          module: "保单任务",
+          status: "confirmed",
+          writable: true,
         },
-        metrics: { claimCount: 1, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0, weakCount: 0 },
-        writableClaimIds: ["function:保单任务:任务列表"],
-      },
+      ]),
     },
     factCheck: {
       file: "fact-check-report.json",
@@ -13735,15 +13762,17 @@ test("truth readiness blocks missing writable claims and writes report", () => {
   );
   fs.writeFileSync(
     path.join(dir, "verified-claims.json"),
-    JSON.stringify({
-      rules: {
-        lowConfidenceNotWritable: true,
-        databaseOnlyNotConfirmed: true,
-        databaseOnlyNotWritable: true,
-      },
-      metrics: { claimCount: 1, writableClaimCount: 0, confirmedCount: 1, inferredCount: 0 },
-      writableClaimIds: [],
-    }),
+    JSON.stringify(
+      verifiedClaimsFixture([
+        {
+          id: "function:保单任务:任务列表",
+          subject: "任务列表",
+          module: "保单任务",
+          status: "confirmed",
+          writable: false,
+        },
+      ]),
+    ),
     "utf8",
   );
   fs.writeFileSync(
@@ -13775,6 +13804,72 @@ test("truth readiness blocks missing writable claims and writes report", () => {
   assert.equal(report.canSubmitReview, false);
   assert.ok(report.blockers.some((item) => item.id === "claims.missing-writable"));
   assert.ok(report.blockers.some((item) => item.rerunNodes.includes("truth-readiness")));
+});
+
+test("truth readiness rejects invalid verified claims artifact contract", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const artifacts = {
+    quality: {
+      file: "quality-report.json",
+      status: "ok",
+      value: {
+        canFinalize: true,
+        menuCoverage: 1,
+        corePageScreenshotCoverage: 1,
+        coreFunctionClassificationCoverage: 1,
+        writeOperationSafetyCompliance: 1,
+        unverifiedContentLabeling: 1,
+        coreConclusionTraceability: 1,
+        failures: [],
+      },
+    },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: {
+        rules: {
+          lowConfidenceNotWritable: true,
+          databaseOnlyNotConfirmed: true,
+          databaseOnlyNotWritable: true,
+        },
+        metrics: { claimCount: 1, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0, weakCount: 0 },
+        writableClaimIds: ["function:保单任务:任务列表"],
+      },
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: {
+        canFinalize: true,
+        failures: [],
+        metrics: {
+          claimCount: 1,
+          writableClaimCount: 1,
+          checkedAssertions: 1,
+          supportedAssertions: 1,
+          supportedRatio: 1,
+          coveredWritableClaimCount: 1,
+          missingWritableClaimCount: 0,
+          writableClaimCoverageRatio: 1,
+          minWritableClaimCoverage: 0.8,
+        },
+      },
+    },
+    narrative: {
+      file: "narrative-quality-report.json",
+      status: "ok",
+      value: { canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } },
+    },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.gates.claims.pass, false);
+  assert.equal(report.gates.claims.artifactContractValid, false);
+  assert.equal(report.gates.claims.scorePercent, 0);
+  assert.equal(report.canSubmitReview, false);
+  assert.ok(report.gates.claims.failures.some((item) => /artifactType/.test(item)));
+  assert.ok(report.blockers.some((item) => item.id === "claims.invalid-artifact"));
 });
 
 test("truth readiness blocks incomplete verified claim boundary rules", () => {

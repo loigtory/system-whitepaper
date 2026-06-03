@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const crypto = require("node:crypto");
 const path = require("node:path");
 const { parseArgs, writeJson } = require("./system-whitepaper-lib");
+const { assertValidVerifiedClaimsArtifact } = require("./fact-check-whitepaper");
 
 const DEFAULT_THRESHOLD = 0.95;
 const REDACTED_VALUE = "[redacted]";
@@ -395,6 +396,15 @@ function buildEvidenceGate(artifact) {
 
 function buildClaimsGate(artifact) {
   const value = artifact.value || {};
+  const contractFailures = [];
+  if (artifact.status === "ok") {
+    try {
+      assertValidVerifiedClaimsArtifact(value);
+    } catch (error) {
+      contractFailures.push(error.message);
+    }
+  }
+  const artifactContractValid = artifact.status === "ok" && contractFailures.length === 0;
   const metrics = value.metrics || {};
   const claimCount = Number(metrics.claimCount || 0);
   const writableClaimCount = Number(metrics.writableClaimCount || 0);
@@ -409,16 +419,19 @@ function buildClaimsGate(artifact) {
     value.rules?.databaseOnlyNotConfirmed === true &&
     value.rules?.databaseOnlyNotWritable === true;
   const score =
-    artifact.status === "ok"
+    artifactContractValid
       ? (hasWritableClaims ? 0.65 : 0) +
         (hasConfirmedOrInferred ? 0.2 : 0) +
         (boundaryConfigured ? 0.15 : 0)
       : 0;
   const failures = [];
   if (artifact.status !== "ok") failures.push(`${artifact.file} is ${artifact.status}.`);
+  failures.push(...contractFailures);
   if (!hasWritableClaims) failures.push("No writable verified claims are available for body assertions.");
   if (!hasConfirmedOrInferred) failures.push("No confirmed or inferred claims are available.");
-  if (!boundaryConfigured) failures.push("Verified claim boundary rules are incomplete.");
+  if (!boundaryConfigured && !contractFailures.some((item) => /boundary rules/.test(item))) {
+    failures.push("Verified claim boundary rules are incomplete.");
+  }
   const warnings = [];
   if (weakCount > 0) {
     warnings.push(`${weakCount} weak claim(s) must remain pending/unverified unless later confirmed.`);
@@ -429,7 +442,10 @@ function buildClaimsGate(artifact) {
   return {
     id: "claims",
     label: "Verified writable claims",
-    pass: artifact.status === "ok" && hasWritableClaims && hasConfirmedOrInferred && boundaryConfigured,
+    pass: artifactContractValid && hasWritableClaims && hasConfirmedOrInferred && boundaryConfigured,
+    artifactStatus: artifact.status,
+    artifactContractValid,
+    contractFailures,
     score: clamp01(score),
     scorePercent: percent(score),
     metrics: { claimCount, writableClaimCount, confirmedCount, inferredCount, weakCount, databaseOnlyClaimCount },
@@ -761,11 +777,16 @@ function collectBlockers(gates) {
     );
   }
   if (!gates.claims.pass) {
+    const invalidArtifact =
+      gates.claims.artifactStatus === "invalid" ||
+      (Array.isArray(gates.claims.contractFailures) && gates.claims.contractFailures.length > 0);
     blockers.push(
       blocker(
-        "claims.missing-writable",
+        invalidArtifact ? "claims.invalid-artifact" : "claims.missing-writable",
         "P0",
-        "Verified writable claims are missing, so the narrative cannot assert business conclusions safely.",
+        invalidArtifact
+          ? "verified-claims.json is not a valid verified claims artifact, so the narrative cannot assert business conclusions safely."
+          : "Verified writable claims are missing, so the narrative cannot assert business conclusions safely.",
         ["summary", "db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
       ),
     );
