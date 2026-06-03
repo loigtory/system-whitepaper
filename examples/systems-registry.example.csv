@@ -1,0 +1,3 @@
+启用,简称code,系统名称,测试环境URL,负责部门,优先级,环境域名,环境IP,允许写操作,禁止操作,备注
+Y,contract,合同管理系统,https://contract.example.test/,合同业务组,pilot,,,,create;edit;submit;delete,send-sms;external-settlement;production-push,
+Y,budget,预算管理系统,https://budget.example.test/,预算业务组,normal,,,,create;edit;submit,delete-existing-data;external-notification,

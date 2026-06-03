@@ -1,0 +1,70 @@
+# 系统清单示例
+#
+# 字段约定：
+# | 字段  | 含义           | 示例           |
+# | code  | 系统简称/英文  | contract       |  → outputs/contract/、--system contract
+# | name  | 系统中文全称   | 合同管理系统   |  → 白皮书文件名、正文标题
+# | url   | 测试环境入口   | https://...    |
+#
+# 新增系统时：先在此表增加一行，code 全局唯一且勿随意改名（否则输出目录会对不上）。
+
+auth:
+  type: huntian-query-token
+  tokenTransport: query
+  tokenFile: ./secrets/huntian-token.txt
+  cookieHeaderFile: ./secrets/huntian-cookie-header.txt
+  loginInfoEndpoint: https://huntian.hzins.com/api/user/getUserLoginInfo?token=${TOKEN}
+  referer: https://huntian.hzins.com/
+  userAgent: Mozilla/5.0 AI-Data-Loop-Platform/1.0
+  cookieName: HUNTIAN_TOKEN
+  cookieDomain: .hzins.com
+  cookiePath: /
+  cookieSecure: true
+  cookieSameSite: Lax
+
+runtime:
+  environment: test
+  hostsManagedExternally: true
+  outputDir: ./outputs
+  # Cross-system batch workers. Keep one output directory per system.
+  concurrency: 4
+  headless: true
+  pageZoom: 0.6
+  testDataPrefix: AI_AUTO_TEST_
+
+systems:
+  - code: contract
+    name: 合同管理系统
+    url: https://contract.example.test/
+    owner: 合同业务组
+    priority: pilot
+    allowedWriteActions:
+      - create
+      - edit
+      - submit
+      - delete
+    forbiddenActions:
+      - send-sms
+      - external-settlement
+      - production-push
+    databaseProfile:
+      enabled: false
+      secretFile: ./secrets/db/contract.json
+      metadataFile: ./secrets/db/contract-metadata.json
+      includeSchemas:
+        - contract_test
+      sampleRows: 0
+      allowSampleData: false
+
+  - code: budget
+    name: 预算管理系统
+    url: https://budget.example.test/
+    owner: 预算业务组
+    priority: normal
+    allowedWriteActions:
+      - create
+      - edit
+      - submit
+    forbiddenActions:
+      - delete-existing-data
+      - external-notification

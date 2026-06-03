@@ -1,0 +1,1699 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>核心系统白皮书流水线</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "Microsoft YaHei", Arial, sans-serif;
+        background: #f6f8fc;
+        color: #14213d;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      header {
+        background: linear-gradient(135deg, #15284a, #3157d5);
+        color: #fff;
+        padding: 18px 28px;
+      }
+      header h1 {
+        font-size: 22px;
+        margin: 0 0 6px;
+      }
+      main {
+        padding: 20px 28px 40px;
+      }
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+      button {
+        border: 0;
+        border-radius: 10px;
+        background: #2f62e6;
+        color: #fff;
+        cursor: pointer;
+        font-weight: 700;
+        padding: 9px 14px;
+      }
+      button.secondary {
+        background: #64748b;
+      }
+      button.danger {
+        background: #dc2626;
+      }
+      button.ghost {
+        background: #edf3ff;
+        color: #2f62e6;
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+      input,
+      select,
+      textarea {
+        border: 1px solid #d5ddec;
+        border-radius: 10px;
+        padding: 9px 11px;
+      }
+      textarea {
+        min-height: 72px;
+        width: min(620px, 100%);
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+      th,
+      td {
+        border-bottom: 1px solid #e5e7eb;
+        padding: 11px 10px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        background: #f8fafc;
+        color: #475569;
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .toolbar,
+      .actions,
+      .filters,
+      .review,
+      .meta-grid,
+      .artifact-row {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #edf0f7;
+        border-radius: 16px;
+        box-shadow: 0 10px 28px rgba(31, 41, 55, 0.06);
+        margin-top: 16px;
+        padding: 20px;
+      }
+      .split {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: minmax(0, 1fr) 320px;
+      }
+      .summary-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(6, minmax(110px, 1fr));
+      }
+      .summary-item {
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        padding: 14px;
+      }
+      .usage-grid {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(6, minmax(110px, 1fr));
+        margin-top: 12px;
+      }
+      .usage-item {
+        background: #f8fafc;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 10px;
+      }
+      .usage-value {
+        color: #172033;
+        font-size: 18px;
+        font-weight: 800;
+        margin-top: 4px;
+      }
+      .usage-history {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .usage-history-item {
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 999px;
+        color: #475569;
+        font-size: 12px;
+        padding: 6px 10px;
+      }
+      .batch-grid {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        margin-top: 12px;
+      }
+      .batch-item {
+        background: #f8fafc;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 10px 12px;
+      }
+      .evidence-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        margin-top: 12px;
+      }
+      .evidence-shot {
+        background: #f8fafc;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        cursor: pointer;
+        overflow: hidden;
+        padding: 8px;
+      }
+      .evidence-shot img {
+        border-radius: 8px;
+        display: block;
+        height: 96px;
+        object-fit: cover;
+        width: 100%;
+      }
+      .evidence-shot-meta {
+        color: #64748b;
+        font-size: 11px;
+        margin-top: 6px;
+      }
+      .validation-scenario {
+        background: #f8fafc;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        margin-top: 8px;
+        padding: 10px 12px;
+      }
+      .validation-scenario-title {
+        color: #172033;
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .summary-number {
+        font-size: 24px;
+        font-weight: 800;
+        margin-top: 4px;
+      }
+      .muted {
+        color: #64748b;
+        font-size: 13px;
+      }
+      .breadcrumb {
+        color: #dbeafe;
+        font-size: 13px;
+        margin-top: 6px;
+      }
+      .link {
+        color: #2563eb;
+        cursor: pointer;
+        text-decoration: none;
+      }
+      .status {
+        border-radius: 999px;
+        display: inline-block;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 5px 10px;
+      }
+      .status.pending {
+        background: #f1f5f9;
+        color: #475569;
+      }
+      .status.success,
+      .status.finalized {
+        background: #dcfce7;
+        color: #166534;
+      }
+      .status.running {
+        background: #eaf1ff;
+        color: #2f62e6;
+      }
+      .status.ready {
+        background: #eaf1ff;
+        color: #2f62e6;
+      }
+      .status.failed,
+      .status.paused {
+        background: #fee2e2;
+        color: #b91c1c;
+      }
+      .status.skipped {
+        background: #f8fafc;
+        color: #64748b;
+      }
+      .status.review-pending {
+        background: #fef3c7;
+        color: #92400e;
+      }
+      .progress {
+        background: #e5e7eb;
+        border-radius: 999px;
+        height: 8px;
+        overflow: hidden;
+        width: 120px;
+      }
+      .progress > span {
+        background: #2563eb;
+        display: block;
+        height: 100%;
+      }
+      .pipeline {
+        background: #fbfcff;
+        border: 1px solid #d7def4;
+        border-radius: 12px;
+        overflow-x: auto;
+        padding: 0;
+        position: relative;
+        white-space: nowrap;
+      }
+      .phase-row {
+        display: grid;
+        min-width: 900px;
+      }
+      .phase-band {
+        border-left: 1px solid #cbd5f5;
+        border-right: 1px solid #cbd5f5;
+        border-bottom: 1px solid #d7def4;
+        color: #26324f;
+        font-weight: 800;
+        padding: 12px 10px;
+        text-align: center;
+      }
+      .flow-row {
+        align-items: start;
+        font-weight: 800;
+        display: grid;
+        min-width: 900px;
+        padding: 24px 16px 18px;
+        position: relative;
+      }
+      .flow-node {
+        align-items: center;
+        background: transparent;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 72px;
+        position: relative;
+        text-align: center;
+        z-index: 1;
+      }
+      .flow-segment {
+        height: 3px;
+        position: absolute;
+        top: 40px;
+        z-index: -1;
+      }
+      .flow-segment.left {
+        left: 0;
+        right: 50%;
+      }
+      .flow-segment.right {
+        left: 50%;
+        right: 0;
+      }
+      .flow-segment.done {
+        background: #35c39d;
+      }
+      .flow-segment.todo {
+        background: #d5ddec;
+      }
+      .flow-segment.active {
+        background: #f59e0b;
+      }
+      .flow-label {
+        font-size: 11px;
+        min-height: 18px;
+      }
+      .flow-dot {
+        align-items: center;
+        background: #fff;
+        border: 3px solid #fff;
+        border-radius: 999px;
+        box-shadow: 0 0 0 2px #aeb8c8;
+        color: #aeb8c8;
+        display: flex;
+        font-size: 18px;
+        font-weight: 900;
+        height: 34px;
+        justify-content: center;
+        width: 34px;
+      }
+      .flow-node.success .flow-dot,
+      .flow-node.skipped .flow-dot {
+        background: #7b4df1;
+        box-shadow: 0 0 0 2px #7b4df1;
+        color: #fff;
+      }
+      .flow-node.failed .flow-dot,
+      .flow-node.paused .flow-dot {
+        background: #fff;
+        box-shadow: 0 0 0 2px #ef4444;
+        color: #ef4444;
+        cursor: pointer;
+      }
+      .flow-node.running .flow-dot {
+        background: #fff;
+        border: 3px solid #fff7ed;
+        box-shadow: 0 0 0 2px #f59e0b;
+        color: #f59e0b;
+        position: relative;
+      }
+      .flow-node.running .flow-dot::after {
+        animation: pulse 1.2s ease-out infinite;
+        border: 2px solid #f59e0b;
+        border-radius: 999px;
+        content: "";
+        inset: -8px;
+        opacity: 0.55;
+        position: absolute;
+      }
+      .flow-node.ready .flow-dot {
+        background: #fff;
+        box-shadow: 0 0 0 2px #2f62e6;
+        color: #2f62e6;
+        cursor: pointer;
+      }
+      .flow-node.running .flow-dot::before {
+        animation: spin 0.9s linear infinite;
+        border: 4px solid #fed7aa;
+        border-top-color: #f59e0b;
+        border-radius: 999px;
+        content: "";
+        height: 22px;
+        position: absolute;
+        width: 22px;
+      }
+      .flow-node.running .flow-dot span {
+        visibility: hidden;
+      }
+      .flow-meta {
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 400;
+        line-height: 1.35;
+        min-height: 30px;
+      }
+      .flow-node.failed .flow-meta,
+      .flow-node.paused .flow-meta {
+        color: #b91c1c;
+      }
+      .flow-node.flow-end .flow-meta {
+        min-height: 30px;
+        visibility: hidden;
+      }
+      .flow-node.flow-end .flow-dot-slot {
+        align-items: center;
+        display: flex;
+        height: 34px;
+        justify-content: center;
+        width: 34px;
+      }
+      .flow-node.flow-end .flow-dot {
+        background: #cbd5e1;
+        border: none;
+        box-shadow: none;
+        color: transparent;
+        height: 12px;
+        width: 12px;
+      }
+      .flow-node.flow-end.reached .flow-dot {
+        background: #3f4652;
+      }
+      .artifact-link {
+        color: #2563eb;
+        cursor: pointer;
+        text-decoration: underline;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @keyframes pulse {
+        to {
+          opacity: 0;
+          transform: scale(1.5);
+        }
+      }
+      .detail-head {
+        align-items: flex-start;
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+      }
+      .tabs {
+        border-bottom: 1px solid #e5e7eb;
+        display: flex;
+        gap: 8px;
+        margin: 18px 0;
+      }
+      .tab {
+        border-radius: 8px 8px 0 0;
+        cursor: pointer;
+        padding: 10px 14px;
+      }
+      .tab.active {
+        background: #2563eb;
+        color: #fff;
+      }
+      .empty {
+        color: #64748b;
+        padding: 28px;
+        text-align: center;
+      }
+      .modal-mask {
+        align-items: center;
+        background: rgba(15, 23, 42, 0.35);
+        display: none;
+        inset: 0;
+        justify-content: center;
+        padding: 20px;
+        position: fixed;
+        z-index: 20;
+      }
+      .modal-mask.open {
+        display: flex;
+      }
+      .modal {
+        background: #fff;
+        border-radius: 18px;
+        box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+        max-width: 460px;
+        padding: 24px;
+        width: 100%;
+      }
+      .modal-head {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 16px;
+      }
+      .modal-head h2 {
+        margin: 0;
+      }
+      #message {
+        min-height: 22px;
+      }
+      @media (max-width: 1100px) {
+        .summary-grid,
+        .usage-grid,
+        .split {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>核心系统白皮书流水线</h1>
+      <div>全局系统清单 · 单系统执行链路 · 本地无人值守</div>
+      <div id="breadcrumb" class="breadcrumb"></div>
+    </header>
+    <main>
+      <div class="toolbar">
+        <button onclick="runBatch(false)">Batch 4 threads</button>
+        <button class="secondary" onclick="runBatch(true)">Batch reset</button>
+        <button class="danger" onclick="stopRun()">停止当前任务</button>
+        <span id="message" class="muted"></span>
+      </div>
+      <section id="app"></section>
+    </main>
+    <div id="review-modal" class="modal-mask" aria-hidden="true" onclick="closeReviewModal(event)">
+      <div class="modal" onclick="event.stopPropagation()">
+        <div class="modal-head">
+          <h2>业务审核</h2>
+          <button class="ghost" onclick="hideReviewModal()">关闭</button>
+        </div>
+        <div class="review">
+          <select id="modal-decision">
+            <option value="approved">审核通过</option>
+            <option value="rejected">审核不通过</option>
+          </select>
+          <textarea id="modal-comment" placeholder="审核不通过时必填修改意见"></textarea>
+          <button onclick="submitReviewFromModal()">提交审核</button>
+        </div>
+      </div>
+    </div>
+    <div id="screenshot-modal" class="modal-mask" aria-hidden="true" onclick="closeScreenshotModal(event)">
+      <div class="modal" style="max-width: min(960px, 92vw)" onclick="event.stopPropagation()">
+        <div class="modal-head">
+          <h2 id="screenshot-modal-title">截图预览</h2>
+          <button class="ghost" onclick="hideScreenshotModal()">关闭</button>
+        </div>
+        <img id="screenshot-modal-image" alt="截图预览" style="max-width: 100%; border-radius: 12px" />
+        <div id="screenshot-modal-caption" class="muted" style="margin-top: 10px"></div>
+      </div>
+    </div>
+    <script>
+      const statusText = {
+        pending: "未开始",
+        running: "进行中",
+        ready: "已就绪",
+        success: "已完成",
+        failed: "需处理",
+        paused: "已暂停",
+        skipped: "已跳过",
+        finalized: "已终稿",
+        "review-pending": "待审核",
+      };
+      const phaseText = {
+        prepare: "\u51c6\u5907\u9636\u6bb5",
+        evidence: "\u53d6\u8bc1\u9636\u6bb5",
+        truth: "\u771f\u76f8\u9636\u6bb5",
+        compose: "\u6210\u7a3f\u9636\u6bb5",
+        approve: "\u5ba1\u5b9a\u9636\u6bb5",
+        completed: "\u5df2\u5b8c\u6210",
+      };
+      const artifactText = {
+        operationGuide: "\u64cd\u4f5c\u6307\u5f15",
+        evidenceSummary: "\u8bc1\u636e\u6458\u8981",
+        databaseProfile: "\u5e93\u8868\u753b\u50cf",
+        functionUniverse: "\u529f\u80fd\u5b87\u5b99",
+        verifiedClaims: "\u53ef\u4fe1\u65ad\u8a00",
+        factCheck: "\u4e8b\u5b9e\u6838\u9a8c",
+        pendingReview: "\u5f85\u5ba1\u6838\u7a3f",
+        final: "\u7ec8\u7a3f",
+        docx: "Word 终稿",
+      };
+      const nodeText = {
+        sync: "\u73af\u5883\u51c6\u5907",
+        session: "\u767b\u5f55\u7cfb\u7edf",
+        collect: "\u9759\u6001\u9875\u9762\u91c7\u96c6",
+        inspect: "\u52a8\u6001\u9875\u9762\u91c7\u96c6",
+        "validate-write": "\u8bd5\u4e1a\u52a1\u64cd\u4f5c",
+        "db-profile": "\u5e93\u8868\u753b\u50cf",
+        "truth-universe": "\u529f\u80fd\u5b87\u5b99",
+        "truth-claims": "\u53ef\u4fe1\u65ad\u8a00",
+        "build-spec": "\u6574\u7406\u89c4\u683c",
+        "compose-guide": "\u64cd\u4f5c\u6307\u5f15",
+        draft: "\u751f\u6210\u5e95\u7a3f",
+        summary: "\u751f\u6210\u8bc1\u636e\u6458\u8981",
+        narrative: "\u751f\u6210\u5f85\u5ba1\u7a3f",
+        "fact-check": "\u4e8b\u5b9e\u6838\u9a8c",
+        quality: "\u8d28\u68c0",
+        review: "\u5ba1\u6838",
+        end: "End",
+      };
+
+      let snapshot = null;
+      let refreshTimer = null;
+      let controlBusy = false;
+      const filters = { query: "", status: "all" };
+      let reviewSystemCode = "";
+
+      function defaultProvider() {
+        return snapshot?.defaultNarrativeProvider || "manual";
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function setMessage(text) {
+        document.querySelector("#message").textContent = text || "";
+      }
+
+      function formatTime(value) {
+        if (!value) return "-";
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return "-";
+        return date.toLocaleString();
+      }
+
+      function formatDuration(ms) {
+        const seconds = Math.floor(Number(ms || 0) / 1000);
+        if (seconds < 60) return `${seconds}s`;
+        const minutes = Math.floor(seconds / 60);
+        return `${minutes}m ${seconds % 60}s`;
+      }
+
+      function formatNumber(value) {
+        return Number(value || 0).toLocaleString();
+      }
+
+      function phase3bRunKindLabel(kind) {
+        return (
+          {
+            full: "全量写稿",
+            "part-rerun": "局部分片",
+            "review-rerun": "审核驳回重写",
+          }[kind] ||
+          kind ||
+          "-"
+        );
+      }
+
+      function reviewRewriteScopeLabel(scope) {
+        return (
+          {
+            "overview-flow": "系统定位/业务流程",
+            "function-sections": "功能模块/核心功能",
+            "evidence-refresh": "证据刷新后重写",
+            narrative: "叙事整体修订",
+          }[scope] ||
+          scope ||
+          "-"
+        );
+      }
+
+      function renderReviewRerunUsageNote(reviewRerun) {
+        if (!reviewRerun) return "";
+        const details = [
+          reviewRerun.rewriteScope ? `范围：${reviewRewriteScopeLabel(reviewRerun.rewriteScope)}` : "",
+          reviewRerun.narrativePart ? `分片：${reviewRerun.narrativePart}` : "",
+          reviewRerun.targetModules?.length ? `模块：${reviewRerun.targetModules.join("、")}` : "",
+          reviewRerun.targetSections?.length ? `章节：${reviewRerun.targetSections.join("、")}` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        const sourceLabel = reviewRerun.inferred
+          ? "来源：由旧 usage + review-decision 推断"
+          : "来源：usage 元数据";
+        return `
+          <div class="usage-value" style="margin-top: 10px">审核重写依据：${escapeHtml(details || "按审核驳回意见重写")}</div>
+          <div class="muted" style="margin-top: 6px">${escapeHtml(sourceLabel)}</div>
+          ${reviewRerun.comment ? `<div class="muted" style="margin-top: 6px">驳回意见：${escapeHtml(reviewRerun.comment)}</div>` : ""}
+        `;
+      }
+
+      function formatUsd(amount) {
+        const value = Number(amount || 0);
+        if (value >= 1) return `$${value.toFixed(2)}`;
+        if (value >= 0.01) return `$${value.toFixed(3)}`;
+        return `$${value.toFixed(4)}`;
+      }
+
+      function formatCny(amount) {
+        const value = Number(amount || 0);
+        return `¥${value.toFixed(2)}`;
+      }
+
+      function resolveCostPricingLabel(source) {
+        if (source === "cursor-composer-pool") return "Cursor Composer Pool";
+        return "Cursor API";
+      }
+
+      async function api(path, options = {}) {
+        const response = await fetch(path, {
+          headers: { "content-type": "application/json" },
+          ...options,
+        });
+        const payload = await response.json();
+        if (!response.ok || payload.error) {
+          throw new Error(payload.error || "请求失败");
+        }
+        return payload;
+      }
+
+      function statusBadge(status) {
+        return `<span class="status ${escapeHtml(status)}">${statusText[status] || escapeHtml(status)}</span>`;
+      }
+
+      function progressBar(progress) {
+        const percent = progress?.percent || 0;
+        return `<div class="progress" title="${progress?.completed || 0}/${progress?.total || 0}"><span style="width:${percent}%"></span></div>`;
+      }
+
+      function displayNodeLabel(system, nodeId) {
+        if (system.overallStatus === "finalized" && nodeId === "end") return nodeText.end;
+        return nodeText[nodeId] || system.nodes?.[nodeId]?.label || nodeId;
+      }
+
+      function displayPhaseLabel(system) {
+        if (system.overallStatus === "finalized") return phaseText.completed;
+        return phaseText[system.currentPhase] || system.currentPhase;
+      }
+
+      function effectiveNodeStatus(node) {
+        return node?.displayStatus || node?.status || "pending";
+      }
+
+      function artifactBadges(system) {
+        return ["operationGuide", "pendingReview", "final", "docx"]
+          .map((key) => [key, system.artifacts?.[key] || { exists: false }])
+          .map(([key, artifact]) => {
+            const label = artifactText[key] || key;
+            return `<span class="status ${artifact.exists ? "success" : "pending"}">${label}${artifact.exists ? "" : "未生成"}</span>`;
+          })
+          .join(" ");
+      }
+
+      function renderSummary() {
+        const summary = snapshot.summary || {};
+        const items = [
+          ["系统总数", summary.total || 0],
+          ["运行中", summary.running || 0],
+          ["待审核", summary.reviewPending || 0],
+          ["失败", summary.failed || 0],
+          ["已终稿", summary.finalized || 0],
+          ["未开始", summary.pending || 0],
+        ];
+        return `<section class="summary-grid">${items
+          .map(
+            ([label, value]) => `
+              <div class="summary-item">
+                <div class="muted">${label}</div>
+                <div class="summary-number">${value}</div>
+              </div>
+            `,
+          )
+          .join("")}</section>`;
+      }
+
+      function renderActiveRun() {
+        const run = snapshot.activeRun;
+        if (!run) {
+          return `
+            <section class="card">
+              <h2>当前执行链路</h2>
+              <div class="empty">当前没有运行中的流水线任务。</div>
+            </section>
+          `;
+        }
+        if (run.mode === "batch") {
+          const systems = run.systems || [];
+          const items = systems
+            .map(
+              (item) => `
+                <div class="batch-item">
+                  <div><strong>${escapeHtml(item.name || item.code)}</strong> ${statusBadge(item.status)}</div>
+                  <div class="muted">${escapeHtml(item.code)} · ${escapeHtml(item.currentPhase || "-")} / ${escapeHtml(item.currentNode || "-")}</div>
+                  <div class="muted">run=${escapeHtml(item.runStatus || "-")} · pid=${escapeHtml(String(item.pid || "-"))}</div>
+                  ${item.lastError ? `<div class="status failed">${escapeHtml(item.lastError)}</div>` : ""}
+                </div>
+              `,
+            )
+            .join("");
+          return `
+            <section class="card">
+              <div class="detail-head">
+                <div>
+                  <h2>Batch execution</h2>
+                  <div><strong>${escapeHtml(run.systemName)}</strong> · ${statusBadge("running")}</div>
+                  <div class="muted">concurrency=${escapeHtml(String(run.concurrency || 4))} · ${escapeHtml(run.currentNodeLabel || "")}</div>
+                  ${run.lastError ? `<div class="status failed">${escapeHtml(run.lastError)}</div>` : ""}
+                </div>
+                <div class="muted">PID ${run.pid || "-"} · ${formatDuration(run.runningMs)}</div>
+              </div>
+              <div style="margin-top: 14px">${progressBar(run.progress)}</div>
+              ${items ? `<div class="batch-grid">${items}</div>` : ""}
+            </section>
+          `;
+        }
+        return `
+          <section class="card">
+            <div class="detail-head">
+              <div>
+                <h2>当前执行链路</h2>
+                <div><strong>${escapeHtml(run.systemName)}</strong> · ${escapeHtml(run.systemCode)} · ${statusBadge("running")}</div>
+                <div class="muted">当前：${phaseText[run.currentPhase] || run.currentPhase} · ${escapeHtml(run.currentNodeLabel)}；下一步：${escapeHtml(run.nextNodeLabel || "-")}</div>
+                ${run.lastError ? `<div class="status failed">${escapeHtml(run.lastError)}</div>` : ""}
+              </div>
+              <div class="muted">PID ${run.pid || "-"} · 已运行 ${formatDuration(run.runningMs)}</div>
+            </div>
+            <div style="margin-top: 14px">${progressBar(run.progress)}</div>
+          </section>
+        `;
+      }
+
+      function filteredSystems() {
+        return (snapshot.systems || []).filter((system) => {
+          const text = `${system.code} ${system.name} ${system.url}`.toLowerCase();
+          const matchesQuery = !filters.query || text.includes(filters.query.toLowerCase());
+          const matchesStatus = filters.status === "all" || system.overallStatus === filters.status;
+          return matchesQuery && matchesStatus;
+        });
+      }
+
+      function renderFilters() {
+        return `
+          <section class="card">
+            <div class="filters">
+              <input id="filter-query" placeholder="搜索系统名称 / code / URL" value="${escapeHtml(filters.query)}" oninput="setQuery(this.value)" />
+              <select id="filter-status" onchange="setStatusFilter(this.value)">
+                ${[
+                  ["all", "全部状态"],
+                  ["pending", "未开始"],
+                  ["running", "运行中"],
+                  ["review-pending", "待审核"],
+                  ["failed", "失败"],
+                  ["paused", "已暂停"],
+                  ["finalized", "已终稿"],
+                ]
+                  .map(([value, label]) => `<option value="${value}" ${filters.status === value ? "selected" : ""}>${label}</option>`)
+                  .join("")}
+              </select>
+            </div>
+          </section>
+        `;
+      }
+
+      function renderSystemsTable() {
+        const rows = filteredSystems();
+        if (!rows.length) return `<section class="card"><div class="empty">没有匹配的系统。</div></section>`;
+        return `
+          <section class="card">
+            <h2>全量系统清单</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>系统</th>
+                  <th>状态</th>
+                  <th>当前链路</th>
+                  <th>进度</th>
+                  <th>最后更新时间</th>
+                  <th>产物</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows
+                  .map(
+                    (system) => `
+                      <tr>
+                        <td>
+                          <a class="link" href="#/systems/${encodeURIComponent(system.code)}">${escapeHtml(system.name || system.code)}</a>
+                          <div class="muted">${escapeHtml(system.code)} · ${escapeHtml(system.owner || "")}</div>
+                        </td>
+                        <td>${statusBadge(system.overallStatus)}</td>
+                        <td>${escapeHtml(displayPhaseLabel(system))} · ${escapeHtml(displayNodeLabel(system, system.currentNode))}</td>
+                        <td>${progressBar(system.progress)}<div class="muted">${system.progress.completed}/${system.progress.total}</div></td>
+                        <td class="muted">${formatTime(system.updatedAt)}</td>
+                        <td>${artifactBadges(system)}</td>
+                        <td>
+                          <button class="ghost" onclick="location.hash='#/systems/${encodeURIComponent(system.code)}'">查看</button>
+                        </td>
+                      </tr>
+                    `,
+                  )
+                  .join("")}
+              </tbody>
+            </table>
+          </section>
+        `;
+      }
+
+      function nodeDuration(node) {
+        if (!node?.startedAt) return "耗时 -";
+        const end = node.finishedAt ? Date.parse(node.finishedAt) : Date.now();
+        const start = Date.parse(node.startedAt);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) return "耗时 -";
+        return `耗时 ${formatDuration(Math.max(0, end - start))}`;
+      }
+
+      function nodeLoginModeText(node) {
+        if (node?.loginMode === "http-verify") return "HTTP校验";
+        if (node?.loginMode === "browser") return "浏览器登录";
+        return "";
+      }
+
+      function nodeSymbol(status) {
+        if (status === "failed" || status === "paused") return "×";
+        if (status === "success" || status === "skipped") return "✓";
+        if (status === "running") return "";
+        return "";
+      }
+
+      function isDoneStatus(status) {
+        return status === "success" || status === "skipped" || status === "finalized";
+      }
+
+      function segmentClass(status, side) {
+        if (status === "running" && side === "left") return "active";
+        return isDoneStatus(status) ? "done" : "todo";
+      }
+
+      function lastNodeRightSegmentClass(system, status) {
+        if (flowEndReached(system)) return "done";
+        if (isDoneStatus(status)) return "done";
+        return "todo";
+      }
+
+      function renderFlowNode(system, definition, options = {}) {
+        const node = system.nodes?.[definition.id] || definition;
+        const label = nodeText[definition.id] || node.label || definition.id;
+        const status = effectiveNodeStatus(node);
+        const isFailed = status === "failed";
+        const isPaused = status === "paused";
+        const isReviewReady = definition.id === "review" && status === "ready";
+        const rightSegmentClass = options.isLast
+          ? lastNodeRightSegmentClass(system, status)
+          : segmentClass(status, "right");
+        const retry = isFailed
+          ? `onclick="retryNode('${system.code}', '${definition.id}')" title="点击重试该失败节点"`
+          : isPaused
+            ? `onclick="retryNode('${system.code}', '${definition.id}')" title="点击继续执行该节点"`
+          : isReviewReady
+            ? `onclick="showReviewModal('${system.code}')" title="点击进行业务审核"`
+          : "";
+        return `
+          <div class="flow-node ${status}">
+            <span class="flow-segment left ${segmentClass(status, "left")}"></span>
+            <span class="flow-segment right ${rightSegmentClass}"></span>
+            <div class="flow-label">${escapeHtml(label)}</div>
+            <div class="flow-dot" ${retry}><span>${nodeSymbol(node.status)}</span></div>
+            <div class="flow-meta">
+              <div>${status === "ready" ? "人工待处理" : nodeDuration(node)}</div>
+              <div>${statusText[status] || status}${definition.id === "session" && nodeLoginModeText(node) ? ` · ${nodeLoginModeText(node)}` : ""}</div>
+            </div>
+          </div>
+        `;
+      }
+
+      function flowStartReached(system) {
+        if (system.overallStatus && system.overallStatus !== "pending") return true;
+        return Object.values(system.nodes || {}).some((node) =>
+          ["running", "success", "skipped", "failed", "paused", "ready"].includes(
+            effectiveNodeStatus(node),
+          ),
+        );
+      }
+
+      function flowEndReached(system) {
+        return system.overallStatus === "finalized";
+      }
+
+      function renderPipeline(system) {
+        const nodes = system.nodeOrder || [];
+        const columns = `60px repeat(${nodes.length}, minmax(76px, 1fr)) 60px`;
+        const phaseBands = (system.phaseOrder || [])
+          .map((phase) => ({
+            id: phase.id,
+            label: phaseText[phase.id] || phase.label || phase.id,
+            count: nodes.filter((node) => node.phase === phase.id).length,
+          }))
+          .filter((phase) => phase.count > 0);
+        const startReached = flowStartReached(system);
+        const endReached = flowEndReached(system);
+        const startLineClass = startReached ? "done" : "todo";
+        const endLineClass =
+          endReached || system.progress?.completed >= system.progress?.total ? "done" : "todo";
+        return `
+          <div class="pipeline">
+            <div class="phase-row" style="grid-template-columns: ${columns}">
+              <div class="phase-band" style="grid-column: span 1">Start</div>
+              ${phaseBands
+                .map(
+                  (phase) =>
+                    `<div class="phase-band" style="grid-column: span ${phase.count}">${escapeHtml(phase.label)}</div>`,
+                )
+                .join("")}
+              <div class="phase-band" style="grid-column: span 1">End</div>
+            </div>
+            <div class="flow-row" style="grid-template-columns: ${columns}">
+              <div class="flow-node flow-end start ${startReached ? "reached" : ""}">
+                <span class="flow-segment right ${startLineClass}"></span>
+                <div class="flow-label">Start</div>
+                <div class="flow-dot-slot"><div class="flow-dot"></div></div>
+                <div class="flow-meta">&nbsp;</div>
+              </div>
+              ${nodes.map((definition, index) => renderFlowNode(system, definition, { isLast: index === nodes.length - 1 })).join("")}
+              <div class="flow-node flow-end end ${endReached ? "reached" : ""}">
+                <span class="flow-segment left ${endLineClass}"></span>
+                <div class="flow-label">End</div>
+                <div class="flow-dot-slot"><div class="flow-dot"></div></div>
+                <div class="flow-meta">&nbsp;</div>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      function openArtifactPreview(systemCode, artifactKey) {
+        window.open(
+          `/api/preview?system=${encodeURIComponent(systemCode)}&artifact=${encodeURIComponent(artifactKey)}`,
+          "_blank",
+          "noopener",
+        );
+      }
+
+      function openArtifactDownload(systemCode, artifactKey) {
+        window.open(
+          `/api/download?system=${encodeURIComponent(systemCode)}&artifact=${encodeURIComponent(artifactKey)}`,
+          "_blank",
+          "noopener",
+        );
+      }
+
+      function openScreenshotPreview(systemCode, file, caption) {
+        const image = document.querySelector("#screenshot-modal-image");
+        const title = document.querySelector("#screenshot-modal-title");
+        const captionNode = document.querySelector("#screenshot-modal-caption");
+        const url = `/api/screenshot?system=${encodeURIComponent(systemCode)}&file=${encodeURIComponent(file)}`;
+        image.src = url;
+        title.textContent = caption || "截图预览";
+        captionNode.textContent = file || "";
+        const modal = document.querySelector("#screenshot-modal");
+        modal.classList.add("open");
+        modal.setAttribute("aria-hidden", "false");
+      }
+
+      function hideScreenshotModal() {
+        const modal = document.querySelector("#screenshot-modal");
+        modal.classList.remove("open");
+        modal.setAttribute("aria-hidden", "true");
+        document.querySelector("#screenshot-modal-image").removeAttribute("src");
+      }
+
+      function closeScreenshotModal(event) {
+        if (event.target.id === "screenshot-modal") hideScreenshotModal();
+      }
+
+      function renderArtifactLabel(system, key, artifact) {
+        const label = artifactText[key] || key;
+        if (!artifact.exists) {
+          return `<span class="status pending">${label}：未生成</span>`;
+        }
+        const fileName = escapeHtml(artifact.file || "");
+        if (key === "docx") {
+          return `<span class="status success">${label}：<a class="artifact-link" href="#" onclick="openArtifactDownload('${system.code}', 'docx'); return false;" title="点击下载 Word">${fileName}</a></span>`;
+        }
+        return `<span class="status success">${label}：<a class="artifact-link" href="#" onclick="openArtifactPreview('${system.code}', '${key}'); return false;" title="点击预览">${fileName}</a></span>`;
+      }
+
+      function renderOperationGuideGate(system) {
+        const gate = system.operationGuideGate;
+        if (!gate) {
+          return `
+            <section class="card">
+              <h2>操作指引就绪度</h2>
+              <div class="empty">执行「整理规格」节点后会生成 operation-guide-gate.json。</div>
+            </section>
+          `;
+        }
+        return `
+          <section class="card">
+            <h2>操作指引就绪度</h2>
+            <div class="usage-grid">
+              <div class="usage-item">
+                <div class="muted">就绪度</div>
+                <div class="usage-value">${escapeHtml(String(gate.readinessPercent || 0))}%</div>
+              </div>
+              <div class="usage-item">
+                <div class="muted">可生成操作指引</div>
+                <div class="usage-value">${gate.canComposeGuide ? "是" : "否"}</div>
+              </div>
+            </div>
+            ${
+              gate.failures?.length
+                ? `<div class="usage-history">${gate.failures
+                    .map((item) => `<span class="usage-history-item">${escapeHtml(item)}</span>`)
+                    .join("")}</div>`
+                : ""
+            }
+          </section>
+        `;
+      }
+
+      function renderArtifacts(system) {
+        return `
+          <section class="card">
+            <h2>稿件产物</h2>
+            <div class="artifact-row">
+              ${["operationGuide", "pendingReview", "final", "docx"]
+                .map((key) => renderArtifactLabel(system, key, system.artifacts?.[key] || { exists: false }))
+                .join("")}
+            </div>
+          </section>
+        `;
+      }
+
+      function renderWriteValidation(system) {
+        const validation = system.writeValidation;
+        if (!validation) {
+          return `
+            <section class="card">
+              <h2>试业务操作结果</h2>
+              <div class="empty">暂无试业务操作记录。执行「试业务操作」节点后会生成 write-validation-result.json。</div>
+            </section>
+          `;
+        }
+        const statusLabel =
+          {
+            completed: "已完成",
+            partial: "部分成功",
+            blocked: "未执行",
+            failed: "失败",
+            skipped: "已跳过",
+          }[validation.status] || validation.status || "-";
+        return `
+          <section class="card">
+            <h2>试业务操作结果</h2>
+            <div class="usage-grid">
+              <div class="usage-item">
+                <div class="muted">状态</div>
+                <div class="usage-value">${escapeHtml(statusLabel)}</div>
+              </div>
+              <div class="usage-item">
+                <div class="muted">成功 / 部分 / 阻塞</div>
+                <div class="usage-value">${escapeHtml(`${validation.successCount} / ${validation.partialCount} / ${validation.blockedCount}`)}</div>
+              </div>
+            </div>
+            <div class="muted" style="margin-top: 10px">${escapeHtml(validation.reason || "")}${validation.updatedAt ? ` · 更新 ${formatTime(validation.updatedAt)}` : ""}</div>
+            ${
+              validation.scenarios?.length
+                ? `<div class="usage-history">${validation.scenarios
+                    .map((item) => {
+                      const details = [
+                        item.buttonText ? `入口 ${escapeHtml(item.buttonText)}` : "",
+                        item.submitButton ? `提交 ${escapeHtml(item.submitButton)}` : "",
+                        item.filledFieldCount ? `已填 ${item.filledFieldCount} 项` : "",
+                        item.filledValue ? `值 ${escapeHtml(item.filledValue)}` : "",
+                        item.screenshotPath ? `截图 ${escapeHtml(item.screenshotPath)}` : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ");
+                      return `<div class="validation-scenario">
+                        <div class="validation-scenario-title">${escapeHtml(item.menuPath || item.id || "-")} · ${escapeHtml(item.status || "-")}</div>
+                        <div class="muted">${escapeHtml(item.reason || details || item.targetName || "")}</div>
+                        ${details ? `<div class="muted" style="margin-top: 4px">${details}</div>` : ""}
+                      </div>`;
+                    })
+                    .join("")}</div>`
+                : ""
+            }
+          </section>
+        `;
+      }
+
+      function resolveUsageCostLabel(usage) {
+        if (!usage) return "";
+        if (usage.costLabel) return usage.costLabel;
+        const costUsd = Number(usage.costUsd || 0);
+        if (!(costUsd > 0)) return "";
+        return `参考费用：${formatUsd(costUsd)} / ${formatCny(usage.costCny)}（按 ${resolveCostPricingLabel(usage.costPricingSource)} 单价估算，非账单）`;
+      }
+
+      function resolveUsageHistoryCostLabel(usage) {
+        const costUsd = Number(usage?.costUsd || 0);
+        if (!(costUsd > 0)) return "";
+        return `费用 ${formatUsd(costUsd)} / ${formatCny(usage.costCny)}`;
+      }
+
+      function formatSentPromptRuns(runs = [], totalCount = 0) {
+        const items = runs || [];
+        const visible = items.slice(0, 3).map((item) => {
+          if (item.type === "full") return "full";
+          return item.moduleName || item.id || item.type || "-";
+        });
+        const total = Math.max(Number(totalCount || 0), items.length);
+        const suffix = total > visible.length ? ` +${total - visible.length}` : "";
+        return visible.length ? `${visible.join("、")}${suffix}` : "";
+      }
+
+      function renderUsageGridItems(items = []) {
+        if (!items.length) return "";
+        return `<div class="usage-grid">
+          ${items
+            .map(
+              ([label, value]) => `
+                <div class="usage-item">
+                  <div class="muted">${escapeHtml(label)}</div>
+                  <div class="usage-value">${escapeHtml(value)}</div>
+                </div>
+              `,
+            )
+            .join("")}
+        </div>`;
+      }
+
+      function buildPhase3bHistorySummaryItems(historySummary = {}) {
+        if (!(historySummary.runCount > 0)) return [];
+        const items = [
+          ["最近运行", `${formatNumber(historySummary.runCount)} 次`],
+          ["最近合计 Token", formatNumber(historySummary.totalTokens)],
+        ];
+        if (historySummary.costUsd > 0) {
+          items.push(["最近参考费用", `${formatUsd(historySummary.costUsd)} / ${formatCny(historySummary.costCny)}`]);
+        }
+        if (historySummary.estimatedRunCount || historySummary.reviewRerunCount) {
+          items.push([
+            "最近估算 / 重写",
+            `${formatNumber(historySummary.estimatedRunCount)} / ${formatNumber(historySummary.reviewRerunCount)}`,
+          ]);
+        }
+        return items;
+      }
+
+      function renderPhase3bUsageHistory(history = []) {
+        if (!history.length) return "";
+        return `<div class="usage-history">${history
+          .map((item) => {
+            const reviewLabel = item.reviewRerun?.rewriteScope
+              ? ` · ${reviewRewriteScopeLabel(item.reviewRerun.rewriteScope)}`
+              : "";
+            const inferredLabel = item.reviewRerun?.inferred ? " · 推断" : "";
+            const promptPartLabel =
+              item.sentPromptPartCount > 0 && item.generatedPromptPartCount > 0
+                ? ` · 分片 ${formatNumber(item.sentPromptPartCount)}/${formatNumber(item.generatedPromptPartCount)}`
+                : "";
+            const sentTargetsLabel = formatSentPromptRuns(item.sentPromptRuns, item.sentPromptRunCount);
+            const costShortLabel = resolveUsageHistoryCostLabel(item);
+            return `<span class="usage-history-item">${escapeHtml(item.provider || "-")} · ${escapeHtml(item.model || "-")} · ${escapeHtml(phase3bRunKindLabel(item.runKind || "full"))}${escapeHtml(reviewLabel)}${escapeHtml(inferredLabel)} · ${escapeHtml(item.narrativePart || "全量")} · Prompt ${formatNumber(item.promptChars)}${sentTargetsLabel ? ` · 目标 ${escapeHtml(sentTargetsLabel)}` : ""}${escapeHtml(promptPartLabel)}${item.promptSavingsPercent > 0 ? ` · 省 ${item.promptSavingsPercent}%` : ""}${item.totalTokens > 0 ? ` · ${formatNumber(item.totalTokens)} tok${item.usageEstimated ? "（估算）" : ""}` : ""}${costShortLabel ? ` · ${escapeHtml(costShortLabel)}` : ""} · ${formatTime(item.updatedAt)}</span>`;
+          })
+          .join("")}</div>`;
+      }
+
+      function renderPhase3bUsage(system) {
+        const usage = system.phase3bUsage;
+        const historySummary = system.phase3bUsageHistorySummary || {};
+        const historySummaryItems = buildPhase3bHistorySummaryItems(historySummary);
+        const history = (system.phase3bUsageHistory || []).slice(-5).reverse();
+        if (!usage) {
+          if (history.length || historySummaryItems.length) {
+            return `
+              <section class="card">
+                <h2>写稿消耗</h2>
+                <div class="empty">暂无当前写稿消耗记录。以下为最近历史运行汇总。</div>
+                ${renderUsageGridItems(historySummaryItems)}
+                ${renderPhase3bUsageHistory(history)}
+              </section>
+            `;
+          }
+          return `
+            <section class="card">
+              <h2>写稿消耗</h2>
+              <div class="empty">暂无写稿消耗记录。执行写稿节点后会生成 phase3b-usage.json。</div>
+            </section>
+          `;
+        }
+        const tokenLabelSuffix = usage.usageEstimated ? "（估算）" : "";
+        const narrativeScope = usage.narrativePart || "全量";
+        const runKindLabel = phase3bRunKindLabel(usage.runKind);
+        const savingsLabel =
+          usage.promptSavingsPercent > 0
+            ? `${usage.promptSavingsPercent}%（少发 ${formatNumber(usage.promptSavedChars)} 字符）`
+            : "无分片节省";
+        const sentPromptPartLabel = usage.generatedPromptPartCount
+          ? `${formatNumber(usage.sentPromptPartCount)} / ${formatNumber(usage.generatedPromptPartCount)}`
+          : formatNumber(usage.sentPromptPartCount);
+        const sentPromptRunsLabel = formatSentPromptRuns(usage.sentPromptRuns, usage.sentPromptRunCount);
+        const items = [
+          ["Provider", usage.provider || "-"],
+          ["模型", usage.model || "-"],
+          ["运行类型", runKindLabel],
+          ["写稿范围", narrativeScope],
+          ["Prompt 字符", formatNumber(usage.promptChars)],
+          ...(usage.mainPromptChars ? [["主 Prompt", formatNumber(usage.mainPromptChars)]] : []),
+          ...(usage.partPromptChars ? [["分片 Prompt", formatNumber(usage.partPromptChars)]] : []),
+          ...(usage.generatedPromptChars && usage.generatedPromptChars !== usage.promptChars
+            ? [["生成 Prompt 总量", formatNumber(usage.generatedPromptChars)]]
+            : []),
+          ...(usage.generatedPromptPartCount
+            ? [["生成分片 Prompt", formatNumber(usage.generatedPromptPartCount)]]
+            : []),
+          ...(usage.sentPromptRunCount
+            ? [["SDK 发送 Prompt", formatNumber(usage.sentPromptRunCount)]]
+            : []),
+          ...(sentPromptRunsLabel ? [["SDK 发送目标", sentPromptRunsLabel]] : []),
+          ...(usage.sentPromptPartCount ? [["SDK 发送分片", sentPromptPartLabel]] : []),
+          ["Prompt 节省", savingsLabel],
+          ["摘要字符", formatNumber(usage.inlineSummaryChars)],
+          ["片段字符", formatNumber(usage.fragmentChars)],
+          ["待审稿字符", formatNumber(usage.pendingReviewChars)],
+        ];
+        if (usage.totalTokens > 0) {
+          items.push(
+            [`输入 Token${tokenLabelSuffix}`, formatNumber(usage.inputTokens)],
+            [`输出 Token${tokenLabelSuffix}`, formatNumber(usage.outputTokens)],
+            [`合计 Token${tokenLabelSuffix}`, formatNumber(usage.totalTokens)],
+            ...(usage.cacheReadTokens
+              ? [[`缓存读取${tokenLabelSuffix}`, formatNumber(usage.cacheReadTokens)]]
+              : []),
+            ...(usage.cacheWriteTokens
+              ? [[`缓存写入${tokenLabelSuffix}`, formatNumber(usage.cacheWriteTokens)]]
+              : []),
+          );
+        }
+        const costLabel = resolveUsageCostLabel(usage);
+        if (costLabel) {
+          items.push(["参考费用", costLabel.replace(/^参考费用：/, "")]);
+        }
+        items.push(...historySummaryItems);
+        const usageNote = usage.usageEstimated
+          ? "Token 为字符规模估算，非 SDK 计费明细"
+          : usage.usageUnavailable
+            ? "SDK 未返回 token 明细，已记录字符规模"
+            : "已记录 SDK token 明细";
+        const costLine = costLabel
+          ? `<div class="usage-value" style="margin-top: 10px">${escapeHtml(costLabel)}</div>`
+          : "";
+        const reviewRerunLine = renderReviewRerunUsageNote(usage.reviewRerun);
+        return `
+          <section class="card">
+            <h2>写稿消耗</h2>
+            ${renderUsageGridItems(items)}
+            ${costLine}
+            ${reviewRerunLine}
+            <div class="muted" style="margin-top: 10px">
+              耗时 ${formatDuration(usage.durationMs)} · ${usageNote} · 更新 ${formatTime(usage.updatedAt)}
+            </div>
+            ${renderPhase3bUsageHistory(history)}
+          </section>
+        `;
+      }
+
+      function formatRerunNodes(nodes) {
+        return (nodes || [])
+          .map((nodeId) => `${nodeText[nodeId] || nodeId}(${nodeId})`)
+          .join("、");
+      }
+
+      function renderReviewDecision(system) {
+        const review = system.review || {};
+        const decision = review.decision || null;
+        if (!decision) {
+          return `
+            <section class="card">
+              <h2>审核决策</h2>
+              <div class="empty">暂无审核决策。提交审核驳回意见后会生成 review-decision.json。</div>
+            </section>
+          `;
+        }
+        const items = [
+          ["审核状态", statusText[decision.status] || decision.status || "-"],
+          ["重跑节点", formatRerunNodes(decision.rerunNodes) || "-"],
+          ["重写范围", decision.rewriteScope || "-"],
+          ["写稿分片", decision.narrativePart || "全量/证据刷新后全量"],
+          ["目标章节", (decision.targetSections || []).join("、") || "-"],
+          ["目标模块", (decision.targetModules || []).join("、") || "-"],
+        ];
+        return `
+          <section class="card">
+            <h2>审核决策</h2>
+            <div class="usage-grid">
+              ${items
+                .map(
+                  ([label, value]) => `
+                    <div class="usage-item">
+                      <div class="muted">${escapeHtml(label)}</div>
+                      <div class="usage-value">${escapeHtml(value)}</div>
+                    </div>
+                  `,
+                )
+                .join("")}
+            </div>
+            ${decision.comment ? `<div class="muted" style="margin-top: 10px">驳回意见：${escapeHtml(decision.comment)}</div>` : ""}
+            ${decision.instructions ? `<div class="usage-value" style="margin-top: 10px">脚本指令：${escapeHtml(decision.instructions)}</div>` : ""}
+            ${decision.decidedAt ? `<div class="muted" style="margin-top: 10px">决策时间：${formatTime(decision.decidedAt)}</div>` : ""}
+          </section>
+        `;
+      }
+
+      function renderEvidenceSection(system) {
+        const evidence = system.evidence;
+        if (!evidence) {
+          return `
+            <section class="card">
+              <h2>取证摘要</h2>
+              <div class="empty">暂无取证记录。执行「取证」节点后会生成 evidence.json / evidence-summary.json。</div>
+            </section>
+          `;
+        }
+        const shots = evidence.screenshots || [];
+        return `
+          <section class="card">
+            <h2>取证摘要</h2>
+            <div class="usage-grid">
+              <div class="usage-item">
+                <div class="muted">菜单数</div>
+                <div class="usage-value">${escapeHtml(String(evidence.menuCount ?? 0))}</div>
+              </div>
+              <div class="usage-item">
+                <div class="muted">页面数</div>
+                <div class="usage-value">${escapeHtml(String(evidence.pageCount ?? 0))}</div>
+              </div>
+              <div class="usage-item">
+                <div class="muted">截图数</div>
+                <div class="usage-value">${escapeHtml(String(evidence.screenshotCount ?? 0))}</div>
+              </div>
+            </div>
+            <div class="muted" style="margin-top: 10px">
+              已访问菜单 ${escapeHtml(String(evidence.visitedMenuCount ?? 0))} · 核心菜单 ${escapeHtml(String(evidence.coreMenuCount ?? 0))}${evidence.collectedAt ? ` · 采集 ${formatTime(evidence.collectedAt)}` : ""}
+            </div>
+            ${
+              shots.length
+                ? `<div class="evidence-grid">${shots
+                    .map((shot) => {
+                      const caption = shot.caption || shot.module || shot.function || shot.file || "截图";
+                      const fileArg = JSON.stringify(shot.file || "");
+                      const captionArg = JSON.stringify(caption);
+                      return `<div class="evidence-shot" onclick="openScreenshotPreview('${system.code}', ${fileArg}, ${captionArg})">
+                        <img src="/api/screenshot?system=${encodeURIComponent(system.code)}&file=${encodeURIComponent(shot.file || "")}" alt="${escapeHtml(caption)}" loading="lazy" />
+                        <div class="evidence-shot-meta">${escapeHtml(caption)}</div>
+                      </div>`;
+                    })
+                    .join("")}</div>`
+                : `<div class="empty" style="margin-top: 12px">暂无截图索引。</div>`
+            }
+          </section>
+        `;
+      }
+
+      function renderReview(system) {
+        const reviewNode = system.nodes?.review || {};
+        const status = effectiveNodeStatus(reviewNode);
+        if (status === "ready") {
+          return `<button onclick="showReviewModal('${system.code}')">打开审核弹窗</button>`;
+        }
+        return statusBadge(status);
+      }
+
+      function renderDetail(system) {
+        return `
+          <section class="card">
+            <div class="detail-head">
+              <div>
+                <a class="link" href="#/systems">返回全局清单</a>
+                <h2>${escapeHtml(system.name || system.code)}</h2>
+                <div class="muted">${escapeHtml(system.code)} · ${escapeHtml(system.url || "")}</div>
+              </div>
+              <div class="actions">
+                ${statusBadge(system.overallStatus)}
+                <button class="danger" onclick="runSystem('${system.code}', true)">从头再来</button>
+              </div>
+            </div>
+            <div class="meta-grid" style="margin-top: 12px">
+              <span class="status ${system.overallStatus === "finalized" ? "finalized" : "pending"}">当前阶段：${escapeHtml(displayPhaseLabel(system))}</span>
+              <span class="status ${system.overallStatus === "finalized" ? "finalized" : "pending"}">当前节点：${escapeHtml(displayNodeLabel(system, system.currentNode))}</span>
+              <span class="status pending">进度：${system.progress.completed}/${system.progress.total}</span>
+              <span class="muted">更新：${formatTime(system.updatedAt)}</span>
+            </div>
+          </section>
+          <section class="card">
+            <h2>执行链路</h2>
+            ${renderPipeline(system)}
+            <div class="muted" style="margin-top: 10px">失败或暂停节点可点击节点继续；审核节点到达后显示“已就绪”，点击节点弹出审核窗口。</div>
+          </section>
+          ${renderOperationGuideGate(system)}
+          ${renderArtifacts(system)}
+          ${renderEvidenceSection(system)}
+          ${renderWriteValidation(system)}
+          ${renderReviewDecision(system)}
+          ${renderPhase3bUsage(system)}
+        `;
+      }
+
+      function renderHome() {
+        return renderSummary() + renderActiveRun() + renderFilters() + renderSystemsTable();
+      }
+
+      function render() {
+        if (!snapshot) return;
+        const route = location.hash || "#/systems";
+        const match = /^#\/systems\/([^/]+)$/.exec(route);
+        document.querySelector("#breadcrumb").textContent = match ? "首页 / 系统详情 / 执行链路" : "首页 / 全局系统清单";
+        if (match) {
+          const code = decodeURIComponent(match[1]);
+          const system = (snapshot.systems || []).find((item) => item.code === code);
+          document.querySelector("#app").innerHTML = system ? renderDetail(system) : `<section class="card"><div class="empty">系统不存在：${escapeHtml(code)}</div></section>`;
+          return;
+        }
+        document.querySelector("#app").innerHTML = renderHome();
+      }
+
+      async function refresh() {
+        snapshot = await api("/api/state");
+        render();
+        scheduleRefresh();
+      }
+
+      function scheduleRefresh() {
+        clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => refresh().catch((error) => setMessage(error.message)), snapshot?.running ? 2000 : 8000);
+      }
+
+      function setQuery(value) {
+        filters.query = value;
+        render();
+      }
+
+      function setStatusFilter(value) {
+        filters.status = value;
+        render();
+      }
+
+      function currentSystemCode() {
+        const match = location.hash.match(/^#\/systems\/([^/?#]+)/);
+        return match ? decodeURIComponent(match[1]) : "";
+      }
+
+      function setControlBusy(busy) {
+        controlBusy = busy;
+        document.querySelectorAll(".toolbar button, .actions .danger").forEach((button) => {
+          button.disabled = busy;
+        });
+      }
+
+      async function runBatch(reset) {
+        if (controlBusy) return;
+        setControlBusy(true);
+        setMessage(reset ? "Starting batch reset..." : "Starting 4-thread batch...");
+        try {
+          const provider = defaultProvider();
+          const result = await api("/api/run", {
+            method: "POST",
+            body: JSON.stringify({ batch: true, all: true, provider, reset, concurrency: 4 }),
+          });
+          setMessage(`Batch started: PID ${result.pid || "-"}, concurrency=4`);
+          setTimeout(refresh, 800);
+        } catch (error) {
+          setMessage(error.message);
+        } finally {
+          setControlBusy(false);
+        }
+      }
+
+      async function runSystem(system, reset) {
+        if (controlBusy) return;
+        setControlBusy(true);
+        setMessage(reset ? "正在停止旧任务并重置…" : "正在启动任务…");
+        try {
+          const provider = defaultProvider();
+          const result = await api("/api/run", {
+            method: "POST",
+            body: JSON.stringify({ system, provider, reset }),
+          });
+          setMessage(
+            reset
+              ? `已停止旧任务并从头启动（写稿：${provider}，PID ${result.pid || "-"})`
+              : `任务已启动（写稿：${provider}，PID ${result.pid || "-"})`,
+          );
+          setTimeout(refresh, 800);
+        } catch (error) {
+          setMessage(error.message);
+        } finally {
+          setControlBusy(false);
+        }
+      }
+
+      async function retryNode(system, node) {
+        const provider = defaultProvider();
+        await api("/api/retry", {
+          method: "POST",
+          body: JSON.stringify({ system, node, provider }),
+        });
+        setMessage(`节点任务已启动（写稿：${provider}）`);
+        setTimeout(refresh, 800);
+      }
+
+      async function stopRun() {
+        if (controlBusy) return;
+        setControlBusy(true);
+        setMessage("正在停止当前任务…");
+        try {
+          const system = currentSystemCode();
+          const result = await api("/api/stop", {
+            method: "POST",
+            body: JSON.stringify(system ? { system } : {}),
+          });
+          if (result.status === "stopped") {
+            const parts = [];
+            if (result.killedPids?.length) parts.push(`已结束进程 ${result.killedPids.join(", ")}`);
+            if (result.pausedSystems?.length) parts.push(`已暂停 ${result.pausedSystems.join(", ")}`);
+            if (result.staleStateCleared) parts.push("已清理卡住的运行状态");
+            setMessage(parts.join("；") || "已停止当前任务");
+          } else {
+            setMessage("当前无运行任务");
+          }
+          await refresh();
+        } catch (error) {
+          setMessage(error.message);
+        } finally {
+          setControlBusy(false);
+        }
+      }
+
+      async function submitReview(system) {
+        const status = document.querySelector("#modal-decision").value;
+        const comment = document.querySelector("#modal-comment").value;
+        const result = await api("/api/review", {
+          method: "POST",
+          body: JSON.stringify({ system, status, comment }),
+        });
+        hideReviewModal();
+        if (result.status === "approved") {
+          setMessage("审核通过，已生成终稿和 Word");
+        } else if (result.autoRerun && result.rerun) {
+          const part = result.rerunNarrativePart ? ` · 分片 ${result.rerunNarrativePart}` : "";
+          setMessage(
+            `已驳回，已自动重跑：${(result.rerunNodes || []).join("、")}（${result.rerunProvider || defaultProvider()}${part}）`,
+          );
+        } else {
+          setMessage(`已驳回，建议重跑：${(result.rerunNodes || []).join("、")}`);
+        }
+        await refresh();
+      }
+
+      function showReviewModal(system) {
+        reviewSystemCode = system;
+        document.querySelector("#modal-decision").value = "approved";
+        document.querySelector("#modal-comment").value = "";
+        const modal = document.querySelector("#review-modal");
+        modal.classList.add("open");
+        modal.setAttribute("aria-hidden", "false");
+      }
+
+      function hideReviewModal() {
+        const modal = document.querySelector("#review-modal");
+        modal.classList.remove("open");
+        modal.setAttribute("aria-hidden", "true");
+      }
+
+      function closeReviewModal(event) {
+        if (event.target.id === "review-modal") hideReviewModal();
+      }
+
+      async function submitReviewFromModal() {
+        if (!reviewSystemCode) return;
+        await submitReview(reviewSystemCode);
+      }
+
+      window.addEventListener("hashchange", render);
+      if (!location.hash) location.hash = "#/systems";
+      refresh().catch((error) => setMessage(error.message));
+    </script>
+  </body>
+</html>

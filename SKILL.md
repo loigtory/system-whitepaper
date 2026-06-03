@@ -1,0 +1,172 @@
+---
+name: system-whitepaper
+description: Use when generating concise system function whitepapers from test-environment web systems, browser evidence, screenshots, Playwright exploration results, or AI_AUTO_TEST_ validation data.
+---
+
+# System Whitepaper
+
+## Core Principle
+
+Generate a concise, evidence-driven system function whitepaper. Do not invent modules, flows, fields, permissions, or technical details that are not present in the evidence package.
+
+This skill is the main controller. Use supporting files for detailed rules:
+
+- `whitepaper-template.md`: Markdown output template
+- `evidence-schema.md`: Evidence package structure
+- `explorer-guide.md`: Playwright exploration rules
+- `form-fill-rules.md`: Form filling and prerequisite data rules
+- `safety-rules.md`: Test data and write-operation safety rules
+- `quality-checklist.md`: 99%+ quality gate
+- `docs/narrative-guide.md`: Agent narrative writing, review rejection, and rewrite rules
+
+## Required Inputs
+
+- System list with system name and test-environment URL.
+- Huntian temporary token. Token transport is query: `HUNTIAN_TOKEN_TRANSPORT=query`.
+- Login verification endpoint pattern: `https://huntian.hzins.com/api/user/getUserLoginInfo?token=REPLACE_WITH_JWT`.
+- Local hosts already points target domains to the test environment.
+- The test account has full functional permissions unless the user says otherwise.
+
+Never write token values into the whitepaper, screenshot captions, evidence summaries, or logs intended for review.
+
+## Execution Flow
+
+The unattended pipeline is grouped into five business-visible phases:
+
+1. **准备**: sync the system registry and ensure Huntian login/session is valid.
+2. **取证**: use Playwright to collect pages, popups, forms, tables, screenshots, logs, and safe `AI_AUTO_TEST_` write-operation evidence.
+3. **真相**:
+   - **库表画像**: when enabled, convert private test-database metadata into redacted `database-profile.json`; skip this node when `databaseProfile.enabled=false`.
+   - **功能宇宙**: merge UI evidence and redacted database entities into `function-universe.json` candidates.
+   - **可信断言**: convert the universe into `verified-claims.json`; only `writable=true` claims may become body assertions.
+4. **成稿**:
+   - **底稿**: generate `whitepaper.draft.md` from evidence. This is a factual draft, not the final whitepaper.
+   - **摘要**: build `evidence-summary.json` for LLM input.
+   - **写稿**: `run-phase3b.js` generates `narrative-brief.md` and an inline prompt from compressed `evidence-summary.json`, quality summary, and `verified-claims.json`. Cursor Agent / LLM writes `narrative-fragments.md`; scripts assemble `whitepaper.pending-review.md`.
+   - **事实核验**: run `fact-check-whitepaper.js` so unsupported headings and weak body assertions are blocked before review/finalization.
+   - For rejection rewrites, prefer `--narrative-part overview-flow`, `--narrative-part function-sections`, or a concrete module name instead of full narrative reruns when the comment scope is limited.
+   - When a rerun must apply an existing `review-decision.json`, pass `--review-rerun`; ordinary full narrative runs intentionally ignore stale review decisions.
+   - Review rerun usage must remain auditable: `phase3b-usage.json` should explain whether the run was full, partial, or review-driven, which review scope triggered it, and whether split prompts were actually sent to the SDK.
+   - Classify rejection comments narrowly: wording, description, and business-flow gaps are narrative rewrites; only missing screenshots, evidence, or collection failures trigger evidence refresh.
+   - **质检**: run coverage and narrative checks; unresolved failures become re-run tasks or pending confirmations.
+5. **审定**: the reviewer approves or rejects in the local dashboard. Approval creates `whitepaper.final.md` and Word output. Rejection must include comments; `run-review-decision.js` classifies the comment and writes `review-decision.json`; the Agent/LLM only executes the scoped narrative rewrite when required.
+
+## Parallel Batch Model
+
+Use the 4-thread model for unattended multi-system development:
+
+- Run different systems in parallel. Each system must write to its own `outputs/<system-code>/` directory.
+- Do not run the same system twice at the same time. Duplicate system codes or duplicate batch requests are invalid because they can overwrite screenshots, state, prompts, and review artifacts.
+- The batch runner owns `outputs/_batch/run-state.json`. Single-system child pipelines are started with `--no-batch-state` so they cannot overwrite the aggregate batch state.
+- The local dashboard reads the same batch state and shows each running system's status, current phase/node, pid, and per-system log path.
+- Batch execution increases throughput only. It does not multiply Cursor/Codex plan quota and it does not make Agent writing free.
+
+## Execution Commands
+
+Use the npm scripts as the stable entrypoints:
+
+- `npm run init`: create `config/systems.local.yaml`, `secrets/`, and `outputs/` from the packaged example if missing.
+- `npm run doctor`: validate local config, secret paths, safe test-data prefix, output directory, and system registry before running the pipeline.
+- `npm run db:profile -- --system <code>`: build a redacted `database-profile.json` from private test-database metadata when `databaseProfile.enabled` is configured.
+- `npm run truth:universe -- --input outputs/<code>`: merge UI evidence summary and redacted database profile into `function-universe.json` candidates.
+- `npm run truth:claims -- --input outputs/<code>`: convert the function universe into `verified-claims.json` with confidence and writable/non-writable boundaries.
+- `npm run truth:fact-check -- --input outputs/<code>`: check `whitepaper.pending-review.md` against writable claims and block unsupported or weak body assertions.
+- `npm run sync`: sync the system registry into `config/systems.local.yaml`.
+- `npm run pipeline`: run the unattended end-to-end pipeline for configured systems.
+- `npm run batch`: run the full whitepaper pipeline for all configured systems with 4 parallel workers; use `-- --systems <code1>,<code2>` to limit scope or `-- --concurrency <n>` to change worker count.
+- `npm run dashboard`: open the local review dashboard on port `3920`.
+- `npm run phase3b -- --system <code>`: run or rerun the narrative-writing stage for one system.
+- `npm test`: run the regression suite before and after script changes.
+- `npm run pack:check`: dry-run the skill package and verify private/runtime artifacts stay out.
+
+Run `npm run init` once after installing the skill, then edit `config/systems.local.yaml` and write the Huntian token into `secrets/huntian-token.txt`.
+Run `npm run doctor` before first collection and after changing config or secret paths.
+Prefer `npm run pipeline` for single-system production runs. Use `npm run batch` when multiple independent systems must be processed unattended. Watch `outputs/_batch/run-state.json` or the dashboard "Batch 4 threads" panel to see all active system threads at once. Use `npm run phase3b` only for scoped narrative work, review rewrites, or prompt/fragment regeneration after evidence and summary artifacts already exist.
+Run `npm run pack:check` before distributing or installing an updated copy of this skill.
+
+## Hard Rules
+
+- No evidence, no conclusion. Unsupported content goes to pending confirmations.
+- Core functions and high-impact actions must bind to screenshots, logs, page structure, system feedback, or state changes.
+- Write operations must target records in `test-data-ledger` with the `AI_AUTO_TEST_` prefix.
+- Existing system data may be read or referenced, but must not be modified, submitted, approved, deleted, overwritten, or published.
+- If a target record cannot be proven to be automation-created, do not execute the final write action.
+- Seeing a button is not the same as validating a flow.
+- Session expiry is not permission denial. If the page returns to login, shows 401/403, or user info is empty, pause and request a fresh token.
+- Keep the whitepaper concise. Each normal function description should usually fit in 5-8 lines.
+- `generate-whitepaper.js` output is only a **底稿**. Do not treat `whitepaper.draft.md` as a deliverable final whitepaper.
+- Stage **成稿 · 写稿** must follow `docs/narrative-guide.md`; do not use fixed template sentences as a substitute for Agent narrative writing.
+- During **成稿 · 写稿**, keep the Agent working set to the single system output directory. Do not ask it to explore `scripts/`, `node_modules/`, full `evidence.json`, screenshot binaries, or other systems' outputs.
+- During batch execution, each Agent/LLM writing task still receives only one system's reduced evidence and verified claims. Never give an Agent the whole batch output tree as its writing context.
+- Never explore runtime/private directories such as `secrets/`, `.playwright-*`, `node_modules/`, or unrelated `outputs/` when generating or revising narrative content.
+- Database connection details are private script inputs only. Do not put `secrets/db/<system>.json`, database hostnames, users, passwords, DSNs, or raw sample rows into prompts, logs intended for review, or whitepapers. Agent writing may only use redacted database artifacts such as `database-profile.json`, `data-dictionary.json`, `entity-model.json`, and `verified-claims.json`.
+- Seeing a menu, button, or field proves only that the UI element exists. Business value, process completion, and write-operation validation require supporting evidence.
+- Treat core JSON artifacts as schema-bound products, not loose caches. `evidence.json`, `evidence-summary.json`, `quality-report.json`, `write-validation-plan.json`, `operation-spec.json`, and `pipeline-state.json` must be valid JSON objects when they already exist and are used as inputs.
+- Optional enrichment/cache files may be ignored when missing, malformed, or the wrong top-level shape, but they must not be treated as valid evidence. Examples: `phase3b-usage-history.json` may be an array cache; `review-decision.json`, `write-validation-result.json`, `operation-guide-gate.json`, and `network-index.json` are object-shaped optional artifacts.
+- When editing scripts, use the shared JSON helpers from `scripts/system-whitepaper-lib.js`: strict core inputs use `readRequiredJsonObject` or `readExistingJsonObject`; optional object artifacts use `readOptionalJsonObject`; optional array/history caches use `readOptionalJson` plus an `Array.isArray` guard.
+
+## Output Structure
+
+Generate artifacts per system:
+
+- `whitepaper.draft.md`: factual draft from deterministic scripts.
+- `evidence-summary.json`: compressed evidence for Agent writing.
+- `database-profile.json`: redacted database schema/entity evidence; never include database secrets or raw sensitive rows.
+- `function-universe.json`: UI + DB candidate universe for later verified claims; not final conclusions.
+- `verified-claims.json`: claim-level evidence and confidence boundary for narrative writing and fact checks.
+- `fact-check-report.json`: deterministic claim coverage report for pending review/finalization gates.
+- `whitepaper.pending-review.md`: Agent-written business-readable whitepaper for review.
+- `whitepaper.final.md`: final Markdown after approval.
+- `{系统名称}_系统功能白皮书_{YYYYMMDD}.docx`: Word output after approval.
+
+The reviewed whitepaper keeps this structure:
+
+1. System overview
+2. Function module overview
+3. Core function descriptions
+4. Typical business flows
+5. Role and permission summary
+6. Pending confirmations
+7. Appendix: evidence index
+
+Put key screenshots inside the relevant function or flow section. Put full screenshot and evidence indexes in the appendix.
+
+## Quality Gate
+
+Before finalizing, verify:
+
+- Menu coverage >= 99% or every missing menu has a reason.
+- Core page screenshot coverage >= 99%.
+- Core function classification coverage >= 99%.
+- Write-operation safety compliance = 100%.
+- Unverified-content labeling = 100%.
+- Core conclusion traceability = 100%.
+- Deterministic business claims should come from `verified-claims.json`; weak claims must not be written as confirmed conclusions.
+- `fact-check-report.json` must have `canFinalize=true` before producing `whitepaper.final.md`.
+- No duplicated function explanations.
+- No source-code, database, or internal implementation claims without browser evidence.
+
+If any quality gate fails, do not finalize. Re-run, downgrade to pending confirmation, or record a justified exclusion.
+
+## Review Rejection
+
+When review is rejected, comments are mandatory. `run-review-decision.js` inspects the comments and returns one structured decision:
+
+- `rerunNodes`: concrete nodes to re-run, usually `narrative,fact-check,quality` or `collect,inspect,summary,truth-universe,truth-claims,narrative,fact-check,quality`.
+- `rewriteScope`: `overview-flow`, `function-sections`, `evidence-refresh`, or `narrative`.
+- `narrativePart`: scoped writer input such as `overview-flow`, `function-sections`, or a concrete module name.
+- `instructions`: what the next rewrite must fix.
+
+The Agent must follow `review-decision.json` during `--review-rerun` and explain how the rewrite addresses the review comments.
+`review-decision.json` uses the script schema: `status`, `comment`, `rerunNodes`, `rewriteScope`, `targetSections`, `targetModules`, `narrativePart`, `instructions`, `decidedAt`.
+
+## Common Mistakes
+
+- Writing a long manual instead of a concise whitepaper.
+- Treating inferred business meaning as verified fact.
+- Deleting or modifying existing test-environment data.
+- Hiding uncovered menus or failed pages.
+- Letting screenshots accumulate without selecting representative ones.
+- Writing technical implementation details from URLs or API names alone.
+- Marking `whitepaper.draft.md` as final output.
+- Rewriting evidence into polished claims that cannot be traced back to screenshots, fields, logs, or test data.

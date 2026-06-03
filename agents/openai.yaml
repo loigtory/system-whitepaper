@@ -1,0 +1,7 @@
+interface:
+  display_name: "System Whitepaper"
+  short_description: "Generate evidence-driven system function whitepapers."
+  default_prompt: "Use $system-whitepaper to generate or revise a concise evidence-driven system function whitepaper."
+
+policy:
+  allow_implicit_invocation: true

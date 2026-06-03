@@ -1,0 +1,11 @@
+node_modules/
+.npm-cache/
+.tmp/
+.playwright-*/
+secrets/
+outputs/
+config/systems.local.yaml
+config/systems-registry.xlsx
+config/systems-registry.csv
+scripts/README.md
+npm-debug.log*
