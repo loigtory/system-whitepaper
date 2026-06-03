@@ -177,6 +177,46 @@ function buildFactCheckSourceArtifacts(options = {}) {
   };
 }
 
+function assertJsonObject(value, message) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(message);
+  }
+}
+
+function assertArray(value, message) {
+  if (!Array.isArray(value)) {
+    throw new Error(message);
+  }
+}
+
+function assertMetricEquals(metrics = {}, key, expected) {
+  if (!Number.isFinite(Number(metrics[key]))) {
+    throw new Error(`verified-claims.json metrics.${key} must be numeric.`);
+  }
+  if (Number(metrics[key]) !== expected) {
+    throw new Error(`verified-claims.json metrics.${key} must match the claims body.`);
+  }
+}
+
+function sameStringSet(left = [], right = []) {
+  const normalize = (items) => [...new Set(items.map((item) => String(item || "")))].sort();
+  const a = normalize(left);
+  const b = normalize(right);
+  return a.length === b.length && a.every((item, index) => item === b[index]);
+}
+
+function claimSourceTypeStartsWith(claim = {}, prefix) {
+  return (claim.sources || []).some((source) => compactString(source.type).startsWith(prefix));
+}
+
+function claimHasUiEvidence(claim = {}) {
+  return claimSourceTypeStartsWith(claim, "ui-") || (claim.sources || []).some((source) => source.type === "screenshot");
+}
+
+function claimHasDatabaseEvidence(claim = {}) {
+  return claimSourceTypeStartsWith(claim, "db-");
+}
+
 function assertValidVerifiedClaimsArtifact(claimsArtifact = {}) {
   if (!claimsArtifact || typeof claimsArtifact !== "object" || Array.isArray(claimsArtifact)) {
     throw new Error("verified-claims.json must be a JSON object.");
@@ -191,6 +231,54 @@ function assertValidVerifiedClaimsArtifact(claimsArtifact = {}) {
   ) {
     throw new Error("verified-claims.json boundary rules are incomplete.");
   }
+  assertArray(claimsArtifact.claims, "verified-claims.json claims must be an array.");
+  assertArray(claimsArtifact.writableClaimIds, "verified-claims.json writableClaimIds must be an array.");
+  assertJsonObject(claimsArtifact.metrics, "verified-claims.json metrics must be a JSON object.");
+
+  const seenIds = new Set();
+  for (const [index, claim] of claimsArtifact.claims.entries()) {
+    assertJsonObject(claim, `verified-claims.json claims[${index}] must be a JSON object.`);
+    const id = compactString(claim.id);
+    if (!id) throw new Error(`verified-claims.json claims[${index}].id must be present.`);
+    if (seenIds.has(id)) throw new Error(`verified-claims.json claim id is duplicated: ${id}.`);
+    seenIds.add(id);
+    if (!["confirmed", "inferred", "weak"].includes(claim.status)) {
+      throw new Error(`verified-claims.json claim ${id} has invalid status.`);
+    }
+    if (typeof claim.writable !== "boolean") {
+      throw new Error(`verified-claims.json claim ${id} writable must be a boolean.`);
+    }
+    if (claim.sources !== undefined && !Array.isArray(claim.sources)) {
+      throw new Error(`verified-claims.json claim ${id} sources must be an array when present.`);
+    }
+    const databaseOnly = claimHasDatabaseEvidence(claim) && !claimHasUiEvidence(claim);
+    if (claim.status === "weak" && claim.writable) {
+      throw new Error(`verified-claims.json weak claim ${id} must not be writable.`);
+    }
+    if (databaseOnly && claim.status === "confirmed") {
+      throw new Error(`verified-claims.json database-only claim ${id} must not be confirmed.`);
+    }
+    if (databaseOnly && claim.writable) {
+      throw new Error(`verified-claims.json database-only claim ${id} must not be writable.`);
+    }
+  }
+
+  const claims = claimsArtifact.claims;
+  const writableClaimIds = claims.filter((claim) => claim.writable).map((claim) => claim.id);
+  if (!sameStringSet(claimsArtifact.writableClaimIds, writableClaimIds)) {
+    throw new Error("verified-claims.json writableClaimIds must match writable claims.");
+  }
+  const metrics = claimsArtifact.metrics;
+  assertMetricEquals(metrics, "claimCount", claims.length);
+  assertMetricEquals(metrics, "writableClaimCount", writableClaimIds.length);
+  assertMetricEquals(metrics, "confirmedCount", claims.filter((claim) => claim.status === "confirmed").length);
+  assertMetricEquals(metrics, "inferredCount", claims.filter((claim) => claim.status === "inferred").length);
+  assertMetricEquals(metrics, "weakCount", claims.filter((claim) => claim.status === "weak").length);
+  assertMetricEquals(
+    metrics,
+    "databaseOnlyClaimCount",
+    claims.filter((claim) => claimHasDatabaseEvidence(claim) && !claimHasUiEvidence(claim)).length,
+  );
 }
 
 function assertValidFactCheckReportArtifact(report = {}) {

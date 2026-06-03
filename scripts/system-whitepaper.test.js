@@ -13474,6 +13474,45 @@ test("run fact check writes report and requires verified claims object", () => {
   assert.equal(fs.existsSync(path.join(dir, "bad-fact-check-report.json")), false);
 });
 
+test("fact check rejects forged verified claims metrics and writable ids", () => {
+  const { buildFactCheckReport } = require("./fact-check-whitepaper");
+  const forgedMetrics = verifiedClaimsFixture(
+    [
+      {
+        id: "function:保单任务:任务列表",
+        type: "function-presence",
+        subject: "任务列表",
+        module: "保单任务",
+        writable: true,
+        status: "confirmed",
+      },
+    ],
+    { metrics: { claimCount: 2 } },
+  );
+  assert.throws(
+    () => buildFactCheckReport({ markdown: "任务列表", claimsArtifact: forgedMetrics }),
+    /metrics\.claimCount must match the claims body/,
+  );
+
+  const forgedWritableIds = verifiedClaimsFixture(
+    [
+      {
+        id: "function:保单任务:任务列表",
+        type: "function-presence",
+        subject: "任务列表",
+        module: "保单任务",
+        writable: false,
+        status: "confirmed",
+      },
+    ],
+    { writableClaimIds: ["function:保单任务:任务列表"], metrics: { writableClaimCount: 1 } },
+  );
+  assert.throws(
+    () => buildFactCheckReport({ markdown: "任务列表", claimsArtifact: forgedWritableIds }),
+    /writableClaimIds must match writable claims/,
+  );
+});
+
 test("truth readiness rejects stale fact check source fingerprints", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -13814,9 +13853,10 @@ test("truth readiness passes only when evidence claims fact-check and narrative 
             module: "保单任务",
             status: "weak",
             writable: false,
+            sources: [{ type: "db-table", id: "adp_test.policy_task" }],
           },
         ],
-        { metrics: { claimCount: 2, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0, weakCount: 0, databaseOnlyClaimCount: 1 } },
+        { metrics: { claimCount: 2, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0, weakCount: 1, databaseOnlyClaimCount: 1 } },
       ),
     },
     factCheck: {
@@ -14301,6 +14341,52 @@ test("truth readiness rejects invalid verified claims artifact contract", () => 
   assert.equal(report.gates.claims.scorePercent, 0);
   assert.equal(report.canSubmitReview, false);
   assert.ok(report.gates.claims.failures.some((item) => /artifactType/.test(item)));
+  assert.ok(report.blockers.some((item) => item.id === "claims.invalid-artifact"));
+});
+
+test("truth readiness rejects forged verified claims artifact metrics", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const artifacts = {
+    quality: {
+      file: "quality-report.json",
+      status: "ok",
+      value: qualityReportFixture(),
+    },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: verifiedClaimsFixture(
+        [
+          {
+            id: "function:保单任务:任务列表",
+            subject: "任务列表",
+            module: "保单任务",
+            status: "confirmed",
+            writable: true,
+          },
+        ],
+        { metrics: { claimCount: 2 } },
+      ),
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: factCheckReportFixture(),
+    },
+    narrative: {
+      file: "narrative-quality-report.json",
+      status: "ok",
+      value: narrativeQualityReportFixture(),
+    },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.gates.claims.pass, false);
+  assert.equal(report.gates.claims.artifactContractValid, false);
+  assert.equal(report.gates.claims.scorePercent, 0);
+  assert.equal(report.canSubmitReview, false);
+  assert.ok(report.gates.claims.failures.some((item) => /metrics\.claimCount must match/.test(item)));
   assert.ok(report.blockers.some((item) => item.id === "claims.invalid-artifact"));
 });
 
