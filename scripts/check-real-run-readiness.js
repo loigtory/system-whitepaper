@@ -295,7 +295,28 @@ function writeRealRunReadinessReport(outputRoot, report) {
   const markdownPath = path.join(batchDir, "real-run-readiness-report.md");
   writeJson(jsonPath, report);
   fs.writeFileSync(markdownPath, renderRealRunReadinessMarkdown(report), "utf8");
-  return { jsonPath, markdownPath };
+  return {
+    jsonPath,
+    markdownPath,
+    artifacts: {
+      realRunReadinessJson: path.relative(batchDir, jsonPath).replace(/\\/g, "/"),
+      realRunReadinessMarkdown: path.relative(batchDir, markdownPath).replace(/\\/g, "/"),
+    },
+  };
+}
+
+function buildRealRunReadinessStateSummary(report = {}, artifacts = {}) {
+  return {
+    status: report.status || "",
+    canStartRealRun: Boolean(report.canStartRealRun),
+    canDeliver: Boolean(report.canDeliver),
+    summary: report.summary || {},
+    acceptance: report.acceptance || null,
+    deliveryReadiness: report.deliveryReadiness || null,
+    artifacts: artifacts.artifacts || artifacts || {},
+    generatedAt: report.generatedAt || "",
+    nextAction: report.nextAction || "",
+  };
 }
 
 function runRealRunReadiness(options = {}) {
@@ -307,7 +328,11 @@ function runRealRunReadiness(options = {}) {
     context,
   });
   const artifacts = writeRealRunReadinessReport(context.outputRoot, report);
-  return { report, artifacts };
+  return {
+    report,
+    artifacts,
+    state: buildRealRunReadinessStateSummary(report, artifacts),
+  };
 }
 
 function main() {
@@ -332,6 +357,7 @@ if (require.main === module) {
 
 module.exports = {
   buildRealRunReadinessReport,
+  buildRealRunReadinessStateSummary,
   loadRealRunContext,
   renderRealRunReadinessMarkdown,
   runRealRunReadiness,

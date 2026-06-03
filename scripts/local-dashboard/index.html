@@ -812,6 +812,9 @@
           const deliveryReadiness = run.deliveryReadiness;
           const deliverySummary = deliveryReadiness?.summary || {};
           const deliveryArtifacts = deliveryReadiness?.artifacts || {};
+          const realRunReadiness = run.realRunReadiness;
+          const realRunSummary = realRunReadiness?.summary || {};
+          const realRunArtifacts = realRunReadiness?.artifacts || {};
           const repairFollowUp = run.repairFollowUp;
           const repairFollowUpSummary = repairFollowUp?.summary || {};
           const repairFollowUpArtifacts = repairFollowUp?.artifacts || {};
@@ -856,6 +859,8 @@
                   ${acceptanceArtifacts.acceptanceMarkdown ? `<div class="muted">验收文件 ${escapeHtml(acceptanceArtifacts.acceptanceMarkdown)}</div>` : ""}
                   ${deliveryReadiness ? `<div class="muted">Delivery ${escapeHtml(deliveryReadiness.status || "-")} · ready ${escapeHtml(String(deliverySummary.ready || 0))}/${escapeHtml(String(deliverySummary.total || 0))} · smoke ${escapeHtml(String(deliverySummary.smokeEvidence || 0))}</div>` : ""}
                   ${deliveryArtifacts.deliveryReadinessMarkdown ? `<div class="muted">Delivery file ${escapeHtml(deliveryArtifacts.deliveryReadinessMarkdown)}</div>` : ""}
+                  ${realRunReadiness ? `<div class="muted">Real run ${escapeHtml(realRunReadiness.status || "-")} · start ${realRunReadiness.canStartRealRun ? "yes" : "no"} · deliver ${realRunReadiness.canDeliver ? "yes" : "no"} · DB ${escapeHtml(String(realRunSummary.databaseEnabled || 0))}/${escapeHtml(String(realRunSummary.systems || 0))}</div>` : ""}
+                  ${realRunArtifacts.realRunReadinessMarkdown ? `<div class="muted">Real run file ${escapeHtml(realRunArtifacts.realRunReadinessMarkdown)}</div>` : ""}
                   ${repairFollowUp ? `<div class="muted">Repair follow-up ${escapeHtml(repairFollowUp.status || "-")} · commands ${escapeHtml(String(repairFollowUpSummary.commands || 0))} · ${escapeHtml(repairFollowUp.nextBestAction || "-")}</div>` : ""}
                   ${repairFollowUpArtifacts.followUpMarkdown ? `<div class="muted">Repair follow-up file ${escapeHtml(repairFollowUpArtifacts.followUpMarkdown)}</div>` : ""}
                   ${run.lastError ? `<div class="status failed">${escapeHtml(run.lastError)}</div>` : ""}

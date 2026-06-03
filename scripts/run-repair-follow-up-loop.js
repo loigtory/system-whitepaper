@@ -13,6 +13,7 @@ const {
 const { loadBatchConfig, resolveBatchConcurrency } = require("./run-whitepaper-batch");
 const { runBatchAcceptance } = require("./check-batch-acceptance");
 const { runDeliveryReadiness } = require("./check-delivery-readiness");
+const { runRealRunReadiness } = require("./check-real-run-readiness");
 
 const DEFAULT_MAX_ROUNDS = 3;
 const SAFE_REPAIR_VALUE_FLAGS = new Set([
@@ -193,9 +194,16 @@ function writeFollowUpLoopTerminalChecks(context, args = {}) {
     acceptanceResult: acceptance,
     outputRoot: context.outputRoot,
   });
+  const realRun = runRealRunReadiness({
+    args,
+    context,
+    acceptanceReport: acceptance.report,
+    deliveryReport: delivery.report,
+  });
   return {
     acceptance: acceptance.state,
     deliveryReadiness: delivery.state,
+    realRunReadiness: realRun.state,
   };
 }
 
@@ -349,6 +357,7 @@ async function runRepairFollowUpLoop(options = {}) {
   const terminalChecks = writeFollowUpLoopTerminalChecks(context, args);
   state.acceptance = terminalChecks.acceptance;
   state.deliveryReadiness = terminalChecks.deliveryReadiness;
+  state.realRunReadiness = terminalChecks.realRunReadiness;
   state.updatedAt = new Date().toISOString();
   writeFollowUpLoopState(context.outputRoot, state);
   return state;

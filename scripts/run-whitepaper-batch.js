@@ -15,6 +15,7 @@ const {
 const { NODES, readPipelineStateSafe } = require("./pipeline-state");
 const { runBatchAcceptance } = require("./check-batch-acceptance");
 const { runDeliveryReadiness } = require("./check-delivery-readiness");
+const { runRealRunReadiness } = require("./check-real-run-readiness");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_BATCH_CONCURRENCY = 4;
@@ -1107,9 +1108,16 @@ function writeBatchTerminalChecks(outputRoot, context, args = {}, systems = []) 
     acceptanceResult: acceptance,
     outputRoot,
   });
+  const realRun = runRealRunReadiness({
+    args,
+    context,
+    acceptanceReport: acceptance.report,
+    deliveryReport: delivery.report,
+  });
   return {
     acceptance: acceptance.state,
     deliveryReadiness: delivery.state,
+    realRunReadiness: realRun.state,
   };
 }
 
@@ -1181,6 +1189,7 @@ async function runBatchPipeline(options = {}) {
       const terminalChecks = writeBatchTerminalChecks(context.outputRoot, context, args, systems);
       state.acceptance = terminalChecks.acceptance;
       state.deliveryReadiness = terminalChecks.deliveryReadiness;
+      state.realRunReadiness = terminalChecks.realRunReadiness;
       writeBatchRunState(context.outputRoot, state);
       resolve(state);
     };
@@ -1347,6 +1356,7 @@ async function runBatchPipeline(options = {}) {
         const terminalChecks = writeBatchTerminalChecks(context.outputRoot, context, args, systems);
         state.acceptance = terminalChecks.acceptance;
         state.deliveryReadiness = terminalChecks.deliveryReadiness;
+        state.realRunReadiness = terminalChecks.realRunReadiness;
         writeBatchRunState(context.outputRoot, state);
         process.exit(130);
       });

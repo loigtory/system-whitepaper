@@ -877,6 +877,7 @@ function buildBatchActiveRun(run, systems, batch) {
   const repairQueue = batch?.repairQueue || null;
   const acceptance = batch?.acceptance || null;
   const deliveryReadiness = batch?.deliveryReadiness || null;
+  const realRunReadiness = batch?.realRunReadiness || null;
   const repairFollowUp = batch?.repairFollowUp || null;
   return {
     mode: "batch",
@@ -895,6 +896,7 @@ function buildBatchActiveRun(run, systems, batch) {
     repairQueue,
     acceptance,
     deliveryReadiness,
+    realRunReadiness,
     repairFollowUp,
     startedAt: run.startedAt || batch?.startedAt || "",
     runningMs:
@@ -1039,6 +1041,13 @@ function buildDashboardSnapshot(options = {}) {
     json: fileInfo(path.join(outputRoot, "_batch", "delivery-readiness-report.json")),
     markdown: fileInfo(path.join(outputRoot, "_batch", "delivery-readiness-report.md")),
   };
+  const batchRealRunReadinessReport = readOptionalJsonObject(
+    path.join(outputRoot, "_batch", "real-run-readiness-report.json"),
+  );
+  const batchRealRunReadinessArtifacts = {
+    json: fileInfo(path.join(outputRoot, "_batch", "real-run-readiness-report.json")),
+    markdown: fileInfo(path.join(outputRoot, "_batch", "real-run-readiness-report.md")),
+  };
   const batchRepairRunState = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-run-state.json"));
   const batchRepairRunPlan = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-run-plan.json"));
   const batchRepairClosure = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-closure.json"));
@@ -1101,6 +1110,24 @@ function buildDashboardSnapshot(options = {}) {
                   deliveryReadinessMarkdown: "delivery-readiness-report.md",
                 },
                 generatedAt: batchDeliveryReadinessReport.generatedAt || "",
+              }
+            : null),
+        realRunReadiness:
+          batch.realRunReadiness ||
+          (batchRealRunReadinessReport
+            ? {
+                status: batchRealRunReadinessReport.status || "",
+                canStartRealRun: Boolean(batchRealRunReadinessReport.canStartRealRun),
+                canDeliver: Boolean(batchRealRunReadinessReport.canDeliver),
+                summary: batchRealRunReadinessReport.summary || {},
+                acceptance: batchRealRunReadinessReport.acceptance || null,
+                deliveryReadiness: batchRealRunReadinessReport.deliveryReadiness || null,
+                artifacts: {
+                  realRunReadinessJson: "real-run-readiness-report.json",
+                  realRunReadinessMarkdown: "real-run-readiness-report.md",
+                },
+                generatedAt: batchRealRunReadinessReport.generatedAt || "",
+                nextAction: batchRealRunReadinessReport.nextAction || "",
               }
             : null),
         repairFollowUp:
@@ -1187,6 +1214,8 @@ function buildDashboardSnapshot(options = {}) {
     batchAcceptanceArtifacts,
     batchDeliveryReadinessReport,
     batchDeliveryReadinessArtifacts,
+    batchRealRunReadinessReport,
+    batchRealRunReadinessArtifacts,
     batchRepairRunState,
     batchRepairRunPlan,
     batchRepairClosure,
