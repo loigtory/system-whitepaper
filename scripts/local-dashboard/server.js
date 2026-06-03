@@ -1120,6 +1120,7 @@ function buildDashboardSnapshot(options = {}) {
                 canStartRealRun: Boolean(batchRealRunReadinessReport.canStartRealRun),
                 canDeliver: Boolean(batchRealRunReadinessReport.canDeliver),
                 summary: batchRealRunReadinessReport.summary || {},
+                batchRun: batchRealRunReadinessReport.batchRun || null,
                 acceptance: batchRealRunReadinessReport.acceptance || null,
                 deliveryReadiness: batchRealRunReadinessReport.deliveryReadiness || null,
                 artifacts: {

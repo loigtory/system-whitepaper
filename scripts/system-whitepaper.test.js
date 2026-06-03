@@ -6693,9 +6693,14 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
 
   const initial = createBatchState(config.systems, {
     concurrency: 4,
+    configPath: "config/systems.local.yaml",
+    outputRoot: "outputs",
     startedAt: "2026-06-03T00:00:00.000Z",
     now: "2026-06-03T00:00:00.000Z",
   });
+  assert.equal(initial.artifactType, "batch-run-state");
+  assert.equal(initial.configPath, "config/systems.local.yaml");
+  assert.equal(initial.outputRoot, "outputs");
   assert.equal(initial.status, "running");
   assert.equal(initial.summary.queued, 2);
   const running = updateBatchSystem(
@@ -8285,6 +8290,29 @@ test("real run readiness unifies preflight and final delivery state", () => {
       },
     ],
   };
+  const completedBatchRunState = {
+    artifactType: "batch-run-state",
+    status: "success",
+    batchId: "batch-real-run",
+    concurrency: 4,
+    configPath,
+    outputRoot,
+    startedAt: "2026-06-03T00:00:00.000Z",
+    finishedAt: "2026-06-03T00:02:00.000Z",
+    summary: { total: 1, queued: 0, running: 0, completed: 1, failed: 0, paused: 0 },
+    systems: [
+      {
+        code: "adp",
+        name: "AI保单数据闭环平台",
+        status: "review-pending",
+        runStatus: "completed",
+        currentPhase: "approve",
+        currentNode: "review",
+      },
+    ],
+  };
+  fs.mkdirSync(path.join(outputRoot, "_batch"), { recursive: true });
+  fs.writeFileSync(path.join(outputRoot, "_batch", "run-state.json"), JSON.stringify(completedBatchRunState), "utf8");
   const ready = buildRealRunReadinessReport({
     args: { systems: "adp" },
     context,
@@ -8299,9 +8327,44 @@ test("real run readiness unifies preflight and final delivery state", () => {
   });
   assert.equal(ready.status, "ready");
   assert.equal(ready.canDeliver, true);
+  assert.equal(ready.batchRun.status, "success");
   const artifacts = writeRealRunReadinessReport(outputRoot, ready);
   assert.equal(fs.existsSync(artifacts.jsonPath), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "real-run-readiness-report.md")), true);
+
+  const runningBatchRunState = {
+    ...completedBatchRunState,
+    status: "running",
+    finishedAt: "",
+    summary: { total: 1, queued: 0, running: 1, completed: 0, failed: 0, paused: 0 },
+    systems: [
+      {
+        ...completedBatchRunState.systems[0],
+        status: "running",
+        runStatus: "running",
+        currentPhase: "compose",
+        currentNode: "narrative",
+      },
+    ],
+  };
+  const runningBatchReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport,
+    deliveryReport,
+    batchRunState: runningBatchRunState,
+  });
+  assert.equal(runningBatchReady.status, "in-progress");
+  assert.equal(runningBatchReady.canDeliver, false);
+  assert.equal(runningBatchReady.deliveryReadiness, null);
+  assert.equal(runningBatchReady.batchRun.status, "running");
+  assert.ok(runningBatchReady.warnings.some((item) => item.id === "batch.run-state-not-terminal"));
 
   fs.writeFileSync(
     path.join(systemOutput, "whitepaper.pending-review.md"),

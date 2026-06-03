@@ -327,9 +327,13 @@ function createBatchState(systems = [], options = {}) {
       batchId:
         options.batchId ||
         `batch-${timestamp.replace(/[^0-9A-Za-z]+/g, "").slice(0, 14) || Date.now()}`,
+      artifactType: "batch-run-state",
+      version: 1,
       mode: "batch",
       status: "pending",
       concurrency,
+      configPath: options.configPath || "",
+      outputRoot: options.outputRoot || "",
       currentSystemCode: "",
       total: systems.length,
       summary: {},
@@ -1134,6 +1138,8 @@ async function runBatchPipeline(options = {}) {
 
   let state = createBatchState(systems, {
     concurrency,
+    configPath: context.configPath,
+    outputRoot: context.outputRoot,
     startedAt: new Date().toISOString(),
     logFileResolver: (system) => resolveBatchLogFile(context.outputRoot, system.code),
   });

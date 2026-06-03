@@ -282,6 +282,129 @@ function truthReportLooksLikeSmoke(report = {}) {
   return generatedBy.includes("smoke") || generatedBy.includes("local-e2e");
 }
 
+function runStateSystemCodes(runState = {}) {
+  if (!Array.isArray(runState.systems)) return null;
+  return runState.systems
+    .map((item) => String(item?.code || item?.systemCode || "").trim())
+    .filter(Boolean);
+}
+
+function selectScopedRunState(runState, selectedCodes = [], context = {}) {
+  if (!runState) return { runState: null, warnings: [] };
+  if (runState.artifactType && runState.artifactType !== "batch-run-state") {
+    return {
+      runState: null,
+      warnings: [
+        reportScopeWarning(
+          "batch",
+          "artifact-type-mismatch",
+          `Ignored batch run-state with unsupported artifactType: ${runState.artifactType}`,
+        ),
+      ],
+    };
+  }
+  const runStateCodes = runStateSystemCodes(runState);
+  if (!runStateCodes || !runStateCodes.length) {
+    return {
+      runState: null,
+      warnings: [
+        reportScopeWarning("batch", "scope-unknown", "Ignored batch run-state because it does not list system codes."),
+      ],
+    };
+  }
+  if (!sameCodeSet(runStateCodes, selectedCodes)) {
+    return {
+      runState: null,
+      warnings: [
+        reportScopeWarning(
+          "batch",
+          "scope-mismatch",
+          `Ignored batch run-state because systems do not match current selection. selected=${selectedCodes.join(",") || "-"} runState=${runStateCodes.join(",") || "-"}`,
+        ),
+      ],
+    };
+  }
+  const pathWarnings = reportPathScopeWarnings(runState, "batch", context);
+  if (pathWarnings.length) {
+    return { runState: null, warnings: pathWarnings };
+  }
+  return { runState, warnings: [] };
+}
+
+function summarizeRunState(runState = {}) {
+  const systems = Array.isArray(runState.systems) ? runState.systems : [];
+  const summary = runState.summary || {};
+  return {
+    status: runState.status || "",
+    batchId: runState.batchId || "",
+    concurrency: Number(runState.concurrency || 0),
+    total: Number(summary.total || systems.length || 0),
+    queued: Number(summary.queued || systems.filter((item) => item.runStatus === "queued").length),
+    running: Number(summary.running || systems.filter((item) => item.runStatus === "running").length),
+    completed: Number(summary.completed || systems.filter((item) => item.runStatus === "completed").length),
+    failed: Number(summary.failed || systems.filter((item) => item.runStatus === "failed").length),
+    paused: Number(summary.paused || systems.filter((item) => item.status === "paused").length),
+    startedAt: runState.startedAt || "",
+    finishedAt: runState.finishedAt || "",
+  };
+}
+
+function bindDeliveryToBatchRunState(deliveryReport, runState, selectedCodes = []) {
+  if (!deliveryReport || deliveryReport.status !== "ready" || deliveryReport.canDeliver !== true) {
+    return { deliveryReport, warnings: [] };
+  }
+  if (!runState) {
+    return {
+      deliveryReport: null,
+      warnings: [
+        reportScopeWarning(
+          "batch",
+          "run-state-missing",
+          "Ignored ready delivery report because current batch run-state is missing or not bound to this selection.",
+        ),
+      ],
+    };
+  }
+  const systems = Array.isArray(runState.systems) ? runState.systems : [];
+  const byCode = new Map(systems.map((item) => [String(item.code || "").trim(), item]));
+  const invalid = [];
+  for (const code of selectedCodes) {
+    const item = byCode.get(code);
+    if (!item) {
+      invalid.push(`${code}:missing`);
+      continue;
+    }
+    const runStatus = String(item.runStatus || "");
+    const status = String(item.status || "");
+    if (runStatus !== "completed" || !["success", "review-pending", "finalized", "skipped"].includes(status)) {
+      invalid.push(`${code}:${runStatus || "unknown"}/${status || "unknown"}`);
+    }
+  }
+  const runningOrQueued = systems
+    .filter((item) => ["running", "queued"].includes(String(item.runStatus || "")))
+    .map((item) => String(item.code || "").trim())
+    .filter(Boolean);
+  const failedOrPaused = systems
+    .filter((item) => ["failed", "paused"].includes(String(item.runStatus || "")) || ["failed", "paused"].includes(String(item.status || "")))
+    .map((item) => String(item.code || "").trim())
+    .filter(Boolean);
+  if (runningOrQueued.length) invalid.push(`active:${runningOrQueued.join(",")}`);
+  if (failedOrPaused.length) invalid.push(`failed:${failedOrPaused.join(",")}`);
+  if (invalid.length) {
+    return {
+      deliveryReport: null,
+      warnings: [
+        reportScopeWarning(
+          "batch",
+          "run-state-not-terminal",
+          `Ignored ready delivery report because current batch run-state is not terminal-complete: ${invalid.join("; ")}.`,
+        ),
+      ],
+    };
+  }
+  return { deliveryReport, warnings: [] };
+}
+
 function readTextIfExists(filePath) {
   try {
     return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
@@ -489,20 +612,29 @@ function buildRealRunReadinessReport(input = {}) {
   warnings.push(...systems.flatMap((system) => system.warnings));
 
   const selectedCodes = systems.map((system) => system.code).filter(Boolean);
+  const rawRunState = input.batchRunState || input.runState || readJsonObjectIfExists(path.join(context.outputRoot, "_batch", "run-state.json"));
   const rawAcceptanceReport = input.acceptanceReport || readJsonObjectIfExists(path.join(context.outputRoot, "_batch", "acceptance-report.json"));
   const rawDeliveryReport = input.deliveryReport || readJsonObjectIfExists(path.join(context.outputRoot, "_batch", "delivery-readiness-report.json"));
+  const runStateSelection = selectScopedRunState(rawRunState, selectedCodes, context);
   const acceptanceSelection = selectScopedReport(rawAcceptanceReport, "acceptance", selectedCodes, context);
   const deliverySelection = selectScopedReport(rawDeliveryReport, "delivery", selectedCodes, context);
   const boundDeliverySelection = bindDeliveryReportToAcceptance(deliverySelection.report, acceptanceSelection.report);
   const freshDeliverySelection = bindDeliveryReportToCurrentSources(boundDeliverySelection.report, context);
+  const terminalDeliverySelection = bindDeliveryToBatchRunState(
+    freshDeliverySelection.report,
+    runStateSelection.runState,
+    selectedCodes,
+  );
   warnings.push(
+    ...runStateSelection.warnings,
     ...acceptanceSelection.warnings,
     ...deliverySelection.warnings,
     ...boundDeliverySelection.warnings,
     ...freshDeliverySelection.warnings,
+    ...terminalDeliverySelection.warnings,
   );
   const acceptanceReport = acceptanceSelection.report;
-  const deliveryReport = freshDeliverySelection.report;
+  const deliveryReport = terminalDeliverySelection.deliveryReport;
   const preparationStatus = blockers.length ? "blocked" : "ready-to-run";
   const status = deriveStatus(preparationStatus, acceptanceReport, deliveryReport);
   return {
@@ -541,6 +673,7 @@ function buildRealRunReadinessReport(input = {}) {
           summary: deliveryReport.summary || {},
         }
       : null,
+    batchRun: runStateSelection.runState ? summarizeRunState(runStateSelection.runState) : null,
     systems,
     blockers,
     warnings,
@@ -581,6 +714,7 @@ function renderRealRunReadinessMarkdown(report = {}) {
     `- Can deliver: ${report.canDeliver ? "yes" : "no"}`,
     `- Systems ready to run: ${summary.readyToRun || 0}/${summary.systems || 0}`,
     `- Database-enabled systems: ${summary.databaseEnabled || 0}/${summary.systems || 0}`,
+    `- Batch run: ${report.batchRun?.status || "-"}`,
     `- Acceptance: ${report.acceptance?.status || "-"}`,
     `- Delivery readiness: ${report.deliveryReadiness?.status || "-"}`,
     `- Next action: ${report.nextAction || ""}`,
@@ -628,6 +762,7 @@ function buildRealRunReadinessStateSummary(report = {}, artifacts = {}) {
     canStartRealRun: Boolean(report.canStartRealRun),
     canDeliver: Boolean(report.canDeliver),
     summary: report.summary || {},
+    batchRun: report.batchRun || null,
     acceptance: report.acceptance || null,
     deliveryReadiness: report.deliveryReadiness || null,
     artifacts: artifacts.artifacts || artifacts || {},
