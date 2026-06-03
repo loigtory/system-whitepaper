@@ -77,6 +77,23 @@ function assertBoolean(value, message) {
   }
 }
 
+function assertArray(value, message) {
+  if (!Array.isArray(value)) {
+    throw new Error(message);
+  }
+}
+
+function assertMetricEquals(metrics = {}, key, expected, fileName, containerName = "metrics") {
+  assertFiniteNumber(metrics[key], `${fileName} ${containerName}.${key} must be numeric.`);
+  if (Number(metrics[key]) !== expected) {
+    throw new Error(`${fileName} ${containerName}.${key} must match the artifact body count.`);
+  }
+}
+
+function assertSourceArtifactObject(value, fileName) {
+  assertJsonObject(value, `${fileName} sourceArtifacts must be a JSON object.`);
+}
+
 function assertValidTruthReadinessReportArtifact(report = {}) {
   assertJsonObject(report, "truth-readiness-report.json must be a JSON object.");
   if (report.artifactType !== "truth-readiness-report") {
@@ -111,6 +128,115 @@ function assertValidTruthReadinessReportArtifact(report = {}) {
   if (!String(report.generatedAt || "").trim()) {
     throw new Error("truth-readiness-report.json generatedAt must be present.");
   }
+}
+
+function assertValidDataDictionaryArtifact(value = {}) {
+  assertJsonObject(value, "data-dictionary.json must be a JSON object.");
+  if (value.artifactType !== "data-dictionary") {
+    throw new Error("data-dictionary.json artifactType must be data-dictionary.");
+  }
+  assertFiniteNumber(value.version, "data-dictionary.json version must be numeric.");
+  if (!String(value.generatedAt || "").trim()) {
+    throw new Error("data-dictionary.json generatedAt must be present.");
+  }
+  assertJsonObject(value.source, "data-dictionary.json source must be a JSON object.");
+  if (value.source.artifact !== "database-profile.json") {
+    throw new Error("data-dictionary.json source.artifact must be database-profile.json.");
+  }
+  assertArray(value.tables, "data-dictionary.json tables must be an array.");
+  assertArray(value.columns, "data-dictionary.json columns must be an array.");
+  assertJsonObject(value.metrics, "data-dictionary.json metrics must be a JSON object.");
+  assertMetricEquals(value.metrics, "tableCount", value.tables.length, "data-dictionary.json");
+  assertMetricEquals(value.metrics, "columnCount", value.columns.length, "data-dictionary.json");
+  assertJsonObject(value.safety, "data-dictionary.json safety must be a JSON object.");
+  assertBoolean(value.safety.rawSecretsIncluded, "data-dictionary.json safety.rawSecretsIncluded must be a boolean.");
+  assertBoolean(value.safety.rawSampleRowsIncluded, "data-dictionary.json safety.rawSampleRowsIncluded must be a boolean.");
+  if (value.safety.rawSecretsIncluded !== false || value.safety.rawSampleRowsIncluded !== false) {
+    throw new Error("data-dictionary.json must not include raw secrets or raw sample rows.");
+  }
+  if (value.safety.sourceMustBeRedactedDatabaseProfile !== true) {
+    throw new Error("data-dictionary.json safety.sourceMustBeRedactedDatabaseProfile must be true.");
+  }
+  assertSourceArtifactObject(value.sourceArtifacts, "data-dictionary.json");
+  assertJsonObject(
+    value.sourceArtifacts.databaseProfile,
+    "data-dictionary.json must record sourceArtifacts.databaseProfile.",
+  );
+}
+
+function assertValidEntityModelArtifact(value = {}) {
+  assertJsonObject(value, "entity-model.json must be a JSON object.");
+  if (value.artifactType !== "entity-model") {
+    throw new Error("entity-model.json artifactType must be entity-model.");
+  }
+  assertFiniteNumber(value.version, "entity-model.json version must be numeric.");
+  if (!String(value.generatedAt || "").trim()) {
+    throw new Error("entity-model.json generatedAt must be present.");
+  }
+  assertJsonObject(value.source, "entity-model.json source must be a JSON object.");
+  if (value.source.artifact !== "data-dictionary.json") {
+    throw new Error("entity-model.json source.artifact must be data-dictionary.json.");
+  }
+  assertArray(value.entities, "entity-model.json entities must be an array.");
+  assertArray(value.relations, "entity-model.json relations must be an array.");
+  assertJsonObject(value.metrics, "entity-model.json metrics must be a JSON object.");
+  assertMetricEquals(value.metrics, "entityCount", value.entities.length, "entity-model.json");
+  assertMetricEquals(value.metrics, "relationCount", value.relations.length, "entity-model.json");
+  assertJsonObject(value.safety, "entity-model.json safety must be a JSON object.");
+  assertBoolean(value.safety.rawSecretsIncluded, "entity-model.json safety.rawSecretsIncluded must be a boolean.");
+  assertBoolean(value.safety.rawSampleRowsIncluded, "entity-model.json safety.rawSampleRowsIncluded must be a boolean.");
+  if (value.safety.rawSecretsIncluded !== false || value.safety.rawSampleRowsIncluded !== false) {
+    throw new Error("entity-model.json must not include raw secrets or raw sample rows.");
+  }
+  if (value.safety.databaseOnlyClaimsRequireUiConfirmation !== true) {
+    throw new Error("entity-model.json safety.databaseOnlyClaimsRequireUiConfirmation must be true.");
+  }
+  assertSourceArtifactObject(value.sourceArtifacts, "entity-model.json");
+  assertJsonObject(
+    value.sourceArtifacts.databaseProfile,
+    "entity-model.json must record sourceArtifacts.databaseProfile.",
+  );
+  assertJsonObject(
+    value.sourceArtifacts.dataDictionary,
+    "entity-model.json must record sourceArtifacts.dataDictionary.",
+  );
+}
+
+function assertValidFunctionUniverseArtifact(value = {}) {
+  assertJsonObject(value, "function-universe.json must be a JSON object.");
+  if (value.artifactType !== "function-universe") {
+    throw new Error("function-universe.json artifactType must be function-universe.");
+  }
+  assertFiniteNumber(value.version, "function-universe.json version must be numeric.");
+  if (!String(value.generatedAt || "").trim()) {
+    throw new Error("function-universe.json generatedAt must be present.");
+  }
+  assertArray(value.modules, "function-universe.json modules must be an array.");
+  assertArray(value.functions, "function-universe.json functions must be an array.");
+  assertArray(value.entities, "function-universe.json entities must be an array.");
+  assertArray(value.links, "function-universe.json links must be an array.");
+  assertArray(value.entityRelations, "function-universe.json entityRelations must be an array.");
+  assertJsonObject(value.coverage, "function-universe.json coverage must be a JSON object.");
+  assertMetricEquals(value.coverage, "moduleCount", value.modules.length, "function-universe.json", "coverage");
+  assertMetricEquals(value.coverage, "functionCount", value.functions.length, "function-universe.json", "coverage");
+  assertMetricEquals(value.coverage, "entityCount", value.entities.length, "function-universe.json", "coverage");
+  assertMetricEquals(
+    value.coverage,
+    "entityRelationCount",
+    value.entityRelations.length,
+    "function-universe.json",
+    "coverage",
+  );
+  assertFiniteNumber(value.coverage.linkedFunctionCount, "function-universe.json coverage.linkedFunctionCount must be numeric.");
+  assertJsonObject(value.rules, "function-universe.json rules must be a JSON object.");
+  if (value.rules.noConclusion !== true) {
+    throw new Error("function-universe.json must declare rules.noConclusion=true.");
+  }
+  assertSourceArtifactObject(value.sourceArtifacts, "function-universe.json");
+  assertJsonObject(
+    value.sourceArtifacts.evidenceSummary,
+    "function-universe.json must record sourceArtifacts.evidenceSummary.",
+  );
 }
 
 function readJsonArtifact(filePath) {
@@ -812,9 +938,32 @@ function buildDatabaseGate(artifacts, options = {}) {
     file: OPTIONAL_ARTIFACTS.entityModel,
     value: null,
   };
-  const universe = universeArtifact.value || {};
-  const dataDictionary = dataDictionaryArtifact.value || {};
-  const entityModel = entityModelArtifact.value || {};
+  const contractFailures = [];
+  const validateOptionalDerivedArtifact = (artifact, validator) => {
+    if (artifact.status !== "ok") return false;
+    try {
+      validator(artifact.value);
+      return true;
+    } catch (error) {
+      contractFailures.push(error.message);
+      return false;
+    }
+  };
+  const dataDictionaryContractValid = validateOptionalDerivedArtifact(
+    dataDictionaryArtifact,
+    assertValidDataDictionaryArtifact,
+  );
+  const entityModelContractValid = validateOptionalDerivedArtifact(
+    entityModelArtifact,
+    assertValidEntityModelArtifact,
+  );
+  const functionUniverseContractValid = validateOptionalDerivedArtifact(
+    universeArtifact,
+    assertValidFunctionUniverseArtifact,
+  );
+  const universe = functionUniverseContractValid ? universeArtifact.value || {} : {};
+  const dataDictionary = dataDictionaryContractValid ? dataDictionaryArtifact.value || {} : {};
+  const entityModel = entityModelContractValid ? entityModelArtifact.value || {} : {};
   const coverage = universe.coverage || {};
   const entityCount = Number(entityModel.metrics?.entityCount || coverage.entityCount || 0);
   const linkedFunctionCount = Number(coverage.linkedFunctionCount || 0);
@@ -829,17 +978,28 @@ function buildDatabaseGate(artifacts, options = {}) {
   const profileAvailable = profile.status === "ok" && isValidDatabaseProfile(profile.value, { code: expectedSystemCode });
   const profileSafety = profile.status === "ok" ? scanDatabaseProfileSafety(profile.value || {}) : { pass: true, failures: [], warnings: [] };
   const safeProfileAvailable = profileAvailable && profileSafety.pass;
-  const available = profileAvailable || entityCount > 0 || columnCount > 0;
-  const score = available && profileSafety.pass ? 1 : 0;
+  const derivedArtifactsPresent = [dataDictionaryArtifact, entityModelArtifact, universeArtifact].some(
+    (artifact) => artifact.status === "ok",
+  );
+  const derivedArtifactContractsPass =
+    !derivedArtifactsPresent ||
+    (dataDictionaryArtifact.status !== "ok" || dataDictionaryContractValid) &&
+      (entityModelArtifact.status !== "ok" || entityModelContractValid) &&
+      (universeArtifact.status !== "ok" || functionUniverseContractValid);
+  const available = safeProfileAvailable || entityCount > 0 || columnCount > 0;
+  const pass = profileSafety.pass && derivedArtifactContractsPass;
+  const score = available && pass ? 1 : 0;
   return {
     id: "database",
     label: "Redacted database evidence",
-    pass: profileSafety.pass,
+    pass,
     available,
     profileAvailable: safeProfileAvailable,
     rawProfileAvailable: profileAvailable,
     profileArtifactValid,
     profileSystemMatches,
+    derivedArtifactContractsPass,
+    contractFailures,
     profileSafety,
     score,
     scorePercent: percent(score),
@@ -855,12 +1015,16 @@ function buildDatabaseGate(artifacts, options = {}) {
       databaseProfileSafetyPass: profileSafety.pass,
       expectedSystemCode,
       dataDictionaryStatus: dataDictionaryArtifact.status,
+      dataDictionaryContractValid,
       entityModelStatus: entityModelArtifact.status,
+      entityModelContractValid,
+      functionUniverseStatus: universeArtifact.status,
+      functionUniverseContractValid,
     },
     warnings: available
       ? profileSafety.warnings
       : ["No redacted database profile was available; UI evidence remains the primary truth source."],
-    failures: profileSafety.failures,
+    failures: [...profileSafety.failures, ...contractFailures],
   };
 }
 
@@ -1024,6 +1188,17 @@ function collectDatabaseRequirementBlockers(gates, options = {}) {
         "database-profile.json is not safely redacted for Truth Pipeline use.",
         ["db-profile", "db-model", "truth-universe", "truth-claims", "truth-readiness"],
         { failures: gates.database.failures || [], quotaImpact: "low" },
+      ),
+    ];
+  }
+  if (gates.database.derivedArtifactContractsPass === false) {
+    return [
+      blocker(
+        "database.derived-artifact-invalid",
+        "P0",
+        "Database-derived Truth Pipeline artifacts are malformed or inconsistent.",
+        ["db-model", "truth-universe", "truth-claims", "truth-readiness"],
+        { failures: gates.database.contractFailures || [], quotaImpact: "low" },
       ),
     ];
   }
@@ -1203,6 +1378,9 @@ if (require.main === module) {
 
 module.exports = {
   DEFAULT_THRESHOLD,
+  assertValidDataDictionaryArtifact,
+  assertValidEntityModelArtifact,
+  assertValidFunctionUniverseArtifact,
   assertValidTruthReadinessReportArtifact,
   buildReadinessSourceArtifacts,
   buildLineageGate,

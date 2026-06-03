@@ -253,6 +253,8 @@ function writePassingTruthArtifacts(dir, options = {}) {
   const functionUniversePath = path.join(dir, "function-universe.json");
   const defaultFunctionUniverse = {
     artifactType: "function-universe",
+    version: 1,
+    generatedAt: "2026-06-03T00:00:00.000Z",
     system: { code: options.systemCode || "adp", name: options.systemName || "AI保单数据闭环平台" },
     modules: [{ name: "保单任务", sources: [{ type: "ui-module", id: "保单任务", label: "保单任务" }] }],
     functions: [
@@ -264,6 +266,20 @@ function writePassingTruthArtifacts(dir, options = {}) {
         sources: [{ type: "ui-function", id: "function:保单任务:任务列表", label: "任务列表" }],
       },
     ],
+    entities: [],
+    links: [],
+    entityRelations: [],
+    coverage: {
+      moduleCount: 1,
+      functionCount: 1,
+      entityCount: 0,
+      linkedFunctionCount: 0,
+      entityRelationCount: 0,
+    },
+    rules: {
+      noConclusion: true,
+      purpose: "Candidate universe for later verified-claims generation; not final business claims.",
+    },
   };
   let functionUniverse = defaultFunctionUniverse;
   try {
@@ -285,6 +301,26 @@ function writePassingTruthArtifacts(dir, options = {}) {
     functionUniversePath,
     JSON.stringify({
       ...functionUniverse,
+      version: Number(functionUniverse.version || 1),
+      generatedAt: functionUniverse.generatedAt || "2026-06-03T00:00:00.000Z",
+      modules: Array.isArray(functionUniverse.modules) ? functionUniverse.modules : [],
+      functions: Array.isArray(functionUniverse.functions) ? functionUniverse.functions : [],
+      entities: Array.isArray(functionUniverse.entities) ? functionUniverse.entities : [],
+      links: Array.isArray(functionUniverse.links) ? functionUniverse.links : [],
+      entityRelations: Array.isArray(functionUniverse.entityRelations) ? functionUniverse.entityRelations : [],
+      coverage: {
+        moduleCount: Array.isArray(functionUniverse.modules) ? functionUniverse.modules.length : 0,
+        functionCount: Array.isArray(functionUniverse.functions) ? functionUniverse.functions.length : 0,
+        entityCount: Array.isArray(functionUniverse.entities) ? functionUniverse.entities.length : 0,
+        linkedFunctionCount: Array.isArray(functionUniverse.links)
+          ? new Set(functionUniverse.links.map((item) => `${item.module || ""}::${item.function || ""}`)).size
+          : 0,
+        entityRelationCount: Array.isArray(functionUniverse.entityRelations) ? functionUniverse.entityRelations.length : 0,
+      },
+      rules: {
+        ...(functionUniverse.rules || {}),
+        noConclusion: true,
+      },
       sourceArtifacts: buildUniverseSourceArtifacts({
         evidenceSummary: path.join(dir, "evidence-summary.json"),
         databaseProfile: databaseProfilePath,
@@ -12352,10 +12388,15 @@ test("build database model derives dictionary and entity model from redacted pro
   const os = require("node:os");
   const path = require("node:path");
   const {
+    assertValidDataDictionaryArtifact,
+    assertValidEntityModelArtifact,
     buildDatabaseModelArtifacts,
     buildDatabaseModelFromDir,
     inferEntityRelations,
-  } = require("./build-database-model");
+  } = {
+    ...require("./check-truth-readiness"),
+    ...require("./build-database-model"),
+  };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "database-model-"));
   const profile = {
     artifactType: "database-profile",
@@ -12396,6 +12437,8 @@ test("build database model derives dictionary and entity model from redacted pro
   const result = buildDatabaseModelFromDir(dir, { generatedAt: "2026-06-03T00:00:00.000Z" });
   const taskEntity = result.entityModel.entities.find((entity) => entity.table === "adp_test.policy_task");
 
+  assert.doesNotThrow(() => assertValidDataDictionaryArtifact(result.dataDictionary));
+  assert.doesNotThrow(() => assertValidEntityModelArtifact(result.entityModel));
   assert.equal(fs.existsSync(path.join(dir, "data-dictionary.json")), true);
   assert.equal(fs.existsSync(path.join(dir, "entity-model.json")), true);
   assert.equal(result.dataDictionary.sourceArtifacts.databaseProfile.fingerprint.exists, true);
@@ -12459,10 +12502,14 @@ test("build function universe merges UI functions and redacted database entities
   const os = require("node:os");
   const path = require("node:path");
   const {
+    assertValidFunctionUniverseArtifact,
     buildFunctionUniverseArtifact,
     buildFunctionUniverseFromDir,
     scoreFunctionEntityMatch,
-  } = require("./build-function-universe");
+  } = {
+    ...require("./check-truth-readiness"),
+    ...require("./build-function-universe"),
+  };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "function-universe-"));
   const evidenceSummary = {
     system: { code: "adp", name: "AI保单数据闭环平台" },
@@ -12532,6 +12579,7 @@ test("build function universe merges UI functions and redacted database entities
   });
   const { outputPath, artifact } = buildFunctionUniverseFromDir(dir);
 
+  assert.doesNotThrow(() => assertValidFunctionUniverseArtifact(artifact));
   assert.equal(fs.existsSync(outputPath), true);
   assert.equal(direct.modules[0].name, "保单任务");
   assert.equal(artifact.sourceArtifacts.evidenceSummary.fingerprint.exists, true);
@@ -13634,13 +13682,58 @@ test("truth readiness requires real database profile when database evidence is m
       status: "ok",
       value: {
         artifactType: "entity-model",
+        version: 1,
+        generatedAt: "2026-06-03T00:00:00.000Z",
+        source: { artifact: "data-dictionary.json" },
+        entities: [
+          { entity: "保单任务", table: "adp_test.policy_task", evidence: { sampleRowsIncluded: true } },
+          { entity: "保单", table: "adp_test.policy" },
+        ],
+        relations: [{ from: "adp_test.policy_task", to: "adp_test.policy", type: "foreign-key" }],
         metrics: { entityCount: 2, relationCount: 1, sampleBackedEntityCount: 1 },
+        safety: {
+          rawSecretsIncluded: false,
+          rawSampleRowsIncluded: false,
+          databaseOnlyClaimsRequireUiConfirmation: true,
+        },
+        sourceArtifacts: {
+          databaseProfile: { file: "database-profile.json", fingerprint: { exists: false, size: 0, sha256: "" } },
+          dataDictionary: { file: "data-dictionary.json", fingerprint: { exists: false, size: 0, sha256: "" } },
+        },
       },
     },
     dataDictionary: {
       file: "data-dictionary.json",
       status: "ok",
-      value: { artifactType: "data-dictionary", metrics: { columnCount: 8 } },
+      value: {
+        artifactType: "data-dictionary",
+        version: 1,
+        generatedAt: "2026-06-03T00:00:00.000Z",
+        source: { artifact: "database-profile.json" },
+        tables: [
+          { table: "adp_test.policy_task", name: "policy_task" },
+          { table: "adp_test.policy", name: "policy" },
+        ],
+        columns: [
+          { table: "adp_test.policy_task", name: "id" },
+          { table: "adp_test.policy_task", name: "policy_id" },
+          { table: "adp_test.policy_task", name: "status" },
+          { table: "adp_test.policy_task", name: "created_time" },
+          { table: "adp_test.policy", name: "id" },
+          { table: "adp_test.policy", name: "policy_no" },
+          { table: "adp_test.policy", name: "status" },
+          { table: "adp_test.policy", name: "updated_time" },
+        ],
+        metrics: { tableCount: 2, columnCount: 8 },
+        safety: {
+          rawSecretsIncluded: false,
+          rawSampleRowsIncluded: false,
+          sourceMustBeRedactedDatabaseProfile: true,
+        },
+        sourceArtifacts: {
+          databaseProfile: { file: "database-profile.json", fingerprint: { exists: false, size: 0, sha256: "" } },
+        },
+      },
     },
   };
 
@@ -13704,6 +13797,122 @@ test("truth readiness requires real database profile when database evidence is m
   });
   assert.equal(validProfileReport.gates.database.profileAvailable, true);
   assert.equal(validProfileReport.canSubmitReview, true);
+});
+
+test("truth readiness rejects malformed database-derived truth artifacts", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const artifacts = {
+    quality: {
+      file: "quality-report.json",
+      status: "ok",
+      value: qualityReportFixture(),
+    },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: verifiedClaimsFixture([
+        {
+          id: "function:保单任务:任务列表",
+          subject: "任务列表",
+          module: "保单任务",
+          status: "confirmed",
+          writable: true,
+        },
+      ]),
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: factCheckReportFixture(),
+    },
+    narrative: {
+      file: "narrative-quality-report.json",
+      status: "ok",
+      value: narrativeQualityReportFixture(),
+    },
+    dataDictionary: {
+      file: "data-dictionary.json",
+      status: "ok",
+      value: {
+        artifactType: "data-dictionary",
+        version: 1,
+        generatedAt: "2026-06-03T00:00:00.000Z",
+        source: { artifact: "database-profile.json" },
+        tables: [],
+        columns: [],
+        metrics: { tableCount: 0, columnCount: 8 },
+        safety: {
+          rawSecretsIncluded: false,
+          rawSampleRowsIncluded: false,
+          sourceMustBeRedactedDatabaseProfile: true,
+        },
+        sourceArtifacts: {
+          databaseProfile: { file: "database-profile.json", fingerprint: { exists: false, size: 0, sha256: "" } },
+        },
+      },
+    },
+    entityModel: {
+      file: "entity-model.json",
+      status: "ok",
+      value: {
+        artifactType: "entity-model",
+        version: 1,
+        generatedAt: "2026-06-03T00:00:00.000Z",
+        source: { artifact: "data-dictionary.json" },
+        entities: [],
+        relations: [],
+        metrics: { entityCount: 2, relationCount: 0 },
+        safety: {
+          rawSecretsIncluded: false,
+          rawSampleRowsIncluded: false,
+          databaseOnlyClaimsRequireUiConfirmation: true,
+        },
+        sourceArtifacts: {
+          databaseProfile: { file: "database-profile.json", fingerprint: { exists: false, size: 0, sha256: "" } },
+          dataDictionary: { file: "data-dictionary.json", fingerprint: { exists: false, size: 0, sha256: "" } },
+        },
+      },
+    },
+    functionUniverse: {
+      file: "function-universe.json",
+      status: "ok",
+      value: {
+        artifactType: "function-universe",
+        version: 1,
+        generatedAt: "2026-06-03T00:00:00.000Z",
+        modules: [],
+        functions: [],
+        entities: [],
+        links: [],
+        entityRelations: [],
+        coverage: { moduleCount: 0, functionCount: 0, entityCount: 10, linkedFunctionCount: 0, entityRelationCount: 0 },
+        rules: { noConclusion: true },
+        sourceArtifacts: {
+          evidenceSummary: { file: "evidence-summary.json", fingerprint: { exists: false, size: 0, sha256: "" } },
+        },
+      },
+    },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.database.pass, false);
+  assert.equal(report.gates.database.available, false);
+  assert.equal(report.gates.database.metrics.columnCount, 0);
+  assert.equal(report.gates.database.metrics.entityCount, 0);
+  assert.equal(report.gates.database.derivedArtifactContractsPass, false);
+  assert.ok(report.blockers.some((item) => item.id === "database.derived-artifact-invalid"));
+  assert.ok(
+    report.gates.database.contractFailures.some((item) =>
+      /metrics\.columnCount must match the artifact body count/.test(item),
+    ),
+  );
+  assert.ok(
+    report.gates.database.contractFailures.some((item) =>
+      /coverage\.entityCount must match the artifact body count/.test(item),
+    ),
+  );
 });
 
 test("truth readiness rejects unsafe database profile evidence", () => {
