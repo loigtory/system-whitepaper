@@ -10208,9 +10208,8 @@ test("pipeline auto repairs writable claim coverage once during fact check", asy
   };
   fs.writeFileSync(
     path.join(systemOutput, "verified-claims.json"),
-    JSON.stringify({
-      artifactType: "verified-claims",
-      claims: [
+    JSON.stringify(
+      verifiedClaimsFixture([
         {
           id: "function:保单任务:任务列表",
           type: "function",
@@ -10231,9 +10230,8 @@ test("pipeline auto repairs writable claim coverage once during fact check", asy
           confidence: "high",
           writable: true,
         },
-      ],
-      writableClaimIds: ["function:保单任务:任务列表", "function:保单任务:任务详情"],
-    }),
+      ]),
+    ),
     "utf8",
   );
   fs.writeFileSync(
@@ -12689,30 +12687,61 @@ test("build verified claims rejects missing function universe", () => {
   );
 });
 
+function verifiedClaimsFixture(claims = [], overrides = {}) {
+  const writableClaimIds = claims
+    .filter((claim) => claim?.writable && claim?.id)
+    .map((claim) => claim.id);
+  const base = {
+    artifactType: "verified-claims",
+    version: 1,
+    claims,
+    writableClaimIds,
+    rules: {
+      lowConfidenceNotWritable: true,
+      databaseOnlyNotConfirmed: true,
+      databaseOnlyNotWritable: true,
+    },
+    metrics: {
+      claimCount: claims.length,
+      writableClaimCount: writableClaimIds.length,
+      confirmedCount: claims.filter((claim) => claim.status === "confirmed").length,
+      inferredCount: claims.filter((claim) => claim.status === "inferred").length,
+      weakCount: claims.filter((claim) => claim.status === "weak").length,
+      databaseOnlyClaimCount: 0,
+    },
+  };
+  return {
+    ...base,
+    ...overrides,
+    rules: {
+      ...base.rules,
+      ...(overrides.rules || {}),
+    },
+  };
+}
+
 test("fact check passes writable claims and allows weak claims only in pending section", () => {
   const {
     buildFactCheckReport,
   } = require("./fact-check-whitepaper");
-  const claimsArtifact = {
-    claims: [
-      {
-        id: "function:保单任务:任务列表",
-        type: "function-presence",
-        subject: "任务列表",
-        module: "保单任务",
-        writable: true,
-        status: "confirmed",
-      },
-      {
-        id: "status:adp-test-policy-task:status",
-        type: "status-field",
-        subject: "status",
-        entity: "保单任务",
-        writable: false,
-        status: "weak",
-      },
-    ],
-  };
+  const claimsArtifact = verifiedClaimsFixture([
+    {
+      id: "function:保单任务:任务列表",
+      type: "function-presence",
+      subject: "任务列表",
+      module: "保单任务",
+      writable: true,
+      status: "confirmed",
+    },
+    {
+      id: "status:adp-test-policy-task:status",
+      type: "status-field",
+      subject: "status",
+      entity: "保单任务",
+      writable: false,
+      status: "weak",
+    },
+  ]);
   const markdown = [
     "# AI保单数据闭环平台功能白皮书",
     "### 任务列表",
@@ -12734,26 +12763,24 @@ test("fact check passes writable claims and allows weak claims only in pending s
 
 test("fact check blocks low writable claim coverage", () => {
   const { buildFactCheckReport } = require("./fact-check-whitepaper");
-  const claimsArtifact = {
-    claims: [
-      {
-        id: "function:保单任务:任务列表",
-        type: "function-presence",
-        subject: "任务列表",
-        module: "保单任务",
-        writable: true,
-        status: "confirmed",
-      },
-      {
-        id: "function:保单任务:任务详情",
-        type: "function-presence",
-        subject: "任务详情",
-        module: "保单任务",
-        writable: true,
-        status: "confirmed",
-      },
-    ],
-  };
+  const claimsArtifact = verifiedClaimsFixture([
+    {
+      id: "function:保单任务:任务列表",
+      type: "function-presence",
+      subject: "任务列表",
+      module: "保单任务",
+      writable: true,
+      status: "confirmed",
+    },
+    {
+      id: "function:保单任务:任务详情",
+      type: "function-presence",
+      subject: "任务详情",
+      module: "保单任务",
+      writable: true,
+      status: "confirmed",
+    },
+  ]);
   const markdown = [
     "# AI保单数据闭环平台功能白皮书",
     "### 任务列表",
@@ -12776,22 +12803,20 @@ test("fact check blocks low writable claim coverage", () => {
 
 test("fact check requires contextual support for writable claim coverage", () => {
   const { buildFactCheckReport } = require("./fact-check-whitepaper");
-  const claimsArtifact = {
-    claims: [
-      {
-        id: "function:保单任务:任务列表",
-        type: "function-presence",
-        subject: "任务列表",
-        module: "保单任务",
-        writable: true,
-        status: "confirmed",
-        evidence: {
-          queryFields: ["保单号"],
-          tableColumns: ["任务状态"],
-        },
+  const claimsArtifact = verifiedClaimsFixture([
+    {
+      id: "function:保单任务:任务列表",
+      type: "function-presence",
+      subject: "任务列表",
+      module: "保单任务",
+      writable: true,
+      status: "confirmed",
+      evidence: {
+        queryFields: ["保单号"],
+        tableColumns: ["任务状态"],
       },
-    ],
-  };
+    },
+  ]);
   const weakMarkdown = [
     "# AI保单数据闭环平台功能白皮书",
     "### 任务列表",
@@ -12829,26 +12854,24 @@ test("fact check requires contextual support for writable claim coverage", () =>
 
 test("fact check blocks unknown headings and weak body assertions", () => {
   const { buildFactCheckReport } = require("./fact-check-whitepaper");
-  const claimsArtifact = {
-    claims: [
-      {
-        id: "function:保单任务:任务列表",
-        type: "function-presence",
-        subject: "任务列表",
-        module: "保单任务",
-        writable: true,
-        status: "confirmed",
-      },
-      {
-        id: "status:adp-test-policy-task:status",
-        type: "status-field",
-        subject: "status",
-        entity: "保单任务",
-        writable: false,
-        status: "weak",
-      },
-    ],
-  };
+  const claimsArtifact = verifiedClaimsFixture([
+    {
+      id: "function:保单任务:任务列表",
+      type: "function-presence",
+      subject: "任务列表",
+      module: "保单任务",
+      writable: true,
+      status: "confirmed",
+    },
+    {
+      id: "status:adp-test-policy-task:status",
+      type: "status-field",
+      subject: "status",
+      entity: "保单任务",
+      writable: false,
+      status: "weak",
+    },
+  ]);
   const markdown = [
     "# AI保单数据闭环平台功能白皮书",
     "### 自动理赔审批",
@@ -12868,25 +12891,23 @@ test("fact check blocks unknown headings and weak body assertions", () => {
 
 test("fact check rejects unknown and non-writable explicit claim references", () => {
   const { buildFactCheckReport } = require("./fact-check-whitepaper");
-  const claimsArtifact = {
-    claims: [
-      {
-        id: "function:保单任务:任务列表",
-        type: "function-presence",
-        subject: "任务列表",
-        module: "保单任务",
-        writable: true,
-        status: "confirmed",
-      },
-      {
-        id: "entity:adp-test-policy-task",
-        type: "business-entity",
-        subject: "保单任务",
-        writable: false,
-        status: "weak",
-      },
-    ],
-  };
+  const claimsArtifact = verifiedClaimsFixture([
+    {
+      id: "function:保单任务:任务列表",
+      type: "function-presence",
+      subject: "任务列表",
+      module: "保单任务",
+      writable: true,
+      status: "confirmed",
+    },
+    {
+      id: "entity:adp-test-policy-task",
+      type: "business-entity",
+      subject: "保单任务",
+      writable: false,
+      status: "weak",
+    },
+  ]);
   const markdown = [
     "### 任务列表",
     "任务列表已取证。[claim:function:保单任务:任务列表]",
@@ -12916,8 +12937,8 @@ test("run fact check writes report and requires verified claims object", () => {
   );
   fs.writeFileSync(
     path.join(dir, "verified-claims.json"),
-    JSON.stringify({
-      claims: [
+    JSON.stringify(
+      verifiedClaimsFixture([
         {
           id: "function:保单任务:任务列表",
           subject: "任务列表",
@@ -12925,8 +12946,8 @@ test("run fact check writes report and requires verified claims object", () => {
           writable: true,
           status: "confirmed",
         },
-      ],
-    }),
+      ]),
+    ),
     "utf8",
   );
 
@@ -12944,6 +12965,20 @@ test("run fact check writes report and requires verified claims object", () => {
     () => runFactCheck({ inputDir: dir }),
     /Verified claims must be a JSON object/,
   );
+  fs.writeFileSync(
+    path.join(dir, "verified-claims.json"),
+    JSON.stringify({
+      artifactType: "verified-claims",
+      claims: [],
+      rules: { lowConfidenceNotWritable: true },
+    }),
+    "utf8",
+  );
+  assert.throws(
+    () => runFactCheck({ inputDir: dir, outputPath: path.join(dir, "bad-fact-check-report.json") }),
+    /boundary rules are incomplete/,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "bad-fact-check-report.json")), false);
 });
 
 test("truth readiness rejects stale fact check source fingerprints", () => {
@@ -12970,15 +13005,8 @@ test("truth readiness rejects stale fact check source fingerprints", () => {
   );
   fs.writeFileSync(
     path.join(dir, "verified-claims.json"),
-    JSON.stringify({
-      rules: {
-        lowConfidenceNotWritable: true,
-        databaseOnlyNotConfirmed: true,
-        databaseOnlyNotWritable: true,
-      },
-      metrics: { claimCount: 1, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0 },
-      writableClaimIds: ["function:保单任务:任务列表"],
-      claims: [
+    JSON.stringify(
+      verifiedClaimsFixture([
         {
           id: "function:保单任务:任务列表",
           subject: "任务列表",
@@ -12986,8 +13014,8 @@ test("truth readiness rejects stale fact check source fingerprints", () => {
           writable: true,
           status: "confirmed",
         },
-      ],
-    }),
+      ]),
+    ),
     "utf8",
   );
   fs.writeFileSync(

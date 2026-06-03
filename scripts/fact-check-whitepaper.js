@@ -177,9 +177,26 @@ function buildFactCheckSourceArtifacts(options = {}) {
   };
 }
 
+function assertValidVerifiedClaimsArtifact(claimsArtifact = {}) {
+  if (!claimsArtifact || typeof claimsArtifact !== "object" || Array.isArray(claimsArtifact)) {
+    throw new Error("verified-claims.json must be a JSON object.");
+  }
+  if (claimsArtifact.artifactType !== "verified-claims") {
+    throw new Error("verified-claims.json artifactType must be verified-claims.");
+  }
+  if (
+    claimsArtifact.rules?.lowConfidenceNotWritable !== true ||
+    claimsArtifact.rules?.databaseOnlyNotConfirmed !== true ||
+    claimsArtifact.rules?.databaseOnlyNotWritable !== true
+  ) {
+    throw new Error("verified-claims.json boundary rules are incomplete.");
+  }
+}
+
 function buildFactCheckReport(input = {}) {
   const markdown = String(input.markdown || "");
   const claimsArtifact = input.claimsArtifact || {};
+  assertValidVerifiedClaimsArtifact(claimsArtifact);
   const claims = Array.isArray(claimsArtifact.claims) ? claimsArtifact.claims : [];
   const claimById = new Map(claims.map((claim) => [claim.id, claim]));
   const writableClaimIds = claims
@@ -428,6 +445,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  assertValidVerifiedClaimsArtifact,
   buildFactCheckSourceArtifacts,
   buildFactCheckReport,
   runFactCheck,
