@@ -8979,6 +8979,50 @@ test("fact check passes writable claims and allows weak claims only in pending s
   assert.equal(report.failures.length, 0);
   assert.equal(report.pendingReferences.length, 1);
   assert.ok(report.supported.some((item) => item.claimId === "function:保单任务:任务列表"));
+  assert.equal(report.metrics.writableClaimCoverageRatio, 1);
+  assert.deepEqual(report.missingWritableClaimIds, []);
+});
+
+test("fact check blocks low writable claim coverage", () => {
+  const { buildFactCheckReport } = require("./fact-check-whitepaper");
+  const claimsArtifact = {
+    claims: [
+      {
+        id: "function:保单任务:任务列表",
+        type: "function-presence",
+        subject: "任务列表",
+        module: "保单任务",
+        writable: true,
+        status: "confirmed",
+      },
+      {
+        id: "function:保单任务:任务详情",
+        type: "function-presence",
+        subject: "任务详情",
+        module: "保单任务",
+        writable: true,
+        status: "confirmed",
+      },
+    ],
+  };
+  const markdown = [
+    "# AI保单数据闭环平台功能白皮书",
+    "### 任务列表",
+    "保单任务模块提供任务列表。任务列表用于查看保单任务。",
+    "",
+  ].join("\n");
+
+  const report = buildFactCheckReport({
+    markdown,
+    claimsArtifact,
+    minWritableClaimCoverage: 0.8,
+  });
+
+  assert.equal(report.canFinalize, false);
+  assert.ok(report.failures.some((item) => /Writable claim coverage/.test(item)));
+  assert.equal(report.metrics.writableClaimCoverageRatio, 0.5);
+  assert.deepEqual(report.coveredWritableClaimIds, ["function:保单任务:任务列表"]);
+  assert.deepEqual(report.missingWritableClaimIds, ["function:保单任务:任务详情"]);
 });
 
 test("fact check blocks unknown headings and weak body assertions", () => {
@@ -9054,6 +9098,7 @@ test("fact check rejects unknown and non-writable explicit claim references", ()
   assert.equal(report.canFinalize, false);
   assert.deepEqual(report.unknownClaimRefs, ["missing:claim"]);
   assert.deepEqual(report.nonWritableClaimRefs, ["entity:adp-test-policy-task"]);
+  assert.deepEqual(report.coveredWritableClaimIds, ["function:保单任务:任务列表"]);
 });
 
 test("run fact check writes report and requires verified claims object", () => {
@@ -9137,7 +9182,17 @@ test("truth readiness passes only when evidence claims fact-check and narrative 
       value: {
         canFinalize: true,
         failures: [],
-        metrics: { claimCount: 1, checkedAssertions: 1, supportedAssertions: 1, supportedRatio: 1 },
+        metrics: {
+          claimCount: 1,
+          writableClaimCount: 1,
+          checkedAssertions: 1,
+          supportedAssertions: 1,
+          supportedRatio: 1,
+          coveredWritableClaimCount: 1,
+          missingWritableClaimCount: 0,
+          writableClaimCoverageRatio: 1,
+          minWritableClaimCoverage: 0.8,
+        },
       },
     },
     narrative: {
@@ -9194,7 +9249,15 @@ test("truth readiness blocks missing writable claims and writes report", () => {
     JSON.stringify({
       canFinalize: true,
       failures: [],
-      metrics: { checkedAssertions: 1, supportedAssertions: 1, supportedRatio: 1 },
+      metrics: {
+        checkedAssertions: 1,
+        supportedAssertions: 1,
+        supportedRatio: 1,
+        coveredWritableClaimCount: 1,
+        missingWritableClaimCount: 0,
+        writableClaimCoverageRatio: 1,
+        minWritableClaimCoverage: 0.8,
+      },
     }),
     "utf8",
   );
@@ -9244,7 +9307,17 @@ test("truth readiness blocks incomplete verified claim boundary rules", () => {
       value: {
         canFinalize: true,
         failures: [],
-        metrics: { claimCount: 1, checkedAssertions: 1, supportedAssertions: 1, supportedRatio: 1 },
+        metrics: {
+          claimCount: 1,
+          writableClaimCount: 1,
+          checkedAssertions: 1,
+          supportedAssertions: 1,
+          supportedRatio: 1,
+          coveredWritableClaimCount: 1,
+          missingWritableClaimCount: 0,
+          writableClaimCoverageRatio: 1,
+          minWritableClaimCoverage: 0.8,
+        },
       },
     },
     narrative: {
@@ -9259,6 +9332,71 @@ test("truth readiness blocks incomplete verified claim boundary rules", () => {
   assert.equal(report.gates.claims.pass, false);
   assert.equal(report.canSubmitReview, false);
   assert.ok(report.gates.claims.failures.some((item) => /boundary rules/.test(item)));
+});
+
+test("truth readiness blocks low writable claim coverage", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const artifacts = {
+    quality: {
+      file: "quality-report.json",
+      status: "ok",
+      value: {
+        canFinalize: true,
+        menuCoverage: 1,
+        corePageScreenshotCoverage: 1,
+        coreFunctionClassificationCoverage: 1,
+        writeOperationSafetyCompliance: 1,
+        unverifiedContentLabeling: 1,
+        coreConclusionTraceability: 1,
+        failures: [],
+      },
+    },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: {
+        rules: {
+          lowConfidenceNotWritable: true,
+          databaseOnlyNotConfirmed: true,
+          databaseOnlyNotWritable: true,
+        },
+        metrics: { claimCount: 2, writableClaimCount: 2, confirmedCount: 2, inferredCount: 0, weakCount: 0 },
+        writableClaimIds: ["function:保单任务:任务列表", "function:保单任务:任务详情"],
+      },
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: {
+        canFinalize: false,
+        failures: ["Writable claim coverage is below the required threshold."],
+        missingWritableClaimIds: ["function:保单任务:任务详情"],
+        metrics: {
+          claimCount: 2,
+          writableClaimCount: 2,
+          checkedAssertions: 1,
+          supportedAssertions: 1,
+          supportedRatio: 1,
+          coveredWritableClaimCount: 1,
+          missingWritableClaimCount: 1,
+          writableClaimCoverageRatio: 0.5,
+          minWritableClaimCoverage: 0.8,
+        },
+      },
+    },
+    narrative: {
+      file: "narrative-quality-report.json",
+      status: "ok",
+      value: { canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } },
+    },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.gates.factCheck.pass, false);
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.factCheck.metrics.writableClaimCoverageRatio, 0.5);
+  assert.deepEqual(report.gates.factCheck.missingWritableClaimIds, ["function:保单任务:任务详情"]);
 });
 
 test("package manifest whitelists only skill runtime assets", () => {

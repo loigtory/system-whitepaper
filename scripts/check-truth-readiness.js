@@ -275,22 +275,43 @@ function buildFactCheckGate(artifact) {
   const value = artifact.value || {};
   const metrics = value.metrics || {};
   const supportedRatio = clamp01(metrics.supportedRatio ?? (value.canFinalize ? 1 : 0));
+  const writableClaimCoverageRatio = clamp01(
+    metrics.writableClaimCoverageRatio ?? (value.canFinalize ? 0 : 0),
+  );
+  const minWritableClaimCoverage = clamp01(metrics.minWritableClaimCoverage ?? 0.8);
   const failures = [];
   if (artifact.status !== "ok") failures.push(`${artifact.file} is ${artifact.status}.`);
   for (const failure of Array.isArray(value.failures) ? value.failures : []) failures.push(String(failure));
+  if (artifact.status === "ok" && !Object.hasOwn(metrics, "writableClaimCoverageRatio")) {
+    failures.push("Writable claim coverage metric is missing.");
+  }
+  if (writableClaimCoverageRatio < minWritableClaimCoverage) {
+    failures.push("Writable claim coverage is below threshold.");
+  }
   const warnings = Array.isArray(value.warnings) ? value.warnings.map(String) : [];
+  const pass =
+    artifact.status === "ok" &&
+    value.canFinalize === true &&
+    failures.length === 0 &&
+    writableClaimCoverageRatio >= minWritableClaimCoverage;
   return {
     id: "fact-check",
     label: "Fact-check against writable claims",
-    pass: artifact.status === "ok" && value.canFinalize === true && failures.length === 0,
-    score: supportedRatio,
-    scorePercent: percent(supportedRatio),
+    pass,
+    score: Math.min(supportedRatio, writableClaimCoverageRatio),
+    scorePercent: percent(Math.min(supportedRatio, writableClaimCoverageRatio)),
     metrics: {
       claimCount: Number(metrics.claimCount || 0),
+      writableClaimCount: Number(metrics.writableClaimCount || 0),
       checkedAssertions: Number(metrics.checkedAssertions || 0),
       supportedAssertions: Number(metrics.supportedAssertions || 0),
       supportedRatio,
+      coveredWritableClaimCount: Number(metrics.coveredWritableClaimCount || 0),
+      missingWritableClaimCount: Number(metrics.missingWritableClaimCount || 0),
+      writableClaimCoverageRatio,
+      minWritableClaimCoverage,
     },
+    missingWritableClaimIds: Array.isArray(value.missingWritableClaimIds) ? value.missingWritableClaimIds : [],
     failures,
     warnings,
   };

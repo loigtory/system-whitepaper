@@ -12,6 +12,8 @@ const PENDING_SECTION_PATTERN =
   /(\u5f85\u786e\u8ba4|\u672a\u8986\u76d6|\u672a\u9a8c\u8bc1|Pending|Unverified|Not covered)/i;
 const GENERIC_HEADING_PATTERN =
   /^(\u7cfb\u7edf\u6982\u89c8|\u7cfb\u7edf\u5b9a\u4f4d|\u529f\u80fd\u6a21\u5757\u6982\u89c8|\u6838\u5fc3\u529f\u80fd\u8bf4\u660e|\u5178\u578b\u4e1a\u52a1\u6d41\u7a0b|\u89d2\u8272\u4e0e\u6743\u9650|\u5f85\u786e\u8ba4\u4e8b\u9879|\u9644\u5f55|\u8bc1\u636e\u7d22\u5f15|\u7ed3\u8bba|\u6982\u8ff0)$/;
+const DEFAULT_MIN_SUPPORTED_RATIO = 0.95;
+const DEFAULT_MIN_WRITABLE_CLAIM_COVERAGE = 0.8;
 
 function compactString(value) {
   return String(value || "").trim();
@@ -59,10 +61,22 @@ function claimTerms(claim = {}) {
   return Array.from(new Set(terms.map(normalizeTerm).filter(shouldTrackTerm)));
 }
 
+function claimCoverageTerms(claim = {}) {
+  const terms = [
+    claim.subject,
+    claim.function,
+    claim.entity,
+    claim.table,
+    claim.evidence?.comment,
+  ];
+  return Array.from(new Set(terms.map(normalizeTerm).filter(shouldTrackTerm)));
+}
+
 function buildTermIndex(claims = []) {
   const allTerms = new Map();
   const writableTerms = new Map();
   const nonWritableTerms = new Map();
+  const writableCoverageTerms = new Map();
 
   for (const claim of claims || []) {
     for (const term of claimTerms(claim)) {
@@ -77,13 +91,26 @@ function buildTermIndex(claims = []) {
         nonWritableTerms.get(term).push(claim);
       }
     }
+    if (claim.writable) {
+      for (const term of claimCoverageTerms(claim)) {
+        if (!writableCoverageTerms.has(term)) writableCoverageTerms.set(term, []);
+        writableCoverageTerms.get(term).push(claim);
+      }
+    }
   }
 
-  return { allTerms, writableTerms, nonWritableTerms };
+  return { allTerms, writableTerms, nonWritableTerms, writableCoverageTerms };
 }
 
 function lineContainsTerm(line, term) {
   return stripMarkdownSyntax(line).includes(term);
+}
+
+function lineCoversWritableClaim(line, term, claim, candidates = []) {
+  if (!lineContainsTerm(line, term)) return false;
+  if ((candidates || []).length <= 1) return true;
+  const module = normalizeTerm(claim.module);
+  return Boolean(module && lineContainsTerm(line, module));
 }
 
 function extractClaimReferences(markdown) {
@@ -99,16 +126,22 @@ function buildFactCheckReport(input = {}) {
   const claimsArtifact = input.claimsArtifact || {};
   const claims = Array.isArray(claimsArtifact.claims) ? claimsArtifact.claims : [];
   const claimById = new Map(claims.map((claim) => [claim.id, claim]));
-  const { allTerms, writableTerms, nonWritableTerms } = buildTermIndex(claims);
+  const writableClaimIds = claims
+    .filter((claim) => claim.writable && compactString(claim.id))
+    .map((claim) => claim.id);
+  const { allTerms, writableTerms, nonWritableTerms, writableCoverageTerms } = buildTermIndex(claims);
   const failures = [];
   const warnings = [];
   const supported = [];
+  const writableCoverageMatches = [];
   const pendingReferences = [];
   const nonWritableAssertions = [];
   const unsupportedHeadings = [];
   const unknownClaimRefs = [];
   const nonWritableClaimRefs = [];
+  const explicitWritableClaimIds = new Set();
   const seenSupported = new Set();
+  const seenWritableCoverage = new Set();
 
   let inPendingSection = false;
   let inCodeBlock = false;
@@ -155,6 +188,16 @@ function buildFactCheckReport(input = {}) {
         }
       }
     }
+
+    for (const [term, writableClaims] of writableCoverageTerms.entries()) {
+      for (const claim of writableClaims) {
+        if (!lineCoversWritableClaim(line, term, claim, writableClaims)) continue;
+        const key = `${claim.id}:${term}:${lineNumber}`;
+        if (seenWritableCoverage.has(key)) continue;
+        writableCoverageMatches.push({ line: lineNumber, term, claimId: claim.id });
+        seenWritableCoverage.add(key);
+      }
+    }
   }
 
   for (const claimId of extractClaimReferences(markdown)) {
@@ -163,6 +206,8 @@ function buildFactCheckReport(input = {}) {
       unknownClaimRefs.push(claimId);
     } else if (!claim.writable) {
       nonWritableClaimRefs.push(claimId);
+    } else {
+      explicitWritableClaimIds.add(claimId);
     }
   }
 
@@ -182,14 +227,37 @@ function buildFactCheckReport(input = {}) {
     warnings.push("No writable claim terms were found in the whitepaper body.");
   }
 
+  const coveredWritableClaimIds = [...new Set([
+    ...writableCoverageMatches.map((item) => item.claimId),
+    ...explicitWritableClaimIds,
+  ])]
+    .filter((claimId) => writableClaimIds.includes(claimId))
+    .sort();
+  const missingWritableClaimIds = writableClaimIds
+    .filter((claimId) => !coveredWritableClaimIds.includes(claimId))
+    .sort();
+  const writableClaimCoverageRatio = writableClaimIds.length
+    ? coveredWritableClaimIds.length / writableClaimIds.length
+    : 1;
+  const minWritableClaimCoverage = Number(
+    input.minWritableClaimCoverage ?? DEFAULT_MIN_WRITABLE_CLAIM_COVERAGE,
+  );
+  if (writableClaimCoverageRatio < minWritableClaimCoverage) {
+    failures.push("Writable claim coverage is below the required threshold.");
+  }
+
   const checkedAssertions = supported.length + nonWritableAssertions.length + unsupportedHeadings.length;
   const supportedRatio = checkedAssertions ? supported.length / checkedAssertions : 1;
   const hasEnoughSupport =
-    (!claims.length || supported.length > 0) && supportedRatio >= Number(input.minSupportedRatio || 0.95);
+    (!claims.length || supported.length > 0) &&
+    supportedRatio >= Number(input.minSupportedRatio || DEFAULT_MIN_SUPPORTED_RATIO);
 
   return {
     canSubmitReview: failures.length === 0,
-    canFinalize: failures.length === 0 && hasEnoughSupport,
+    canFinalize:
+      failures.length === 0 &&
+      hasEnoughSupport &&
+      writableClaimCoverageRatio >= minWritableClaimCoverage,
     failures,
     warnings,
     supported,
@@ -199,11 +267,19 @@ function buildFactCheckReport(input = {}) {
     unsupportedHeadings,
     unknownClaimRefs,
     nonWritableClaimRefs,
+    coveredWritableClaimIds,
+    missingWritableClaimIds,
+    writableCoverageMatches,
     metrics: {
       claimCount: claims.length,
+      writableClaimCount: writableClaimIds.length,
       checkedAssertions,
       supportedAssertions: supported.length,
       supportedRatio,
+      coveredWritableClaimCount: coveredWritableClaimIds.length,
+      missingWritableClaimCount: missingWritableClaimIds.length,
+      writableClaimCoverageRatio,
+      minWritableClaimCoverage,
     },
   };
 }
@@ -221,7 +297,17 @@ function runFactCheck(options = {}) {
       canFinalize: false,
       failures: [`Whitepaper markdown not found: ${markdownPath}`],
       warnings: [],
-      metrics: { claimCount: 0, checkedAssertions: 0, supportedAssertions: 0, supportedRatio: 0 },
+      metrics: {
+        claimCount: 0,
+        writableClaimCount: 0,
+        checkedAssertions: 0,
+        supportedAssertions: 0,
+        supportedRatio: 0,
+        coveredWritableClaimCount: 0,
+        missingWritableClaimCount: 0,
+        writableClaimCoverageRatio: 0,
+        minWritableClaimCoverage: DEFAULT_MIN_WRITABLE_CLAIM_COVERAGE,
+      },
     };
     writeJson(outputPath, report);
     return report;
@@ -235,6 +321,7 @@ function runFactCheck(options = {}) {
     markdown,
     claimsArtifact,
     minSupportedRatio: options.minSupportedRatio,
+    minWritableClaimCoverage: options.minWritableClaimCoverage,
   });
   writeJson(outputPath, report);
   return report;
@@ -251,6 +338,7 @@ function main() {
     claimsPath: args.claims,
     outputPath: args.output,
     minSupportedRatio: args["min-supported-ratio"],
+    minWritableClaimCoverage: args["min-writable-claim-coverage"],
   });
   const outputPath = args.output || path.join(path.resolve(args.input), "fact-check-report.json");
   console.log(`Fact-check report written: ${outputPath}`);

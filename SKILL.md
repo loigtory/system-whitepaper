@@ -73,7 +73,7 @@ Use the npm scripts as the stable entrypoints:
 - `npm run db:model -- --input outputs/<code>`: derive `data-dictionary.json` and `entity-model.json` from the redacted database profile.
 - `npm run truth:universe -- --input outputs/<code>`: merge UI evidence summary and redacted database profile into `function-universe.json` candidates.
 - `npm run truth:claims -- --input outputs/<code>`: convert the function universe into `verified-claims.json` with confidence and writable/non-writable boundaries; database-only inferred claims are not writable.
-- `npm run truth:fact-check -- --input outputs/<code>`: check `whitepaper.pending-review.md` against writable claims and block unsupported or weak body assertions.
+- `npm run truth:fact-check -- --input outputs/<code>`: check `whitepaper.pending-review.md` against writable claims; block unsupported/non-writable body assertions and low writable-claim coverage.
 - `npm run truth:readiness -- --input outputs/<code>`: aggregate truth gates into `truth-readiness-report.json`; a non-passing report blocks review submission.
 - `npm run sync`: sync the system registry into `config/systems.local.yaml`.
 - `npm run pipeline`: run the unattended end-to-end pipeline for configured systems.
@@ -120,7 +120,7 @@ Generate artifacts per system:
 - `entity-model.json`: entity and relation model derived from the data dictionary; database-only relationships remain inference evidence until UI confirms workflow behavior.
 - `function-universe.json`: UI + DB candidate universe for later verified claims; not final conclusions.
 - `verified-claims.json`: claim-level evidence and confidence boundary for narrative writing and fact checks.
-- `fact-check-report.json`: deterministic claim coverage report for pending review/finalization gates.
+- `fact-check-report.json`: deterministic assertion and writable-claim coverage report for pending review/finalization gates.
 - `truth-readiness-report.json`: final truth gate report; combines evidence quality, writable claims, fact checks, narrative quality, and optional redacted database support.
 - `whitepaper.pending-review.md`: Agent-written business-readable whitepaper for review.
 - `whitepaper.final.md`: final Markdown after approval.
@@ -149,6 +149,7 @@ Before finalizing, verify:
 - Unverified-content labeling = 100%.
 - Core conclusion traceability = 100%.
 - Deterministic business claims should come from `verified-claims.json`; weak or database-only non-writable claims must not be written as confirmed conclusions.
+- Pending-review content should cover most writable claims; low writable-claim coverage means the whitepaper is incomplete even when every written sentence is supported.
 - `fact-check-report.json` must have `canFinalize=true` before producing `whitepaper.final.md`.
 - `truth-readiness-report.json` must have `canSubmitReview=true`, score >= 95%, and matching source-artifact fingerprints before human review or final approval; `run-review-decision.js --status approved` blocks final Markdown/Word generation when this report is missing, malformed, non-passing, or stale.
 - No duplicated function explanations.
