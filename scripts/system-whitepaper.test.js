@@ -7600,6 +7600,7 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   } = require("./check-delivery-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-readiness-"));
   const outputRoot = path.join(dir, "outputs");
+  const configPath = path.join(dir, "systems.local.yaml");
   const systemOutput = path.join(outputRoot, "adp");
   fs.mkdirSync(systemOutput, { recursive: true });
 
@@ -7668,6 +7669,7 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
     status: "accepted",
     canSubmitAll: true,
     targetTruthScorePercent: 95,
+    configPath,
     outputRoot,
     generatedAt: "2026-06-03T00:02:00.000Z",
     summary: { total: 1, accepted: 1, blockers: 0 },
@@ -7685,6 +7687,8 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   const ready = buildDeliveryReadinessReport({ acceptanceReport });
   assert.equal(ready.status, "ready");
   assert.equal(ready.canDeliver, true);
+  assert.equal(ready.configPath, configPath);
+  assert.equal(ready.outputRoot, outputRoot);
   assert.equal(ready.summary.ready, 1);
   assert.match(renderDeliveryReadinessMarkdown(ready), /Delivery Readiness Report/);
   const artifacts = writeDeliveryReadinessReport(outputRoot, ready);
@@ -7787,6 +7791,8 @@ test("real run readiness unifies preflight and final delivery state", () => {
     artifactType: "batch-acceptance-report",
     status: "accepted",
     canSubmitAll: true,
+    configPath,
+    outputRoot,
     generatedAt: "2026-06-03T00:00:00.000Z",
     summary: { total: 1, accepted: 1, blocked: 0, blockers: 0 },
     systems: [{ code: "adp", status: "accepted" }],
@@ -7795,6 +7801,8 @@ test("real run readiness unifies preflight and final delivery state", () => {
     artifactType: "delivery-readiness-report",
     status: "ready",
     canDeliver: true,
+    configPath,
+    outputRoot,
     generatedAt: "2026-06-03T00:01:00.000Z",
     summary: { total: 1, ready: 1, blocked: 0, blockers: 0 },
     systems: [{ code: "adp", status: "ready" }],
@@ -7902,6 +7910,52 @@ test("real run readiness unifies preflight and final delivery state", () => {
   assert.equal(staleScopeReady.canDeliver, false);
   assert.ok(staleScopeReady.warnings.some((item) => item.id === "acceptance.scope-mismatch"));
   assert.ok(staleScopeReady.warnings.some((item) => item.id === "delivery.scope-mismatch"));
+
+  const staleConfigReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport: {
+      ...acceptanceReport,
+      configPath: path.join(dir, "other-systems.local.yaml"),
+    },
+    deliveryReport: {
+      ...deliveryReport,
+      configPath: path.join(dir, "other-systems.local.yaml"),
+    },
+  });
+  assert.equal(staleConfigReady.status, "ready-to-run");
+  assert.equal(staleConfigReady.canDeliver, false);
+  assert.ok(staleConfigReady.warnings.some((item) => item.id === "acceptance.config-mismatch"));
+  assert.ok(staleConfigReady.warnings.some((item) => item.id === "delivery.config-mismatch"));
+
+  const staleOutputReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport: {
+      ...acceptanceReport,
+      outputRoot: path.join(dir, "other-outputs"),
+    },
+    deliveryReport: {
+      ...deliveryReport,
+      outputRoot: path.join(dir, "other-outputs"),
+    },
+  });
+  assert.equal(staleOutputReady.status, "ready-to-run");
+  assert.equal(staleOutputReady.canDeliver, false);
+  assert.ok(staleOutputReady.warnings.some((item) => item.id === "acceptance.output-mismatch"));
+  assert.ok(staleOutputReady.warnings.some((item) => item.id === "delivery.output-mismatch"));
 
   const deliveryOnlyReady = buildRealRunReadinessReport({
     args: { systems: "adp" },

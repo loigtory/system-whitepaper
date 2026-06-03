@@ -259,6 +259,7 @@ function summarizeSystems(systems = []) {
 function buildDeliveryReadinessReport(input = {}) {
   const acceptanceReport = input.acceptanceReport || {};
   const context = {
+    configPath: acceptanceReport.configPath || input.configPath || "",
     outputRoot: acceptanceReport.outputRoot || input.outputRoot || "",
   };
   const targetTruthScorePercent = Number(
@@ -297,6 +298,7 @@ function buildDeliveryReadinessReport(input = {}) {
       generatedAt: acceptanceReport.generatedAt || "",
       summary: acceptanceReport.summary || {},
     },
+    configPath: context.configPath,
     outputRoot: context.outputRoot,
     summary: {
       ...summary,

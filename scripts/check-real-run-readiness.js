@@ -168,11 +168,38 @@ function sameCodeSet(left = [], right = []) {
   return [...leftSet].every((code) => rightSet.has(code));
 }
 
+function normalizeComparablePath(value) {
+  if (!value) return "";
+  const normalized = path.resolve(String(value)).replace(/\\/g, "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function sameResolvedPath(left, right) {
+  const normalizedLeft = normalizeComparablePath(left);
+  const normalizedRight = normalizeComparablePath(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
 function reportScopeWarning(kind, id, message) {
   return warning(`${kind}.${id}`, message);
 }
 
-function selectScopedReport(report, kind, selectedCodes = []) {
+function reportPathScopeWarnings(report, kind, context = {}) {
+  const warnings = [];
+  if (report.configPath && context.configPath && !sameResolvedPath(report.configPath, context.configPath)) {
+    warnings.push(
+      reportScopeWarning(kind, "config-mismatch", `Ignored ${kind} report because configPath does not match current config.`),
+    );
+  }
+  if (report.outputRoot && context.outputRoot && !sameResolvedPath(report.outputRoot, context.outputRoot)) {
+    warnings.push(
+      reportScopeWarning(kind, "output-mismatch", `Ignored ${kind} report because outputRoot does not match current output directory.`),
+    );
+  }
+  return warnings;
+}
+
+function selectScopedReport(report, kind, selectedCodes = [], context = {}) {
   if (!report) return { report: null, warnings: [] };
   const expectedArtifactType = kind === "acceptance" ? "batch-acceptance-report" : "delivery-readiness-report";
   if (report.artifactType && report.artifactType !== expectedArtifactType) {
@@ -202,6 +229,13 @@ function selectScopedReport(report, kind, selectedCodes = []) {
           `Ignored ${kind} report because systems do not match current selection. selected=${selectedCodes.join(",") || "-"} report=${reportCodes.join(",") || "-"}`,
         ),
       ],
+    };
+  }
+  const pathWarnings = reportPathScopeWarnings(report, kind, context);
+  if (pathWarnings.length) {
+    return {
+      report: null,
+      warnings: pathWarnings,
     };
   }
   return { report, warnings: [] };
@@ -254,8 +288,8 @@ function buildRealRunReadinessReport(input = {}) {
   const selectedCodes = systems.map((system) => system.code).filter(Boolean);
   const rawAcceptanceReport = input.acceptanceReport || readJsonObjectIfExists(path.join(context.outputRoot, "_batch", "acceptance-report.json"));
   const rawDeliveryReport = input.deliveryReport || readJsonObjectIfExists(path.join(context.outputRoot, "_batch", "delivery-readiness-report.json"));
-  const acceptanceSelection = selectScopedReport(rawAcceptanceReport, "acceptance", selectedCodes);
-  const deliverySelection = selectScopedReport(rawDeliveryReport, "delivery", selectedCodes);
+  const acceptanceSelection = selectScopedReport(rawAcceptanceReport, "acceptance", selectedCodes, context);
+  const deliverySelection = selectScopedReport(rawDeliveryReport, "delivery", selectedCodes, context);
   warnings.push(...acceptanceSelection.warnings, ...deliverySelection.warnings);
   const acceptanceReport = acceptanceSelection.report;
   const deliveryReport = deliverySelection.report;
