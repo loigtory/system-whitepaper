@@ -14606,6 +14606,53 @@ test("truth readiness rejects invalid narrative quality report artifact contract
   assert.ok(report.blockers.some((item) => item.id === "narrative.invalid-artifact"));
 });
 
+test("truth readiness rejects forged narrative quality pass state", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const artifacts = {
+    quality: {
+      file: "quality-report.json",
+      status: "ok",
+      value: qualityReportFixture(),
+    },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: verifiedClaimsFixture([
+        {
+          id: "function:保单任务:任务列表",
+          subject: "任务列表",
+          module: "保单任务",
+          status: "confirmed",
+          writable: true,
+        },
+      ]),
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: factCheckReportFixture(),
+    },
+    narrative: {
+      file: "narrative-quality-report.json",
+      status: "ok",
+      value: narrativeQualityReportFixture({
+        canSubmitReview: true,
+        failures: ["正文仍缺少业务流程。"],
+        counts: { chars: 0, evidencePages: 1 },
+      }),
+    },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.gates.narrative.pass, false);
+  assert.equal(report.gates.narrative.artifactContractValid, false);
+  assert.equal(report.gates.narrative.scorePercent, 0);
+  assert.equal(report.canSubmitReview, false);
+  assert.ok(report.gates.narrative.failures.some((item) => /zero failures/.test(item)));
+  assert.ok(report.blockers.some((item) => item.id === "narrative.invalid-artifact"));
+});
+
 test("truth readiness blocks incomplete verified claim boundary rules", () => {
   const { buildTruthReadinessReport } = require("./check-truth-readiness");
   const artifacts = {

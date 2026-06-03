@@ -61,6 +61,27 @@ function assertValidNarrativeQualityReportArtifact(report = {}) {
   if (!report.counts || typeof report.counts !== "object" || Array.isArray(report.counts)) {
     throw new Error("narrative-quality-report.json counts must be a JSON object.");
   }
+  if (!Number.isFinite(Number(report.counts.chars))) {
+    throw new Error("narrative-quality-report.json counts.chars must be numeric.");
+  }
+  if (!Number.isFinite(Number(report.counts.evidencePages))) {
+    throw new Error("narrative-quality-report.json counts.evidencePages must be numeric.");
+  }
+  if (!Array.isArray(report.failures)) {
+    throw new Error("narrative-quality-report.json failures must be an array.");
+  }
+  if (report.warnings !== undefined && !Array.isArray(report.warnings)) {
+    throw new Error("narrative-quality-report.json warnings must be an array when present.");
+  }
+  if (Number(report.counts.chars) < 0 || Number(report.counts.evidencePages) < 0) {
+    throw new Error("narrative-quality-report.json counts must not be negative.");
+  }
+  if (report.canSubmitReview && report.failures.length > 0) {
+    throw new Error("narrative-quality-report.json canSubmitReview=true requires zero failures.");
+  }
+  if (report.canSubmitReview && Number(report.counts.chars) === 0) {
+    throw new Error("narrative-quality-report.json canSubmitReview=true requires non-empty markdown chars.");
+  }
 }
 
 function fingerprintFile(filePath) {
