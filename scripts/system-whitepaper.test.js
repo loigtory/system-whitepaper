@@ -7059,7 +7059,7 @@ test("batch repair queue prefers low-quota stale refresh over narrative rewrite"
 
   const repairQueue = buildBatchRepairQueue(diagnosis, { allowAgentWriting: false });
 
-  assert.equal(diagnosis.summary.quotaSensitive, 1);
+  assert.equal(diagnosis.summary.quotaSensitive, 0);
   assert.equal(repairQueue.summary.autoRunnable, 1);
   assert.equal(repairQueue.summary.requiresAgentWriting, 0);
   assert.equal(repairQueue.items[0].actionId, "narrative.stale-sources");

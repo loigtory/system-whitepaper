@@ -730,9 +730,10 @@ function summarizeDiagnosisSystems(systems = []) {
   const ready = systems.filter((item) => item.ready).length;
   const blocked = systems.filter((item) => !item.ready).length;
   const recoverable = systems.filter((item) => item.recoverable).length;
-  const quotaSensitive = systems.filter((item) =>
-    item.actions.some((action) => action.quotaImpact === "agent-writing"),
-  ).length;
+  const quotaSensitive = systems.filter((item) => {
+    const action = selectRepairAction(item);
+    return action?.quotaImpact === "agent-writing" || normalizeRepairQueueNodes(action?.rerunNodes || []).includes("narrative");
+  }).length;
   const missingWritableClaims = systems.reduce(
     (sum, item) => sum + Number(item.missingWritableClaimCount || 0),
     0,
