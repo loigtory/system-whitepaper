@@ -586,6 +586,8 @@
         operationGuide: "\u64cd\u4f5c\u6307\u5f15",
         evidenceSummary: "\u8bc1\u636e\u6458\u8981",
         databaseProfile: "\u5e93\u8868\u753b\u50cf",
+        dataDictionary: "\u6570\u636e\u5b57\u5178",
+        entityModel: "\u5b9e\u4f53\u6a21\u578b",
         functionUniverse: "\u529f\u80fd\u5b87\u5b99",
         verifiedClaims: "\u53ef\u4fe1\u65ad\u8a00",
         factCheck: "\u4e8b\u5b9e\u6838\u9a8c",
@@ -601,6 +603,7 @@
         inspect: "\u52a8\u6001\u9875\u9762\u91c7\u96c6",
         "validate-write": "\u8bd5\u4e1a\u52a1\u64cd\u4f5c",
         "db-profile": "\u5e93\u8868\u753b\u50cf",
+        "db-model": "\u5e93\u8868\u6a21\u578b",
         "truth-universe": "\u529f\u80fd\u5b87\u5b99",
         "truth-claims": "\u53ef\u4fe1\u65ad\u8a00",
         "build-spec": "\u6574\u7406\u89c4\u683c",
@@ -753,7 +756,7 @@
       }
 
       function artifactBadges(system) {
-        return ["operationGuide", "factCheck", "truthReadiness", "pendingReview", "final", "docx"]
+        return ["operationGuide", "dataDictionary", "entityModel", "factCheck", "truthReadiness", "pendingReview", "final", "docx"]
           .map((key) => [key, system.artifacts?.[key] || { exists: false }])
           .map(([key, artifact]) => {
             const label = artifactText[key] || key;
@@ -1210,7 +1213,7 @@
           <section class="card">
             <h2>稿件产物</h2>
             <div class="artifact-row">
-              ${["operationGuide", "evidenceSummary", "verifiedClaims", "factCheck", "truthReadiness", "pendingReview", "final", "docx"]
+              ${["operationGuide", "evidenceSummary", "dataDictionary", "entityModel", "verifiedClaims", "factCheck", "truthReadiness", "pendingReview", "final", "docx"]
                 .map((key) => renderArtifactLabel(system, key, system.artifacts?.[key] || { exists: false }))
                 .join("")}
             </div>

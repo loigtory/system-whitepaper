@@ -30,6 +30,12 @@ function appendNarrativeGuardNodes(nodes) {
   for (const node of nodes || []) {
     result.push(node);
     if (node === "summary") {
+      result.push("db-model", "truth-universe", "truth-claims");
+    }
+    if (node === "db-profile") {
+      result.push("db-model", "truth-universe", "truth-claims");
+    }
+    if (node === "db-model") {
       result.push("truth-universe", "truth-claims");
     }
     if (node === "narrative") {

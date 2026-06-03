@@ -65,9 +65,24 @@ function buildFunctionUniverse(evidenceSummary = {}) {
   );
 }
 
-function buildEntityUniverse(databaseProfile = {}) {
+function buildEntityUniverse(input = {}) {
+  const modelEntities = Array.isArray(input.entityModel?.entities) ? input.entityModel.entities : [];
+  const profileEntities = Array.isArray(input.databaseProfile?.entityCandidates)
+    ? input.databaseProfile.entityCandidates
+    : [];
+  const entities = modelEntities.length
+    ? modelEntities.map((item) => ({
+        entity: item.entity,
+        table: item.table,
+        confidence: item.confidence,
+        statusColumns: item.statusFields,
+        timeColumns: item.timeFields,
+        evidence: item.evidence,
+        sources: item.sources,
+      }))
+    : profileEntities;
   return uniqueBy(
-    (databaseProfile.entityCandidates || [])
+    entities
       .filter((item) => item && compactString(item.entity))
       .map((item) => ({
         name: compactString(item.entity),
@@ -75,10 +90,15 @@ function buildEntityUniverse(databaseProfile = {}) {
         confidence: compactString(item.confidence || "low"),
         statusColumns: Array.isArray(item.statusColumns) ? item.statusColumns : [],
         timeColumns: Array.isArray(item.timeColumns) ? item.timeColumns : [],
-        sources: [sourceRef("db-table", item.table, item.entity)],
+        evidence: item.evidence || {},
+        sources: normalizeSourceList(item.sources, [sourceRef("db-table", item.table, item.entity)]),
       })),
     (item) => `${item.table}::${item.name}`,
   );
+}
+
+function normalizeSourceList(sources, fallback = []) {
+  return Array.isArray(sources) && sources.length ? sources : fallback;
 }
 
 function scoreFunctionEntityMatch(fn, entity) {
@@ -120,13 +140,31 @@ function buildFunctionEntityLinks(functions, entities) {
   return uniqueBy(links, (item) => `${item.module}::${item.function}::${item.table}`);
 }
 
+function buildEntityRelations(entityModel = {}) {
+  return uniqueBy(
+    (entityModel.relations || [])
+      .filter((item) => item && compactString(item.from) && compactString(item.to))
+      .map((item) => ({
+        from: compactString(item.from),
+        to: compactString(item.to),
+        type: compactString(item.type || "database-relation"),
+        columns: Array.isArray(item.columns) ? item.columns.filter(Boolean) : [],
+        confidence: compactString(item.confidence || "low"),
+        sources: normalizeSourceList(item.sources, []),
+      })),
+    (item) => `${item.from}::${item.to}::${item.type}::${item.columns.join(",")}`,
+  );
+}
+
 function buildFunctionUniverseArtifact(input = {}) {
   const evidenceSummary = input.evidenceSummary || {};
   const databaseProfile = input.databaseProfile || {};
+  const entityModel = input.entityModel || {};
   const modules = buildModuleUniverse(evidenceSummary);
   const functions = buildFunctionUniverse(evidenceSummary);
-  const entities = buildEntityUniverse(databaseProfile);
+  const entities = buildEntityUniverse({ databaseProfile, entityModel });
   const links = buildFunctionEntityLinks(functions, entities);
+  const entityRelations = buildEntityRelations(entityModel);
   return {
     artifactType: "function-universe",
     version: 1,
@@ -136,11 +174,13 @@ function buildFunctionUniverseArtifact(input = {}) {
     functions,
     entities,
     links,
+    entityRelations,
     coverage: {
       moduleCount: modules.length,
       functionCount: functions.length,
       entityCount: entities.length,
       linkedFunctionCount: new Set(links.map((item) => `${item.module}::${item.function}`)).size,
+      entityRelationCount: entityRelations.length,
     },
     rules: {
       noConclusion: true,
@@ -159,9 +199,14 @@ function buildFunctionUniverseFromDir(inputDir, options = {}) {
     options.databaseProfilePath || path.join(dir, "database-profile.json"),
     {},
   ) || {};
+  const entityModel = readOptionalJsonObject(
+    options.entityModelPath || path.join(dir, "entity-model.json"),
+    {},
+  ) || {};
   const artifact = buildFunctionUniverseArtifact({
     evidenceSummary,
     databaseProfile,
+    entityModel,
   });
   const outputPath = options.outputPath || path.join(dir, "function-universe.json");
   writeJson(outputPath, artifact);
@@ -177,6 +222,7 @@ function main() {
     outputPath: args.output,
     evidenceSummaryPath: args["evidence-summary"],
     databaseProfilePath: args["database-profile"],
+    entityModelPath: args["entity-model"],
   });
   console.log(`Function universe written: ${result.outputPath}`);
 }

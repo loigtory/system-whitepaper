@@ -29,6 +29,12 @@ const NODES = [
   { id: "review", phase: "approve", label: "审阅" },
 ];
 
+NODES.splice(
+  NODES.findIndex((node) => node.id === "truth-universe"),
+  0,
+  { id: "db-model", phase: "truth", label: "库表模型" },
+);
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -72,6 +78,8 @@ function createPipelineState(system = {}) {
       draft: "whitepaper.draft.md",
       evidenceSummary: "evidence-summary.json",
       databaseProfile: "database-profile.json",
+      dataDictionary: "data-dictionary.json",
+      entityModel: "entity-model.json",
       functionUniverse: "function-universe.json",
       verifiedClaims: "verified-claims.json",
       factCheck: "fact-check-report.json",

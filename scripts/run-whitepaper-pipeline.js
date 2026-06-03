@@ -90,6 +90,7 @@ function selectedNodes(args) {
       "inspect",
       "validate-write",
       "db-profile",
+      "db-model",
       "truth-universe",
       "truth-claims",
       "build-spec",
@@ -262,6 +263,19 @@ async function runPipelineNode(nodeId, context) {
         configPath,
         "--system",
         system.code,
+      ],
+      { cwd: projectRoot },
+    );
+  }
+  if (nodeId === "db-model") {
+    if (!databaseProfileEnabled(system)) {
+      return { skipped: true, reason: "databaseProfile.disabled" };
+    }
+    return runNodeScript(
+      [
+        "scripts/build-database-model.js",
+        "--input",
+        systemOutput,
       ],
       { cwd: projectRoot },
     );

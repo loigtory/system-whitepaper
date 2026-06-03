@@ -3503,6 +3503,7 @@ test("pipeline state initializes truth phase and guarded whitepaper nodes for ad
   assert.equal(state.nodes.sync.label, "同步");
   assert.equal(state.nodes["validate-write"].label, "试业务操作");
   assert.equal(state.nodes["db-profile"].label, "库表画像");
+  assert.equal(state.nodes["db-model"].label, "库表模型");
   assert.equal(state.nodes["truth-universe"].label, "功能宇宙");
   assert.equal(state.nodes["truth-claims"].label, "可信断言");
   assert.equal(state.nodes["build-spec"].label, "整理规格");
@@ -3512,7 +3513,9 @@ test("pipeline state initializes truth phase and guarded whitepaper nodes for ad
   assert.equal(state.nodes["fact-check"].label, "事实核验");
   assert.equal(state.nodes["truth-readiness"].label, "真实度门禁");
   assert.equal(state.artifacts.truthReadiness, "truth-readiness-report.json");
-  assert.equal(Object.keys(state.nodes).length, 17);
+  assert.equal(state.artifacts.dataDictionary, "data-dictionary.json");
+  assert.equal(state.artifacts.entityModel, "entity-model.json");
+  assert.equal(Object.keys(state.nodes).length, 18);
 });
 
 test("migratePipelineState backfills build-spec and compose-guide on legacy state", () => {
@@ -3532,6 +3535,7 @@ test("migratePipelineState backfills build-spec and compose-guide on legacy stat
   legacy = updateNodeStatus(legacy, "session", "success");
   legacy = updateNodeStatus(legacy, "collect", "success");
   delete legacy.nodes["db-profile"];
+  delete legacy.nodes["db-model"];
   delete legacy.nodes["truth-universe"];
   delete legacy.nodes["truth-claims"];
   delete legacy.nodes["build-spec"];
@@ -3544,6 +3548,7 @@ test("migratePipelineState backfills build-spec and compose-guide on legacy stat
   const { state, changed } = migratePipelineState(legacy);
   assert.equal(changed, true);
   assert.equal(state.nodes["db-profile"].label, "库表画像");
+  assert.equal(state.nodes["db-model"].label, "库表模型");
   assert.equal(state.nodes["truth-universe"].label, "功能宇宙");
   assert.equal(state.nodes["truth-claims"].label, "可信断言");
   assert.equal(state.nodes["build-spec"].label, "整理规格");
@@ -3551,6 +3556,7 @@ test("migratePipelineState backfills build-spec and compose-guide on legacy stat
   assert.equal(state.nodes["fact-check"].label, "事实核验");
   assert.equal(state.nodes["truth-readiness"].label, "真实度门禁");
   assert.equal(state.nodes["db-profile"].status, "pending");
+  assert.equal(state.nodes["db-model"].status, "pending");
   assert.equal(state.nodes["build-spec"].status, "pending");
   assert.equal(state.phases.truth.label, "真相");
   assert.equal(state.phases.compose.label, "成稿");
@@ -3660,6 +3666,7 @@ test("reconcilePipelineStateFromArtifacts clears stale narrative running when ar
     "inspect",
     "validate-write",
     "db-profile",
+    "db-model",
     "truth-universe",
     "truth-claims",
     "build-spec",
@@ -3968,6 +3975,7 @@ test("review decision requires rejection comments and maps comments to rerun nod
     "collect",
     "inspect",
     "summary",
+    "db-model",
     "truth-universe",
     "truth-claims",
     "narrative",
@@ -3990,7 +3998,7 @@ test("review decision requires rejection comments and maps comments to rerun nod
   assert.deepEqual(decision.rerunNodes, evidenceRefreshNodes);
   assert.deepEqual(
     appendNarrativeGuardNodes(["summary", "truth-claims", "narrative", "fact-check", "quality"]),
-    ["summary", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+    ["summary", "db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
   );
 
   const legacyDecision = buildReviewDecision({
@@ -4203,6 +4211,7 @@ test("review decision still refreshes evidence for missing pages and screenshots
     "collect",
     "inspect",
     "summary",
+    "db-model",
     "truth-universe",
     "truth-claims",
     "narrative",
@@ -4235,6 +4244,7 @@ test("review decision refreshes evidence when supplement asks for screenshots", 
     "collect",
     "inspect",
     "summary",
+    "db-model",
     "truth-universe",
     "truth-claims",
     "narrative",
@@ -4285,6 +4295,7 @@ test("review decision still refreshes evidence when field evidence is missing", 
     "collect",
     "inspect",
     "summary",
+    "db-model",
     "truth-universe",
     "truth-claims",
     "narrative",
@@ -4335,6 +4346,7 @@ test("review decision still refreshes evidence when modal screenshot is missing"
     "collect",
     "inspect",
     "summary",
+    "db-model",
     "truth-universe",
     "truth-claims",
     "narrative",
@@ -4494,6 +4506,7 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
     "inspect",
     "validate-write",
     "db-profile",
+    "db-model",
     "truth-universe",
     "truth-claims",
     "build-spec",
@@ -4528,10 +4541,12 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
     snapshot.systems.map((system) => system.code),
     ["adp", "claim"],
   );
-  assert.equal(snapshot.systems[0].progress.completed, 17);
+  assert.equal(snapshot.systems[0].progress.completed, 18);
   assert.equal(snapshot.systems[0].artifacts.final.exists, true);
   assert.equal(snapshot.systems[0].artifacts.docx.exists, true);
   assert.equal(snapshot.systems[0].artifacts.databaseProfile.exists, true);
+  assert.equal(snapshot.systems[0].artifacts.dataDictionary.exists, false);
+  assert.equal(snapshot.systems[0].artifacts.entityModel.exists, false);
   assert.equal(snapshot.systems[0].artifacts.functionUniverse.exists, true);
   assert.equal(snapshot.systems[0].artifacts.verifiedClaims.exists, true);
   assert.equal(snapshot.systems[0].artifacts.factCheck.exists, true);
@@ -4612,6 +4627,7 @@ test("dashboard snapshot regenerates missing docx for finalized system", () => {
     "inspect",
     "validate-write",
     "db-profile",
+    "db-model",
     "truth-universe",
     "truth-claims",
     "build-spec",
@@ -4793,6 +4809,7 @@ test("dashboard snapshot marks manual review node as ready before approval", () 
     "inspect",
     "validate-write",
     "db-profile",
+    "db-model",
     "truth-universe",
     "truth-claims",
     "build-spec",
@@ -5610,7 +5627,7 @@ test("dashboard frontend renders truth pipeline phase and nodes", () => {
   const html = context.renderPipeline({
     code: "adp",
     overallStatus: "pending",
-    progress: { completed: 0, total: 17 },
+    progress: { completed: 0, total: 18 },
     phaseOrder: [
       { id: "prepare", label: "准备" },
       { id: "evidence", label: "取证" },
@@ -5625,6 +5642,7 @@ test("dashboard frontend renders truth pipeline phase and nodes", () => {
       { id: "inspect", phase: "evidence" },
       { id: "validate-write", phase: "evidence" },
       { id: "db-profile", phase: "truth" },
+      { id: "db-model", phase: "truth" },
       { id: "truth-universe", phase: "truth" },
       { id: "truth-claims", phase: "truth" },
       { id: "narrative", phase: "compose" },
@@ -5640,6 +5658,7 @@ test("dashboard frontend renders truth pipeline phase and nodes", () => {
       inspect: { status: "pending" },
       "validate-write": { status: "pending" },
       "db-profile": { status: "pending" },
+      "db-model": { status: "pending" },
       "truth-universe": { status: "pending" },
       "truth-claims": { status: "pending" },
       narrative: { status: "pending" },
@@ -5652,6 +5671,7 @@ test("dashboard frontend renders truth pipeline phase and nodes", () => {
 
   assert.match(html, /真相阶段/);
   assert.match(html, /库表画像/);
+  assert.match(html, /库表模型/);
   assert.match(html, /功能宇宙/);
   assert.match(html, /可信断言/);
   assert.match(html, /事实核验/);
@@ -6239,7 +6259,7 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
         currentPhase: "evidence",
         currentNode: "collect",
         nodes: {},
-        progress: { total: 17, completed: 2, percent: 12 },
+        progress: { total: 18, completed: 2, percent: 11 },
       },
       {
         code: "claim",
@@ -6248,7 +6268,7 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
         currentPhase: "prepare",
         currentNode: "sync",
         nodes: {},
-        progress: { total: 17, completed: 0, percent: 0 },
+        progress: { total: 18, completed: 0, percent: 0 },
       },
     ],
     {
@@ -6654,6 +6674,7 @@ test("dashboard rejected evidence refresh auto reruns evidence then full narrati
       "collect",
       "inspect",
       "summary",
+      "db-model",
       "truth-universe",
       "truth-claims",
       "narrative",
@@ -6664,7 +6685,7 @@ test("dashboard rejected evidence refresh auto reruns evidence then full narrati
     assert.equal(payload.rerunNarrativePart, "");
     assert.ok(
       payload.rerun.args.includes(
-        "collect,inspect,summary,truth-universe,truth-claims,narrative,fact-check,quality,truth-readiness",
+        "collect,inspect,summary,db-model,truth-universe,truth-claims,narrative,fact-check,quality,truth-readiness",
       ),
     );
     assert.ok(payload.rerun.args.includes("--review-rerun"));
@@ -6691,6 +6712,7 @@ test("pipeline default node list uses operation guide path before whitepaper", (
     "inspect",
     "validate-write",
     "db-profile",
+    "db-model",
     "truth-universe",
     "truth-claims",
     "build-spec",
@@ -6825,14 +6847,41 @@ test("pipeline truth nodes build claims and fact-check artifacts", async () => {
     args: {},
     config: { systems: [system], runtime: { outputDir: "../outputs" } },
     configPath,
-    system,
+    system: {
+      ...system,
+      databaseProfile: { enabled: true },
+    },
     systemOutput,
     projectRoot,
   };
+  fs.writeFileSync(
+    path.join(systemOutput, "database-profile.json"),
+    JSON.stringify({
+      artifactType: "database-profile",
+      system: { code: "adp", name: "AI保单数据闭环平台" },
+      source: { mode: "metadata-file", databaseType: "mysql", sampleDataIncluded: false },
+      safety: { secretRedacted: true },
+      tables: [
+        {
+          schema: "adp_test",
+          name: "policy_task",
+          comment: "保单任务",
+          columns: [
+            { name: "id", type: "bigint", comment: "主键", primaryKey: true },
+            { name: "status", type: "varchar", comment: "任务状态", dictionary: ["INIT", "DONE"] },
+          ],
+        },
+      ],
+    }),
+    "utf8",
+  );
+  await runPipelineNode("db-model", context);
   await runPipelineNode("truth-universe", context);
   await runPipelineNode("truth-claims", context);
   await runPipelineNode("fact-check", context);
 
+  assert.equal(fs.existsSync(path.join(systemOutput, "data-dictionary.json")), true);
+  assert.equal(fs.existsSync(path.join(systemOutput, "entity-model.json")), true);
   assert.equal(fs.existsSync(path.join(systemOutput, "function-universe.json")), true);
   assert.equal(fs.existsSync(path.join(systemOutput, "verified-claims.json")), true);
   const report = JSON.parse(fs.readFileSync(path.join(systemOutput, "fact-check-report.json"), "utf8"));
@@ -8564,6 +8613,68 @@ test("doctor validates connector database profile read-only contract", () => {
   assert.equal(report.warnings.some((item) => item.id === "system.database-metadata-file-missing"), false);
 });
 
+test("build database model derives dictionary and entity model from redacted profile", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    buildDatabaseModelArtifacts,
+    buildDatabaseModelFromDir,
+    inferEntityRelations,
+  } = require("./build-database-model");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "database-model-"));
+  const profile = {
+    artifactType: "database-profile",
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    source: {
+      mode: "connector",
+      databaseType: "mysql",
+      sampleDataIncluded: true,
+    },
+    safety: { secretRedacted: true },
+    tables: [
+      {
+        schema: "adp_test",
+        name: "policy_task",
+        comment: "保单任务",
+        rowCount: 12,
+        columns: [
+          { name: "id", type: "bigint", comment: "主键", primaryKey: true },
+          { name: "policy_id", type: "bigint", comment: "保单ID" },
+          { name: "status", type: "varchar", comment: "任务状态", dictionary: ["INIT", "DONE"] },
+          { name: "customer_phone", type: "varchar", comment: "客户手机号" },
+          { name: "created_time", type: "datetime", comment: "创建时间" },
+        ],
+        sampleRows: [{ id: 1, status: "DONE", customer_phone: "1***0" }],
+        foreignKeys: [{ column: "policy_id", refTable: "policy" }],
+      },
+      {
+        schema: "adp_test",
+        name: "policy",
+        comment: "保单",
+        columns: [{ name: "id", type: "bigint", comment: "主键", primaryKey: true }],
+      },
+    ],
+  };
+  fs.writeFileSync(path.join(dir, "database-profile.json"), JSON.stringify(profile), "utf8");
+
+  const direct = buildDatabaseModelArtifacts(profile, { generatedAt: "2026-06-03T00:00:00.000Z" });
+  const result = buildDatabaseModelFromDir(dir, { generatedAt: "2026-06-03T00:00:00.000Z" });
+  const taskEntity = result.entityModel.entities.find((entity) => entity.table === "adp_test.policy_task");
+
+  assert.equal(fs.existsSync(path.join(dir, "data-dictionary.json")), true);
+  assert.equal(fs.existsSync(path.join(dir, "entity-model.json")), true);
+  assert.equal(direct.dataDictionary.metrics.tableCount, 2);
+  assert.equal(result.dataDictionary.metrics.statusFieldCount, 1);
+  assert.equal(result.dataDictionary.metrics.sensitiveFieldCount, 1);
+  assert.equal(result.dataDictionary.tables[0].sampleRows, undefined);
+  assert.equal(taskEntity.statusFields[0].name, "status");
+  assert.equal(taskEntity.evidence.sampleRowsIncluded, true);
+  assert.equal(result.entityModel.metrics.relationCount, 2);
+  assert.ok(result.entityModel.relations.some((relation) => relation.type === "foreign-key"));
+  assert.ok(inferEntityRelations(result.dataDictionary.tables).some((relation) => relation.type === "naming-reference"));
+});
+
 test("build function universe merges UI functions and redacted database entities", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -8604,16 +8715,52 @@ test("build function universe merges UI functions and redacted database entities
   };
   fs.writeFileSync(path.join(dir, "evidence-summary.json"), JSON.stringify(evidenceSummary), "utf8");
   fs.writeFileSync(path.join(dir, "database-profile.json"), JSON.stringify(databaseProfile), "utf8");
+  fs.writeFileSync(
+    path.join(dir, "entity-model.json"),
+    JSON.stringify({
+      artifactType: "entity-model",
+      system: { code: "adp", name: "AI保单数据闭环平台" },
+      entities: [
+        {
+          entity: "保单任务",
+          table: "adp_test.policy_task",
+          confidence: "medium",
+          statusFields: [{ name: "status", comment: "任务状态", dictionary: ["INIT", "DONE"] }],
+          timeFields: [{ name: "created_time", comment: "创建时间" }],
+          evidence: { sampleRowsIncluded: true, sampleFieldNames: ["id", "status"] },
+          sources: [{ type: "db-table", id: "adp_test.policy_task", label: "保单任务" }],
+        },
+      ],
+      relations: [
+        {
+          from: "adp_test.policy_task",
+          to: "adp_test.policy",
+          type: "foreign-key",
+          columns: ["policy_id"],
+          confidence: "high",
+          sources: [{ type: "db-foreign-key", id: "adp_test.policy_task.policy_id", label: "policy" }],
+        },
+      ],
+    }),
+    "utf8",
+  );
 
-  const direct = buildFunctionUniverseArtifact({ evidenceSummary, databaseProfile });
+  const direct = buildFunctionUniverseArtifact({
+    evidenceSummary,
+    databaseProfile,
+    entityModel: JSON.parse(fs.readFileSync(path.join(dir, "entity-model.json"), "utf8")),
+  });
   const { outputPath, artifact } = buildFunctionUniverseFromDir(dir);
 
   assert.equal(fs.existsSync(outputPath), true);
   assert.equal(direct.modules[0].name, "保单任务");
   assert.equal(artifact.functions[0].evidenceStrength, "medium");
   assert.equal(artifact.entities[0].statusColumns[0].name, "status");
+  assert.equal(artifact.entities[0].evidence.sampleRowsIncluded, true);
   assert.equal(artifact.links[0].table, "adp_test.policy_task");
+  assert.equal(artifact.entityRelations[0].type, "foreign-key");
   assert.equal(artifact.coverage.linkedFunctionCount, 1);
+  assert.equal(artifact.coverage.entityRelationCount, 1);
   assert.equal(
     scoreFunctionEntityMatch(artifact.functions[0], artifact.entities[0]).confidence,
     "medium",
@@ -8704,6 +8851,16 @@ test("build verified claims assigns confidence and writable boundaries", () => {
         ],
       },
     ],
+    entityRelations: [
+      {
+        from: "adp_test.policy_task",
+        to: "adp_test.policy",
+        type: "foreign-key",
+        columns: ["policy_id"],
+        confidence: "high",
+        sources: [{ type: "db-foreign-key", id: "adp_test.policy_task.policy_id", label: "policy" }],
+      },
+    ],
   };
   fs.writeFileSync(path.join(dir, "function-universe.json"), JSON.stringify(functionUniverse), "utf8");
 
@@ -8713,6 +8870,7 @@ test("build verified claims assigns confidence and writable boundaries", () => {
   const weakFunction = artifact.claims.find((claim) => claim.id === "function:保单任务:隐藏入口");
   const dbEntity = artifact.claims.find((claim) => claim.type === "business-entity");
   const statusClaim = artifact.claims.find((claim) => claim.type === "status-field");
+  const relationClaim = artifact.claims.find((claim) => claim.type === "entity-relation");
 
   assert.equal(fs.existsSync(outputPath), true);
   assert.equal(direct.artifactType, "verified-claims");
@@ -8724,8 +8882,11 @@ test("build verified claims assigns confidence and writable boundaries", () => {
   assert.equal(dbEntity.status, "inferred");
   assert.equal(dbEntity.writable, true);
   assert.equal(statusClaim.status, "inferred");
+  assert.equal(relationClaim.status, "inferred");
+  assert.equal(relationClaim.writable, true);
   assert.ok(artifact.writableClaimIds.includes("link:保单任务:任务列表:adp-test-policy-task"));
-  assert.equal(artifact.metrics.claimCount, 6);
+  assert.ok(artifact.writableClaimIds.some((id) => id.startsWith("relation:")));
+  assert.equal(artifact.metrics.claimCount, 7);
   assert.equal(artifact.metrics.weakCount, 1);
 });
 
@@ -9028,6 +9189,7 @@ test("package manifest whitelists only skill runtime assets", () => {
     "safety-rules.md",
     "whitepaper-template.md",
     "examples/",
+    "scripts/build-database-model.js",
     "scripts/build-function-universe.js",
     "scripts/build-verified-claims.js",
     "scripts/check-truth-readiness.js",
@@ -9090,6 +9252,7 @@ test("npm pack dry-run excludes private and process-only assets", () => {
     "SKILL.md",
     "agents/openai.yaml",
     "docs/narrative-guide.md",
+    "scripts/build-database-model.js",
     "scripts/build-function-universe.js",
     "scripts/build-verified-claims.js",
     "scripts/check-truth-readiness.js",
@@ -9171,6 +9334,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
     for (const relativePath of [
       "SKILL.md",
       "agents/openai.yaml",
+      "scripts/build-database-model.js",
       "scripts/build-function-universe.js",
       "scripts/build-verified-claims.js",
       "scripts/check-truth-readiness.js",
@@ -9197,6 +9361,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
       [
         "-e",
         [
+          'require("./scripts/build-database-model");',
           'require("./scripts/build-function-universe");',
           'require("./scripts/build-verified-claims");',
           'require("./scripts/check-truth-readiness");',

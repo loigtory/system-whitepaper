@@ -37,6 +37,7 @@ The unattended pipeline is grouped into five business-visible phases:
 2. **取证**: use Playwright to collect pages, popups, forms, tables, screenshots, logs, and safe `AI_AUTO_TEST_` write-operation evidence.
 3. **真相**:
    - **库表画像**: when enabled, convert private test-database metadata or a read-only connector scan into redacted `database-profile.json`; skip this node when `databaseProfile.enabled=false`.
+   - **库表模型**: convert the redacted profile into `data-dictionary.json` and `entity-model.json`; these are script-derived evidence artifacts, not Agent database access.
    - **功能宇宙**: merge UI evidence and redacted database entities into `function-universe.json` candidates.
    - **可信断言**: convert the universe into `verified-claims.json`; only `writable=true` claims may become body assertions.
 4. **成稿**:
@@ -69,6 +70,7 @@ Use the npm scripts as the stable entrypoints:
 - `npm run init`: create `config/systems.local.yaml`, `secrets/`, and `outputs/` from the packaged example if missing.
 - `npm run doctor`: validate local config, secret paths, safe test-data prefix, output directory, and system registry before running the pipeline.
 - `npm run db:profile -- --system <code>`: build a redacted `database-profile.json` from private test-database metadata or `databaseProfile.mode=connector` / `--connector` read-only schema scan when enabled.
+- `npm run db:model -- --input outputs/<code>`: derive `data-dictionary.json` and `entity-model.json` from the redacted database profile.
 - `npm run truth:universe -- --input outputs/<code>`: merge UI evidence summary and redacted database profile into `function-universe.json` candidates.
 - `npm run truth:claims -- --input outputs/<code>`: convert the function universe into `verified-claims.json` with confidence and writable/non-writable boundaries.
 - `npm run truth:fact-check -- --input outputs/<code>`: check `whitepaper.pending-review.md` against writable claims and block unsupported or weak body assertions.
@@ -114,6 +116,8 @@ Generate artifacts per system:
 - `whitepaper.draft.md`: factual draft from deterministic scripts.
 - `evidence-summary.json`: compressed evidence for Agent writing.
 - `database-profile.json`: redacted database schema/entity evidence; never include database secrets or raw sensitive rows.
+- `data-dictionary.json`: field-level dictionary derived from redacted database evidence; includes semantic tags and counts, not raw sample rows.
+- `entity-model.json`: entity and relation model derived from the data dictionary; database-only relationships remain inference evidence until UI confirms workflow behavior.
 - `function-universe.json`: UI + DB candidate universe for later verified claims; not final conclusions.
 - `verified-claims.json`: claim-level evidence and confidence boundary for narrative writing and fact checks.
 - `fact-check-report.json`: deterministic claim coverage report for pending review/finalization gates.
@@ -156,7 +160,7 @@ If any quality gate fails, do not finalize. Re-run, downgrade to pending confirm
 
 When review is rejected, comments are mandatory. `run-review-decision.js` inspects the comments and returns one structured decision:
 
-- `rerunNodes`: concrete nodes to re-run, usually `narrative,fact-check,quality,truth-readiness` or `collect,inspect,summary,truth-universe,truth-claims,narrative,fact-check,quality,truth-readiness`.
+- `rerunNodes`: concrete nodes to re-run, usually `narrative,fact-check,quality,truth-readiness` or `collect,inspect,summary,db-model,truth-universe,truth-claims,narrative,fact-check,quality,truth-readiness`.
 - `rewriteScope`: `overview-flow`, `function-sections`, `evidence-refresh`, or `narrative`.
 - `narrativePart`: scoped writer input such as `overview-flow`, `function-sections`, or a concrete module name.
 - `instructions`: what the next rewrite must fix.

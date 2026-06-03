@@ -16,6 +16,8 @@ const REQUIRED_ARTIFACTS = {
 
 const OPTIONAL_ARTIFACTS = {
   evidenceSummary: "evidence-summary.json",
+  dataDictionary: "data-dictionary.json",
+  entityModel: "entity-model.json",
   functionUniverse: "function-universe.json",
   databaseProfile: "database-profile.json",
 };
@@ -323,11 +325,26 @@ function buildDatabaseGate(artifacts) {
     file: OPTIONAL_ARTIFACTS.functionUniverse,
     value: null,
   };
+  const dataDictionaryArtifact = artifacts.dataDictionary || {
+    status: "missing",
+    file: OPTIONAL_ARTIFACTS.dataDictionary,
+    value: null,
+  };
+  const entityModelArtifact = artifacts.entityModel || {
+    status: "missing",
+    file: OPTIONAL_ARTIFACTS.entityModel,
+    value: null,
+  };
   const universe = universeArtifact.value || {};
+  const dataDictionary = dataDictionaryArtifact.value || {};
+  const entityModel = entityModelArtifact.value || {};
   const coverage = universe.coverage || {};
-  const entityCount = Number(coverage.entityCount || 0);
+  const entityCount = Number(entityModel.metrics?.entityCount || coverage.entityCount || 0);
   const linkedFunctionCount = Number(coverage.linkedFunctionCount || 0);
-  const available = profile.status === "ok" || entityCount > 0;
+  const relationCount = Number(entityModel.metrics?.relationCount || coverage.entityRelationCount || 0);
+  const columnCount = Number(dataDictionary.metrics?.columnCount || 0);
+  const sampleBackedEntityCount = Number(entityModel.metrics?.sampleBackedEntityCount || 0);
+  const available = profile.status === "ok" || entityCount > 0 || columnCount > 0;
   return {
     id: "database",
     label: "Redacted database evidence",
@@ -338,7 +355,12 @@ function buildDatabaseGate(artifacts) {
     metrics: {
       entityCount,
       linkedFunctionCount,
+      relationCount,
+      columnCount,
+      sampleBackedEntityCount,
       databaseProfileStatus: profile.status,
+      dataDictionaryStatus: dataDictionaryArtifact.status,
+      entityModelStatus: entityModelArtifact.status,
     },
     warnings: available
       ? []
@@ -364,7 +386,7 @@ function collectBlockers(gates) {
         "claims.missing-writable",
         "P0",
         "Verified writable claims are missing, so the narrative cannot assert business conclusions safely.",
-        ["summary", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+        ["summary", "db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
       ),
     );
   }
@@ -398,7 +420,7 @@ function buildImprovementActions(gates, blockers) {
       action(
         "database.optional-profile",
         "Add redacted test-database metadata when available to strengthen entity and status-field reasoning.",
-        ["db-profile", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+        ["db-profile", "db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
       ),
     );
   }

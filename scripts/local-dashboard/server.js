@@ -153,6 +153,12 @@ function buildArtifactSnapshot(systemOutput, state, system = {}) {
     databaseProfile: fileInfo(
       path.join(systemOutput, artifacts.databaseProfile || "database-profile.json"),
     ),
+    dataDictionary: fileInfo(
+      path.join(systemOutput, artifacts.dataDictionary || "data-dictionary.json"),
+    ),
+    entityModel: fileInfo(
+      path.join(systemOutput, artifacts.entityModel || "entity-model.json"),
+    ),
     functionUniverse: fileInfo(
       path.join(systemOutput, artifacts.functionUniverse || "function-universe.json"),
     ),

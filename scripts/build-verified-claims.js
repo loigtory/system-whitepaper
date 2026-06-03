@@ -211,6 +211,33 @@ function buildStatusFieldClaims(universe = {}) {
   return claims;
 }
 
+function buildEntityRelationClaims(universe = {}) {
+  return (universe.entityRelations || []).map((relation) => {
+    const sources = normalizeSources(relation.sources || []);
+    const confidence = relation.confidence === "high" ? "medium" : "low";
+    const claim = {
+      id: buildClaimId("relation", [relation.from, relation.to, relation.type]),
+      type: "entity-relation",
+      subject: `${relation.from} -> ${relation.to}`,
+      from: relation.from,
+      to: relation.to,
+      relationType: relation.type,
+      text: `Database metadata suggests relation "${relation.from}" -> "${relation.to}".`,
+      confidence,
+      status: confidence === "medium" ? "inferred" : "weak",
+      writable: false,
+      evidence: {
+        columns: relation.columns || [],
+      },
+      sources,
+      reasoning:
+        "Redacted database relation evidence supports data-model interpretation; UI workflow conclusions still require page evidence.",
+    };
+    claim.writable = claimIsWritable(claim);
+    return claim;
+  });
+}
+
 function buildVerifiedClaimsArtifact(input = {}) {
   const universe = input.functionUniverse || {};
   const claims = [
@@ -219,6 +246,7 @@ function buildVerifiedClaimsArtifact(input = {}) {
     ...buildEntityClaims(universe),
     ...buildFunctionEntityClaims(universe),
     ...buildStatusFieldClaims(universe),
+    ...buildEntityRelationClaims(universe),
   ];
   const uniqueClaims = uniqueBy(claims, (claim) => claim.id);
   const writableClaims = uniqueClaims.filter((claim) => claim.writable);
