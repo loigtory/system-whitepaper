@@ -81,6 +81,7 @@ Use the npm scripts as the stable entrypoints:
 - `npm run sync`: sync the system registry into `config/systems.local.yaml`.
 - `npm run pipeline`: run the unattended end-to-end pipeline for configured systems.
 - `npm run batch`: run the full whitepaper pipeline for all configured systems with 4 parallel workers; use `-- --systems <code1>,<code2>` to limit scope, `-- --concurrency <n>` to change worker count, or `-- --batch-retries <n>` to enable bounded recoverable retries.
+- `npm run repair:batch`: consume `outputs/_batch/repair-queue.json` and run only `canAutoRun=true` repair items through a new bounded batch run; use `-- --dry-run` to write `repair-run-plan.json/md` without execution. Agent-writing repairs require `-- --allow-agent-writing`.
 - `npm run dashboard`: open the local review dashboard on port `3920`.
 - `npm run phase3b -- --system <code>`: run or rerun the narrative-writing stage for one system.
 - `npm test`: run the regression suite before and after script changes.
@@ -89,6 +90,7 @@ Use the npm scripts as the stable entrypoints:
 Run `npm run init` once after installing the skill, then edit `config/systems.local.yaml` and write the Huntian token into `secrets/huntian-token.txt`.
 Run `npm run doctor` before first collection and after changing config or secret paths.
 Prefer `npm run pipeline` for single-system production runs. Use `npm run batch` when multiple independent systems must be processed unattended. Watch `outputs/_batch/run-state.json`, `outputs/_batch/diagnosis.md`, `outputs/_batch/repair-queue.md`, or the dashboard "Batch 4 threads" panel to see all active system threads, truth-readiness scores, coverage-repair outcomes, and blocked next actions at once. Use `npm run phase3b` only for scoped narrative work, review rewrites, or prompt/fragment regeneration after evidence and summary artifacts already exist.
+Run `npm run repair:batch -- --dry-run` before consuming a repair queue. The runner rebuilds safe batch arguments from queue fields, ignores embedded command strings, writes `outputs/_batch/repair-run-plan.json`, `outputs/_batch/repair-run-plan.md`, and `outputs/_batch/repair-run-state.json`, and never runs queue items that require Agent writing unless `-- --allow-agent-writing` is present.
 Run `npm run pack:check` before distributing or installing an updated copy of this skill.
 
 ## Hard Rules

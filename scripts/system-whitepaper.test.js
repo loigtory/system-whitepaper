@@ -6930,6 +6930,133 @@ test("batch runner classifies failed children and retries recoverable failures o
   assert.match(fs.readFileSync(path.join(outputRoot, "_batch", "repair-queue.md"), "utf8"), /Batch Repair Queue/);
 });
 
+test("batch repair queue runner builds safe plans and executes runnable groups", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { EventEmitter } = require("node:events");
+  const {
+    buildRepairRunPlan,
+    runRepairQueue,
+    validateRepairItem,
+  } = require("./run-batch-repair-queue");
+
+  const queue = {
+    artifactType: "batch-repair-queue",
+    batchId: "batch-test",
+    generatedAt: "2026-06-03T00:00:00.000Z",
+    items: [
+      {
+        id: "repair-01-adp",
+        systemCode: "adp",
+        canAutoRun: true,
+        reset: false,
+        reviewRerun: false,
+        nodes: ["fact-check", "quality", "truth-readiness"],
+        quotaImpact: "low",
+      },
+      {
+        id: "repair-02-claim",
+        systemCode: "claim",
+        canAutoRun: true,
+        reset: false,
+        reviewRerun: false,
+        nodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+        narrativePart: "function-sections",
+        requiresAgentWriting: true,
+        quotaImpact: "agent-writing",
+      },
+      {
+        id: "repair-03-bad",
+        systemCode: "bad",
+        canAutoRun: true,
+        reset: true,
+        nodes: ["review"],
+      },
+    ],
+  };
+
+  const plan = buildRepairRunPlan(queue, {
+    allowAgentWriting: false,
+    concurrency: 4,
+    configPath: "config/systems.local.yaml",
+  });
+  assert.equal(plan.summary.runnableItems, 1);
+  assert.equal(plan.summary.runnableGroups, 1);
+  assert.equal(plan.summary.skipped, 2);
+  assert.equal(plan.groups[0].systems.join(","), "adp");
+  assert.equal(plan.groups[0].nodesCsv, "fact-check,quality,truth-readiness");
+  assert.deepEqual(plan.groups[0].command.args.slice(0, 7), [
+    "scripts/run-whitepaper-batch.js",
+    "--config",
+    "config/systems.local.yaml",
+    "--systems",
+    "adp",
+    "--nodes",
+    "fact-check,quality,truth-readiness",
+  ]);
+  assert.equal(plan.skipped.some((item) => item.reason === "agent-writing-not-allowed"), true);
+  assert.equal(validateRepairItem(queue.items[2], { allowAgentWriting: true }).ok, false);
+
+  const agentPlan = buildRepairRunPlan(queue, {
+    allowAgentWriting: true,
+    concurrency: 4,
+    configPath: "config/systems.local.yaml",
+  });
+  assert.equal(agentPlan.summary.runnableItems, 2);
+  assert.equal(agentPlan.groups.length, 2);
+  assert.equal(agentPlan.groups[1].command.args.includes("--repair-allow-agent-writing"), true);
+  assert.equal(agentPlan.groups[1].command.args.includes("--narrative-part"), true);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "repair-queue-runner-"));
+  const configPath = path.join(dir, "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+    ].join("\n"),
+    "utf8",
+  );
+  const queuePath = path.join(dir, "outputs", "_batch", "repair-queue.json");
+  fs.mkdirSync(path.dirname(queuePath), { recursive: true });
+  fs.writeFileSync(queuePath, JSON.stringify(queue), "utf8");
+
+  const dryRunState = await runRepairQueue({
+    args: { config: configPath, "dry-run": true },
+  });
+  assert.equal(dryRunState.status, "dry-run");
+  assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-run-plan.json")), true);
+  assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-run-plan.md")), true);
+  assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-run-state.json")), true);
+
+  const launched = [];
+  const fakeSpawn = (command, args) => {
+    launched.push({ command, args });
+    const child = new EventEmitter();
+    child.pid = 1234;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    setImmediate(() => child.emit("close", 0, null));
+    return child;
+  };
+  const runState = await runRepairQueue({
+    args: { config: configPath },
+    spawn: fakeSpawn,
+  });
+  assert.equal(runState.status, "success");
+  assert.equal(launched.length, 1);
+  assert.equal(launched[0].command, process.execPath);
+  assert.ok(launched[0].args.includes("--systems"));
+  assert.ok(launched[0].args.includes("adp"));
+  assert.equal(launched[0].args.includes("--reset"), false);
+  assert.equal(launched[0].args.includes("--review-rerun"), false);
+});
+
 test("dashboard supports batch pipeline command and active run snapshot", () => {
   const {
     buildActiveRun,
@@ -7104,6 +7231,25 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "outputs", "_batch", "repair-queue.md"), "# Batch Repair Queue", "utf8");
+  fs.writeFileSync(
+    path.join(dir, "outputs", "_batch", "repair-run-plan.json"),
+    JSON.stringify({
+      artifactType: "batch-repair-run-plan",
+      summary: { runnableItems: 1, runnableGroups: 1, skipped: 0 },
+      groups: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(dir, "outputs", "_batch", "repair-run-plan.md"), "# Batch Repair Run Plan", "utf8");
+  fs.writeFileSync(
+    path.join(dir, "outputs", "_batch", "repair-run-state.json"),
+    JSON.stringify({
+      artifactType: "batch-repair-run-state",
+      status: "dry-run",
+      groups: [],
+    }),
+    "utf8",
+  );
   const snapshot = buildDashboardSnapshot({ configPath });
   assert.equal(snapshot.batch.status, "running");
   assert.equal(snapshot.activeRun.mode, "batch");
@@ -7112,6 +7258,9 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(snapshot.batchDiagnosisArtifacts.markdown.exists, true);
   assert.equal(snapshot.batchRepairQueue.summary.total, 1);
   assert.equal(snapshot.batchRepairQueueArtifacts.markdown.exists, true);
+  assert.equal(snapshot.batchRepairRunPlan.summary.runnableGroups, 1);
+  assert.equal(snapshot.batchRepairRunState.status, "dry-run");
+  assert.equal(snapshot.batchRepairRunArtifacts.planMarkdown.exists, true);
   assert.equal(snapshot.activeRun.repairQueue.summary.requiresAgentWriting, 1);
 });
 
@@ -10408,6 +10557,7 @@ test("package manifest whitelists only skill runtime assets", () => {
     "scripts/run-whitepaper-batch.js",
     "scripts/run-whitepaper-pipeline.js",
     "scripts/run-phase3b.js",
+    "scripts/run-batch-repair-queue.js",
     "scripts/run-local-e2e-smoke.js",
     "scripts/system-whitepaper.test.js",
     "scripts/local-dashboard/",
@@ -10470,6 +10620,7 @@ test("npm pack dry-run excludes private and process-only assets", () => {
     "scripts/init-local-config.js",
     "scripts/run-whitepaper-batch.js",
     "scripts/run-whitepaper-pipeline.js",
+    "scripts/run-batch-repair-queue.js",
     "scripts/run-local-e2e-smoke.js",
     "scripts/system-whitepaper.test.js",
     "scripts/local-dashboard/server.js",
