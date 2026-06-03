@@ -800,6 +800,9 @@
         }
         if (run.mode === "batch") {
           const systems = run.systems || [];
+          const diagnosis = run.diagnosis;
+          const diagnosisSummary = diagnosis?.summary || {};
+          const diagnosisArtifacts = diagnosis?.artifacts || {};
           const items = systems
             .map(
               (item) => {
@@ -833,6 +836,8 @@
                   <div class="muted">concurrency=${escapeHtml(String(run.concurrency || 4))} · ${escapeHtml(run.currentNodeLabel || "")}</div>
                   <div class="muted">真实度可审 ${escapeHtml(String(run.truthReadyCount || 0))} · 自动补写 ${escapeHtml(String(run.coverageRepairCount || 0))}</div>
                   <div class="muted">可恢复失败 ${escapeHtml(String(run.failureSummary?.recoverable || 0))} · 写稿额度敏感 ${escapeHtml(String(run.failureSummary?.quotaSensitive || 0))}</div>
+                  ${diagnosis ? `<div class="muted">批量诊断 Ready ${escapeHtml(String(diagnosisSummary.ready || 0))}/${escapeHtml(String(diagnosisSummary.total || 0))} · Blocked ${escapeHtml(String(diagnosisSummary.blocked || 0))} · 缺失可写声明 ${escapeHtml(String(diagnosisSummary.missingWritableClaims || 0))}</div>` : ""}
+                  ${diagnosisArtifacts.diagnosisMarkdown ? `<div class="muted">诊断文件 ${escapeHtml(diagnosisArtifacts.diagnosisMarkdown)}</div>` : ""}
                   ${run.lastError ? `<div class="status failed">${escapeHtml(run.lastError)}</div>` : ""}
                 </div>
                 <div class="muted">PID ${run.pid || "-"} · ${formatDuration(run.runningMs)}</div>

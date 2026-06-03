@@ -17,6 +17,7 @@ const { NODES, readPipelineStateSafe } = require("./pipeline-state");
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_BATCH_CONCURRENCY = 4;
 const DEFAULT_BATCH_RETRIES = 0;
+const TARGET_TRUTH_SCORE = 95;
 const NODE_ORDER = NODES.map((node) => node.id);
 const FULL_WHITEPAPER_NODES = [
   "sync",
@@ -130,6 +131,28 @@ function splitCsv(value) {
 
 function normalizeNodes(nodes) {
   return splitCsv(nodes).join(",");
+}
+
+function compactItems(items, limit = 8) {
+  return (Array.isArray(items) ? items : []).filter(Boolean).slice(0, limit);
+}
+
+function sanitizeDiagnosticItem(item = {}) {
+  return {
+    id: item.id || "",
+    severity: item.severity || "",
+    message: item.message || item.description || "",
+    rerunNodes: compactItems(item.rerunNodes, 12),
+    rewriteScope: item.rewriteScope || "",
+    narrativePart: item.narrativePart || "",
+    missingWritableClaimIds: compactItems(item.missingWritableClaimIds, 12),
+  };
+}
+
+function mdCell(value) {
+  return String(value === undefined || value === null || value === "" ? "-" : value)
+    .replace(/\r?\n/g, " ")
+    .replace(/\|/g, "\\|");
 }
 
 function loadBatchConfig(configPath = "config/systems.local.yaml") {
@@ -505,6 +528,8 @@ function buildBatchTruthSummary(systemOutput) {
           canSubmitReview: Boolean(truth.canSubmitReview),
           canFinalize: Boolean(truth.canFinalize),
           blockerCount: Array.isArray(truth.blockers) ? truth.blockers.length : 0,
+          blockers: compactItems(truth.blockers, 8).map(sanitizeDiagnosticItem),
+          improvementActions: compactItems(truth.improvementActions, 8).map(sanitizeDiagnosticItem),
           generatedAt: truth.generatedAt || "",
         }
       : null,
@@ -551,6 +576,255 @@ function refreshBatchStateFromDisk(state, outputRoot, options = {}) {
     return applySystemArtifactSummary(next, outputRoot);
   });
   return recomputeBatchState({ ...state, systems }, options);
+}
+
+function buildSystemDiagnosis(item = {}) {
+  const truth = item.truthReadiness || null;
+  const coverage = item.writableClaimCoverage || null;
+  const repair = item.coverageRepair || null;
+  const failure = item.failure || null;
+  const blockers = compactItems(truth?.blockers, 8);
+  const actions = [];
+  const gaps = [];
+  const score = truth ? Number(truth.scorePercent || 0) : null;
+  const missingWritableClaimCount = Number(coverage?.missingWritableClaimCount || 0);
+
+  if (failure) {
+    gaps.push({
+      type: "pipeline-failure",
+      severity: failure.recoverable ? "P1" : "P0",
+      message: failure.label || failure.category || "Pipeline failed.",
+    });
+    actions.push({
+      id: `failure.${failure.category || "unknown"}`,
+      message: failure.action || failure.message || "Inspect per-system log and pipeline-state.json.",
+      rerunNodes: compactItems(failure.retryPlan?.nodes ? splitCsv(failure.retryPlan.nodes) : [], 12),
+      quotaImpact: failure.retryPlan?.quotaImpact || "",
+      canRetry: Boolean(failure.retryPlan?.canRetry),
+    });
+  }
+
+  if (!truth) {
+    gaps.push({
+      type: "truth-readiness-missing",
+      severity: "P0",
+      message: "truth-readiness-report.json is missing or invalid.",
+    });
+    actions.push({
+      id: "truth-readiness.missing",
+      message: "Run truth-readiness after evidence, claims, fact-check, and quality artifacts exist.",
+      rerunNodes: ["truth-readiness"],
+      quotaImpact: "low",
+      canRetry: true,
+    });
+  } else {
+    if (!truth.canSubmitReview || score < TARGET_TRUTH_SCORE) {
+      gaps.push({
+        type: "truth-score",
+        severity: "P0",
+        message: `Truth readiness is ${score}% and review requires ${TARGET_TRUTH_SCORE}%+.`,
+      });
+    }
+    for (const blocker of blockers) {
+      gaps.push({
+        type: blocker.id || "truth-blocker",
+        severity: blocker.severity || "P0",
+        message: blocker.message || "Truth readiness blocker.",
+      });
+      actions.push({
+        id: blocker.id || "truth-blocker",
+        message: blocker.message || "Resolve truth readiness blocker.",
+        rerunNodes: compactItems(blocker.rerunNodes, 12),
+        rewriteScope: blocker.rewriteScope || "",
+        narrativePart: blocker.narrativePart || "",
+        missingWritableClaimIds: compactItems(blocker.missingWritableClaimIds, 12),
+        quotaImpact: compactItems(blocker.rerunNodes).includes("narrative") ? "agent-writing" : "low",
+        canRetry: compactItems(blocker.rerunNodes).length > 0,
+      });
+    }
+    for (const action of compactItems(truth.improvementActions, 8)) {
+      actions.push({
+        id: action.id || "truth-improvement",
+        message: action.message || "Apply truth readiness improvement action.",
+        rerunNodes: compactItems(action.rerunNodes, 12),
+        rewriteScope: action.rewriteScope || "",
+        narrativePart: action.narrativePart || "",
+        missingWritableClaimIds: compactItems(action.missingWritableClaimIds, 12),
+        quotaImpact: compactItems(action.rerunNodes).includes("narrative") ? "agent-writing" : "low",
+        canRetry: compactItems(action.rerunNodes).length > 0,
+      });
+    }
+  }
+
+  if (missingWritableClaimCount > 0) {
+    gaps.push({
+      type: "writable-claim-coverage",
+      severity: "P0",
+      message: `${missingWritableClaimCount} writable claim(s) are not covered by the pending-review narrative.`,
+    });
+    actions.push({
+      id: "narrative.cover-missing-writable-claims",
+      message: "Rerun function-section narrative with missing writable claim IDs.",
+      rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+      narrativePart: repair?.narrativePart || "function-sections",
+      missingWritableClaimIds: compactItems(coverage?.missingWritableClaimIds, 12),
+      quotaImpact: "agent-writing",
+      canRetry: true,
+    });
+  }
+
+  if (repair?.status && repair.status !== "completed" && missingWritableClaimCount > 0) {
+    gaps.push({
+      type: "coverage-repair-incomplete",
+      severity: "P1",
+      message: `Coverage repair status is ${repair.status}.`,
+    });
+  }
+
+  const canSubmitReview = Boolean(truth?.canSubmitReview) && score >= TARGET_TRUTH_SCORE;
+  const ready = canSubmitReview && !failure && missingWritableClaimCount === 0;
+  return {
+    code: item.code || "",
+    name: item.name || "",
+    status: item.status || "",
+    runStatus: item.runStatus || "",
+    currentPhase: item.currentPhase || "",
+    currentNode: item.currentNode || "",
+    truthScorePercent: score,
+    canSubmitReview,
+    canFinalize: Boolean(truth?.canFinalize),
+    missingWritableClaimCount,
+    failureCategory: item.failureCategory || failure?.category || "",
+    recoverable: Boolean(item.recoverable || failure?.recoverable),
+    ready,
+    gaps,
+    actions,
+    logFile: item.logFile || "",
+  };
+}
+
+function summarizeDiagnosisSystems(systems = []) {
+  const total = systems.length;
+  const ready = systems.filter((item) => item.ready).length;
+  const blocked = systems.filter((item) => !item.ready).length;
+  const recoverable = systems.filter((item) => item.recoverable).length;
+  const quotaSensitive = systems.filter((item) =>
+    item.actions.some((action) => action.quotaImpact === "agent-writing"),
+  ).length;
+  const missingWritableClaims = systems.reduce(
+    (sum, item) => sum + Number(item.missingWritableClaimCount || 0),
+    0,
+  );
+  return {
+    total,
+    ready,
+    blocked,
+    recoverable,
+    quotaSensitive,
+    missingWritableClaims,
+  };
+}
+
+function buildBatchDiagnosis(state = {}, options = {}) {
+  const systems = (Array.isArray(state.systems) ? state.systems : []).map(buildSystemDiagnosis);
+  const summary = summarizeDiagnosisSystems(systems);
+  const diagnosis = {
+    artifactType: "batch-diagnosis",
+    version: 1,
+    batchId: state.batchId || "",
+    status: state.status || "",
+    generatedAt: nowIso(options.now),
+    targetTruthScorePercent: TARGET_TRUTH_SCORE,
+    summary,
+    failureSummary: state.failureSummary || summarizeBatchFailures(state.systems || []),
+    systems,
+  };
+  return diagnosis;
+}
+
+function renderActionText(actions = []) {
+  if (!actions.length) return "无";
+  return actions
+    .slice(0, 3)
+    .map((action) => {
+      const nodes = compactItems(action.rerunNodes, 8).join(",");
+      const suffix = nodes ? `（重跑：${nodes}）` : "";
+      return `${action.message || action.id || "处理诊断项"}${suffix}`;
+    })
+    .join("；");
+}
+
+function renderBatchDiagnosisMarkdown(diagnosis = {}) {
+  const summary = diagnosis.summary || {};
+  const rows = (diagnosis.systems || []).map((item) =>
+    [
+      mdCell(item.code),
+      mdCell(item.name),
+      mdCell(item.ready ? "是" : "否"),
+      mdCell(item.truthScorePercent === null ? "缺失" : `${item.truthScorePercent}%`),
+      mdCell(item.missingWritableClaimCount || 0),
+      mdCell(item.failureCategory || "-"),
+      mdCell(item.recoverable ? "是" : "否"),
+      mdCell(renderActionText(item.actions)),
+    ].join(" | "),
+  );
+  return [
+    "# Batch Diagnosis",
+    "",
+    `- Generated: ${diagnosis.generatedAt || ""}`,
+    `- Batch: ${diagnosis.batchId || ""}`,
+    `- Status: ${diagnosis.status || ""}`,
+    `- Target truth score: ${diagnosis.targetTruthScorePercent || TARGET_TRUTH_SCORE}%`,
+    `- Ready: ${summary.ready || 0}/${summary.total || 0}`,
+    `- Blocked: ${summary.blocked || 0}`,
+    `- Recoverable: ${summary.recoverable || 0}`,
+    `- Agent-writing quota sensitive: ${summary.quotaSensitive || 0}`,
+    `- Missing writable claims: ${summary.missingWritableClaims || 0}`,
+    "",
+    "| System | Name | Ready | Truth | Missing writable claims | Failure | Recoverable | Next action |",
+    "| --- | --- | --- | --- | ---: | --- | --- | --- |",
+    rows.length ? rows.join("\n") : "| - | - | - | - | 0 | - | - | - |",
+    "",
+    "## Details",
+    "",
+    ...(diagnosis.systems || []).flatMap((item) => [
+      `### ${item.code || "-"} ${item.name || ""}`.trim(),
+      "",
+      `- Status: ${item.status || "-"} / ${item.runStatus || "-"}`,
+      `- Current node: ${item.currentPhase || "-"} / ${item.currentNode || "-"}`,
+      `- Truth readiness: ${item.truthScorePercent === null ? "missing" : `${item.truthScorePercent}%`} / canSubmitReview=${item.canSubmitReview}`,
+      `- Missing writable claims: ${item.missingWritableClaimCount || 0}`,
+      `- Failure category: ${item.failureCategory || "-"}`,
+      `- Log: ${item.logFile || "-"}`,
+      "",
+      item.gaps.length ? "**Gaps**" : "**Gaps**: none",
+      ...item.gaps.map((gap) => `- [${gap.severity || "-"}] ${gap.type || "gap"}: ${gap.message || ""}`),
+      "",
+      item.actions.length ? "**Actions**" : "**Actions**: none",
+      ...item.actions.map((action) => {
+        const nodes = compactItems(action.rerunNodes, 12).join(",");
+        const quota = action.quotaImpact ? ` quota=${action.quotaImpact}` : "";
+        return `- ${action.id || "action"}: ${action.message || ""}${nodes ? ` rerun=${nodes}` : ""}${quota}`;
+      }),
+      "",
+    ]),
+  ].join("\n");
+}
+
+function writeBatchDiagnosis(outputRoot, state, options = {}) {
+  const batchDir = path.join(outputRoot, "_batch");
+  const diagnosis = buildBatchDiagnosis(state, options);
+  const jsonPath = path.join(batchDir, "diagnosis.json");
+  const markdownPath = path.join(batchDir, "diagnosis.md");
+  writeJson(jsonPath, diagnosis);
+  fs.writeFileSync(markdownPath, renderBatchDiagnosisMarkdown(diagnosis), "utf8");
+  return {
+    diagnosis,
+    artifacts: {
+      diagnosisJson: path.relative(batchDir, jsonPath).replace(/\\/g, "/"),
+      diagnosisMarkdown: path.relative(batchDir, markdownPath).replace(/\\/g, "/"),
+    },
+  };
 }
 
 function writeBatchRunState(outputRoot, state) {
@@ -609,6 +883,15 @@ async function runBatchPipeline(options = {}) {
       if (refreshTimer) clearInterval(refreshTimer);
       state = refreshBatchStateFromDisk(state, context.outputRoot, { args });
       state = recomputeBatchState(state);
+      const { diagnosis, artifacts } = writeBatchDiagnosis(context.outputRoot, state);
+      state = {
+        ...state,
+        diagnosis: {
+          summary: diagnosis.summary,
+          artifacts,
+          generatedAt: diagnosis.generatedAt,
+        },
+      };
       writeBatchRunState(context.outputRoot, state);
       resolve(state);
     };
@@ -753,6 +1036,15 @@ async function runBatchPipeline(options = {}) {
             ),
           },
         );
+        const { diagnosis, artifacts } = writeBatchDiagnosis(context.outputRoot, state);
+        state = {
+          ...state,
+          diagnosis: {
+            summary: diagnosis.summary,
+            artifacts,
+            generatedAt: diagnosis.generatedAt,
+          },
+        };
         writeBatchRunState(context.outputRoot, state);
         process.exit(130);
       });
@@ -781,6 +1073,7 @@ module.exports = {
   DEFAULT_BATCH_CONCURRENCY,
   DEFAULT_BATCH_RETRIES,
   buildBatchChildArgs,
+  buildBatchDiagnosis,
   buildBatchTruthSummary,
   buildRetryArgs,
   buildRetryNodes,
@@ -796,5 +1089,7 @@ module.exports = {
   selectBatchSystems,
   summarizeBatchFailures,
   updateBatchSystem,
+  renderBatchDiagnosisMarkdown,
+  writeBatchDiagnosis,
   writeBatchRunState,
 };

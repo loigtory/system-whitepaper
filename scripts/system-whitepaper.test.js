@@ -5937,6 +5937,10 @@ test("dashboard frontend renders batch truth and repair summary", () => {
       truthReadyCount: 1,
       coverageRepairCount: 1,
       failureSummary: { recoverable: 1, quotaSensitive: 1 },
+      diagnosis: {
+        summary: { total: 2, ready: 1, blocked: 1, missingWritableClaims: 1 },
+        artifacts: { diagnosisMarkdown: "diagnosis.md" },
+      },
       runningMs: 120000,
       progress: { total: 2, completed: 1, percent: 50 },
       systems: [
@@ -5984,6 +5988,10 @@ test("dashboard frontend renders batch truth and repair summary", () => {
   assert.match(html, /写稿生成问题/);
   assert.match(html, /建议重试节点 narrative,fact-check,quality,truth-readiness/);
   assert.match(html, /额度影响 agent-writing/);
+  assert.match(html, /批量诊断 Ready 1\/2/);
+  assert.match(html, /Blocked 1/);
+  assert.match(html, /缺失可写声明 1/);
+  assert.match(html, /诊断文件 diagnosis\.md/);
 });
 
 function createDashboardFrontendContext() {
@@ -6384,16 +6392,22 @@ test("dashboard pipeline command targets one system and selected nodes", () => {
 });
 
 test("whitepaper batch runner selects systems and builds isolated child args", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
   const {
     buildBatchChildArgs,
+    buildBatchDiagnosis,
     buildRetryArgs,
     buildRetryNodes,
     classifyBatchFailure,
     createBatchState,
+    renderBatchDiagnosisMarkdown,
     resolveBatchConcurrency,
     resolveBatchRetries,
     selectBatchSystems,
     updateBatchSystem,
+    writeBatchDiagnosis,
   } = require("./run-whitepaper-batch");
   const config = {
     runtime: {},
@@ -6524,6 +6538,90 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
   );
   assert.equal(completed.summary.completed, 1);
   assert.equal(completed.summary.reviewPending, 1);
+
+  const diagnosisInput = {
+    batchId: "batch-test",
+    status: "failed",
+    systems: [
+      {
+        code: "adp",
+        name: "AI保单数据闭环平台",
+        status: "review-pending",
+        runStatus: "completed",
+        truthReadiness: {
+          scorePercent: 96,
+          canSubmitReview: true,
+          canFinalize: true,
+          blockers: [],
+          improvementActions: [],
+        },
+        writableClaimCoverage: { missingWritableClaimCount: 0 },
+      },
+      {
+        code: "claim",
+        name: "理赔系统",
+        status: "failed",
+        runStatus: "failed",
+        currentPhase: "compose",
+        currentNode: "truth-readiness",
+        truthReadiness: {
+          scorePercent: 91,
+          canSubmitReview: false,
+          canFinalize: false,
+          blockers: [
+            {
+              id: "fact-check.writable-coverage",
+              severity: "P0",
+              message: "Missing writable claims.",
+              rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+              missingWritableClaimIds: ["function:理赔:案件详情"],
+            },
+          ],
+          improvementActions: [],
+        },
+        writableClaimCoverage: {
+          missingWritableClaimCount: 1,
+          missingWritableClaimIds: ["function:理赔:案件详情"],
+        },
+        failure: {
+          category: "quality-gate",
+          label: "质量或真实度门禁未过",
+          recoverable: true,
+          action: "查看 fact-check。",
+          retryPlan: {
+            canRetry: true,
+            nodes: "narrative,fact-check,quality,truth-readiness",
+            quotaImpact: "agent-writing",
+          },
+        },
+        failureCategory: "quality-gate",
+        recoverable: true,
+        retryPlan: {
+          canRetry: true,
+          nodes: "narrative,fact-check,quality,truth-readiness",
+          quotaImpact: "agent-writing",
+        },
+      },
+    ],
+  };
+  const diagnosis = buildBatchDiagnosis(diagnosisInput);
+  assert.equal(diagnosis.summary.total, 2);
+  assert.equal(diagnosis.summary.ready, 1);
+  assert.equal(diagnosis.summary.blocked, 1);
+  assert.equal(diagnosis.summary.missingWritableClaims, 1);
+  assert.equal(diagnosis.summary.quotaSensitive, 1);
+  assert.equal(diagnosis.systems[1].ready, false);
+  assert.ok(diagnosis.systems[1].gaps.some((gap) => gap.type === "writable-claim-coverage"));
+  assert.ok(diagnosis.systems[1].actions.some((action) => action.id === "fact-check.writable-coverage"));
+  const markdown = renderBatchDiagnosisMarkdown(diagnosis);
+  assert.match(markdown, /Batch Diagnosis/);
+  assert.match(markdown, /claim/);
+  assert.match(markdown, /Missing writable claims/);
+  const diagDir = fs.mkdtempSync(path.join(os.tmpdir(), "whitepaper-batch-diagnosis-"));
+  const writtenDiagnosis = writeBatchDiagnosis(diagDir, diagnosisInput);
+  assert.equal(fs.existsSync(path.join(diagDir, "_batch", "diagnosis.json")), true);
+  assert.equal(fs.existsSync(path.join(diagDir, "_batch", "diagnosis.md")), true);
+  assert.equal(writtenDiagnosis.artifacts.diagnosisMarkdown, "diagnosis.md");
 });
 
 test("batch runner refreshes aggregate state from per-system pipeline states", () => {
@@ -6712,6 +6810,39 @@ test("batch runner classifies failed children and retries recoverable failures o
         recovered = updateNodeStatus(recovered, nodeId, "success");
       }
       writePipelineState(path.join(adpOutput, "pipeline-state.json"), recovered);
+      fs.writeFileSync(
+        path.join(adpOutput, "fact-check-report.json"),
+        JSON.stringify({
+          canFinalize: true,
+          metrics: {
+            writableClaimCoverageRatio: 1,
+            minWritableClaimCoverage: 0.8,
+            missingWritableClaimCount: 0,
+          },
+          missingWritableClaimIds: [],
+        }),
+        "utf8",
+      );
+      fs.writeFileSync(
+        path.join(adpOutput, "truth-readiness-report.json"),
+        JSON.stringify({
+          scorePercent: 96,
+          canSubmitReview: true,
+          canFinalize: true,
+          blockers: [],
+          improvementActions: [],
+          gates: {
+            factCheck: {
+              metrics: {
+                writableClaimCoverageRatio: 1,
+                minWritableClaimCoverage: 0.8,
+                missingWritableClaimCount: 0,
+              },
+            },
+          },
+        }),
+        "utf8",
+      );
       child.emit("close", 0, null);
     });
     return child;
@@ -6740,6 +6871,11 @@ test("batch runner classifies failed children and retries recoverable failures o
   );
   assert.equal(written.systems[0].runStatus, "completed");
   assert.equal(written.systems[0].attempts, 2);
+  assert.equal(written.diagnosis.summary.ready, 1);
+  assert.equal(written.diagnosis.artifacts.diagnosisJson, "diagnosis.json");
+  assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "diagnosis.json")), true);
+  assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "diagnosis.md")), true);
+  assert.match(fs.readFileSync(path.join(outputRoot, "_batch", "diagnosis.md"), "utf8"), /Batch Diagnosis/);
 });
 
 test("dashboard supports batch pipeline command and active run snapshot", () => {
@@ -6834,6 +6970,10 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
         recoverable: 1,
         quotaSensitive: 1,
       },
+      diagnosis: {
+        summary: { total: 2, ready: 1, blocked: 1, missingWritableClaims: 1 },
+        artifacts: { diagnosisMarkdown: "diagnosis.md", diagnosisJson: "diagnosis.json" },
+      },
     },
   );
   assert.equal(batchActiveRun.mode, "batch");
@@ -6845,6 +6985,7 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(batchActiveRun.coverageRepairCount, 1);
   assert.equal(batchActiveRun.failureSummary.recoverable, 1);
   assert.equal(batchActiveRun.failureSummary.quotaSensitive, 1);
+  assert.equal(batchActiveRun.diagnosis.summary.ready, 1);
 
   const fs = require("node:fs");
   const os = require("node:os");
@@ -6885,10 +7026,22 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
     }),
     "utf8",
   );
+  fs.writeFileSync(
+    path.join(dir, "outputs", "_batch", "diagnosis.json"),
+    JSON.stringify({
+      artifactType: "batch-diagnosis",
+      summary: { total: 1, ready: 0, blocked: 1, missingWritableClaims: 2 },
+      systems: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(dir, "outputs", "_batch", "diagnosis.md"), "# Batch Diagnosis", "utf8");
   const snapshot = buildDashboardSnapshot({ configPath });
   assert.equal(snapshot.batch.status, "running");
   assert.equal(snapshot.activeRun.mode, "batch");
   assert.equal(snapshot.activeRun.systems[0].currentNode, "narrative");
+  assert.equal(snapshot.batchDiagnosis.summary.blocked, 1);
+  assert.equal(snapshot.batchDiagnosisArtifacts.markdown.exists, true);
 });
 
 test("dashboard rejected wording review records overview rewrite scope", () => {

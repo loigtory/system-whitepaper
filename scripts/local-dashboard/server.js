@@ -873,6 +873,7 @@ function buildBatchActiveRun(run, systems, batch) {
   const truthReadyCount = batchSystems.filter((item) => item.truthReadiness?.canSubmitReview).length;
   const repairCount = batchSystems.filter((item) => item.coverageRepair).length;
   const failureSummary = batch?.failureSummary || { counts: {}, recoverable: 0, quotaSensitive: 0 };
+  const diagnosis = batch?.diagnosis || null;
   return {
     mode: "batch",
     systemCode: currentCodes.join(","),
@@ -886,6 +887,7 @@ function buildBatchActiveRun(run, systems, batch) {
     truthReadyCount,
     coverageRepairCount: repairCount,
     failureSummary,
+    diagnosis,
     startedAt: run.startedAt || batch?.startedAt || "",
     runningMs:
       run.startedAt || batch?.startedAt
@@ -1007,6 +1009,11 @@ function resetPipelineStateOnDisk(systemCode, configPath) {
 function buildDashboardSnapshot(options = {}) {
   const { configPath, config, outputRoot } = resolveDashboardPaths(options);
   const batch = readOptionalJsonObject(path.join(outputRoot, "_batch", "run-state.json"));
+  const batchDiagnosis = readOptionalJsonObject(path.join(outputRoot, "_batch", "diagnosis.json"));
+  const batchDiagnosisArtifacts = {
+    json: fileInfo(path.join(outputRoot, "_batch", "diagnosis.json")),
+    markdown: fileInfo(path.join(outputRoot, "_batch", "diagnosis.md")),
+  };
   const pricingConfig = config.narrative?.pricing || {};
   const systems = (config.systems || []).map((system) =>
     buildSystemDashboardItem(system, outputRoot, { pricingConfig }),
@@ -1066,6 +1073,8 @@ function buildDashboardSnapshot(options = {}) {
     configPath,
     outputRoot,
     batch,
+    batchDiagnosis,
+    batchDiagnosisArtifacts,
     summary: buildSummary(systems),
     activeRun,
     systems,
