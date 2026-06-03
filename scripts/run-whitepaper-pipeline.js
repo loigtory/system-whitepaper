@@ -502,14 +502,15 @@ async function runPipelineNode(nodeId, context) {
     return { evidenceQuality, narrativeQuality };
   }
   if (nodeId === "truth-readiness") {
-    return runNodeScript(
-      [
-        "scripts/check-truth-readiness.js",
-        "--input",
-        systemOutput,
-      ],
-      { cwd: projectRoot },
-    );
+    const readinessArgs = [
+      "scripts/check-truth-readiness.js",
+      "--input",
+      systemOutput,
+    ];
+    if (databaseProfileEnabled(system)) {
+      readinessArgs.push("--require-database-evidence");
+    }
+    return runNodeScript(readinessArgs, { cwd: projectRoot });
   }
   if (nodeId === "review") {
     return { skipped: true, reason: "review is handled by H5" };

@@ -1,6 +1,6 @@
 ---
 name: system-whitepaper
-description: Use when generating concise system function whitepapers from test-environment web systems, browser evidence, screenshots, Playwright exploration results, or AI_AUTO_TEST_ validation data.
+description: Use when generating or validating high-truth system function whitepapers from test-environment web systems, browser evidence, screenshots, Playwright exploration results, AI_AUTO_TEST_ validation data, redacted database evidence, Truth Pipeline artifacts, or 4-thread batch whitepaper runs.
 ---
 
 # System Whitepaper
@@ -77,7 +77,7 @@ Use the npm scripts as the stable entrypoints:
 - `npm run truth:universe -- --input outputs/<code>`: merge UI evidence summary and redacted database profile into `function-universe.json` candidates.
 - `npm run truth:claims -- --input outputs/<code>`: convert the function universe into `verified-claims.json` with confidence and writable/non-writable boundaries; database-only inferred claims are not writable.
 - `npm run truth:fact-check -- --input outputs/<code>`: check `whitepaper.pending-review.md` against writable claims; block unsupported/non-writable body assertions and low writable-claim coverage.
-- `npm run truth:readiness -- --input outputs/<code>`: aggregate truth gates into `truth-readiness-report.json`; a non-passing report blocks review submission.
+- `npm run truth:readiness -- --input outputs/<code>`: aggregate truth gates into `truth-readiness-report.json`; a non-passing report blocks review submission. In the full pipeline, systems with `databaseProfile.enabled=true` automatically require redacted database evidence before the Truth gate can pass.
 - `npm run sync`: sync the system registry into `config/systems.local.yaml`.
 - `npm run pipeline`: run the unattended end-to-end pipeline for configured systems.
 - `npm run batch`: run the full whitepaper pipeline for all configured systems with 4 parallel workers; use `-- --systems <code1>,<code2>` to limit scope, `-- --concurrency <n>` to change worker count, or `-- --batch-retries <n>` to enable bounded recoverable retries.

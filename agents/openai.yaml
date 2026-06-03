@@ -1,7 +1,7 @@
 interface:
   display_name: "System Whitepaper"
-  short_description: "Generate evidence-driven system function whitepapers."
-  default_prompt: "Use $system-whitepaper to generate or revise a concise evidence-driven system function whitepaper."
+  short_description: "Generate high-truth whitepapers with UI, DB, Truth Pipeline, and batch gates."
+  default_prompt: "Use $system-whitepaper to generate, validate, or repair a high-truth system function whitepaper with browser evidence, redacted database evidence when configured, Truth Pipeline checks, and 4-thread batch acceptance gates."
 
 policy:
   allow_implicit_invocation: true

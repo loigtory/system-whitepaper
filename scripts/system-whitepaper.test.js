@@ -8419,6 +8419,26 @@ test("pipeline truth nodes build claims and fact-check artifacts", async () => {
   await runPipelineNode("truth-universe", context);
   await runPipelineNode("truth-claims", context);
   await runPipelineNode("fact-check", context);
+  fs.writeFileSync(
+    path.join(systemOutput, "quality-report.json"),
+    JSON.stringify({
+      canFinalize: true,
+      menuCoverage: 1,
+      corePageScreenshotCoverage: 1,
+      coreFunctionClassificationCoverage: 1,
+      writeOperationSafetyCompliance: 1,
+      unverifiedContentLabeling: 1,
+      coreConclusionTraceability: 1,
+      failures: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "narrative-quality-report.json"),
+    JSON.stringify({ canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } }),
+    "utf8",
+  );
+  await runPipelineNode("truth-readiness", context);
 
   assert.equal(fs.existsSync(path.join(systemOutput, "data-dictionary.json")), true);
   assert.equal(fs.existsSync(path.join(systemOutput, "entity-model.json")), true);
@@ -8426,6 +8446,94 @@ test("pipeline truth nodes build claims and fact-check artifacts", async () => {
   assert.equal(fs.existsSync(path.join(systemOutput, "verified-claims.json")), true);
   const report = JSON.parse(fs.readFileSync(path.join(systemOutput, "fact-check-report.json"), "utf8"));
   assert.equal(report.canFinalize, true);
+  const readiness = JSON.parse(fs.readFileSync(path.join(systemOutput, "truth-readiness-report.json"), "utf8"));
+  assert.equal(readiness.canSubmitReview, true);
+  assert.equal(readiness.requirements.databaseEvidenceRequired, true);
+  assert.equal(readiness.gates.database.available, true);
+});
+
+test("pipeline truth-readiness requires database evidence when databaseProfile is enabled", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runPipelineNode } = require("./run-whitepaper-pipeline");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-truth-db-required-"));
+  const projectRoot = path.resolve(__dirname, "..");
+  const systemOutput = path.join(tempRoot, "outputs", "adp");
+  fs.mkdirSync(systemOutput, { recursive: true });
+  const context = {
+    args: {},
+    config: {},
+    configPath: path.join(tempRoot, "systems.local.yaml"),
+    system: { code: "adp", name: "AI保单数据闭环平台", databaseProfile: { enabled: true } },
+    systemOutput,
+    projectRoot,
+  };
+  fs.writeFileSync(
+    path.join(systemOutput, "quality-report.json"),
+    JSON.stringify({
+      canFinalize: true,
+      menuCoverage: 1,
+      corePageScreenshotCoverage: 1,
+      coreFunctionClassificationCoverage: 1,
+      writeOperationSafetyCompliance: 1,
+      unverifiedContentLabeling: 1,
+      coreConclusionTraceability: 1,
+      failures: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "verified-claims.json"),
+    JSON.stringify({
+      rules: {
+        lowConfidenceNotWritable: true,
+        databaseOnlyNotConfirmed: true,
+        databaseOnlyNotWritable: true,
+      },
+      metrics: { claimCount: 1, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0 },
+      writableClaimIds: ["function:保单任务:任务列表"],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "fact-check-report.json"),
+    JSON.stringify({
+      canFinalize: true,
+      failures: [],
+      metrics: {
+        claimCount: 1,
+        writableClaimCount: 1,
+        checkedAssertions: 1,
+        supportedAssertions: 1,
+        supportedRatio: 1,
+        coveredWritableClaimCount: 1,
+        missingWritableClaimCount: 0,
+        writableClaimCoverageRatio: 1,
+        minWritableClaimCoverage: 0.8,
+      },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "narrative-quality-report.json"),
+    JSON.stringify({ canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
+
+  await assert.rejects(
+    () => runPipelineNode("truth-readiness", context),
+    /databaseProfile\.enabled=true but no redacted database evidence is available/,
+  );
+  const readiness = JSON.parse(fs.readFileSync(path.join(systemOutput, "truth-readiness-report.json"), "utf8"));
+  assert.equal(readiness.canSubmitReview, false);
+  assert.equal(readiness.requirements.databaseEvidenceRequired, true);
+  assert.ok(readiness.blockers.some((item) => item.id === "database.required-profile-missing"));
+  assert.equal(
+    readiness.improvementActions.some((item) => item.id === "database.optional-profile"),
+    false,
+  );
 });
 
 test("pipeline auto repairs writable claim coverage once during fact check", async () => {

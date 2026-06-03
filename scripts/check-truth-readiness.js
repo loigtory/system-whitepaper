@@ -457,6 +457,40 @@ function collectBlockers(gates) {
   return blockers;
 }
 
+function normalizeBoolean(value) {
+  if (value === true || value === false) return value;
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return false;
+  return ["1", "true", "yes", "y", "on"].includes(text);
+}
+
+function buildDatabaseRequirementGate(gate = {}, options = {}) {
+  const required = normalizeBoolean(options.requireDatabaseEvidence);
+  const pass = !required || gate.available === true;
+  return {
+    ...gate,
+    required,
+    pass,
+    failures: required && !gate.available ? ["Redacted database evidence is required but missing."] : [],
+    warnings:
+      required || gate.available
+        ? []
+        : ["No redacted database profile was available; UI evidence remains the primary truth source."],
+  };
+}
+
+function collectDatabaseRequirementBlockers(gates, options = {}) {
+  if (!normalizeBoolean(options.requireDatabaseEvidence) || gates.database.available) return [];
+  return [
+    blocker(
+      "database.required-profile-missing",
+      "P0",
+      "databaseProfile.enabled=true but no redacted database evidence is available.",
+      ["db-profile", "db-model", "truth-universe", "truth-claims", "truth-readiness"],
+    ),
+  ];
+}
+
 function buildImprovementActions(gates, blockers) {
   const actions = blockers.map((item) => action(item.id, item.message, item.rerunNodes));
   if (gates.factCheck.missingWritableClaimIds?.length) {
@@ -473,7 +507,7 @@ function buildImprovementActions(gates, blockers) {
       ),
     );
   }
-  if (!gates.database.available) {
+  if (!gates.database.available && !gates.database.required) {
     actions.push(
       action(
         "database.optional-profile",
@@ -497,6 +531,7 @@ function buildImprovementActions(gates, blockers) {
 function buildTruthReadinessReport(input = {}) {
   const threshold = normalizeThreshold(input.threshold);
   const artifacts = input.artifacts || {};
+  const databaseGate = buildDatabaseRequirementGate(buildDatabaseGate(artifacts), input);
   const gates = {
     evidence: buildEvidenceGate(artifacts.quality || { status: "missing", file: REQUIRED_ARTIFACTS.quality }),
     claims: buildClaimsGate(artifacts.claims || { status: "missing", file: REQUIRED_ARTIFACTS.claims }),
@@ -506,14 +541,17 @@ function buildTruthReadinessReport(input = {}) {
     narrative: buildNarrativeGate(
       artifacts.narrative || { status: "missing", file: REQUIRED_ARTIFACTS.narrative },
     ),
-    database: buildDatabaseGate(artifacts),
+    database: databaseGate,
   };
   const score =
     gates.evidence.score * 0.35 +
     gates.claims.score * 0.25 +
     gates.factCheck.score * 0.25 +
     gates.narrative.score * 0.15;
-  const blockers = collectBlockers(gates);
+  const blockers = [
+    ...collectBlockers(gates),
+    ...collectDatabaseRequirementBlockers(gates, input),
+  ];
   if (score < threshold) {
     blockers.push(
       blocker(
@@ -531,6 +569,9 @@ function buildTruthReadinessReport(input = {}) {
     generatedAt: input.generatedAt || new Date().toISOString(),
     system: input.system || artifacts.evidenceSummary?.value?.system || artifacts.claims?.value?.system || null,
     threshold,
+    requirements: {
+      databaseEvidenceRequired: gates.database.required,
+    },
     score: clamp01(score),
     scorePercent: percent(score),
     canSubmitReview,
@@ -548,6 +589,7 @@ function runTruthReadinessCheck(options = {}) {
   const report = buildTruthReadinessReport({
     artifacts,
     threshold: options.threshold,
+    requireDatabaseEvidence: options.requireDatabaseEvidence,
   });
   const outputPath = options.outputPath || path.join(inputDir, "truth-readiness-report.json");
   writeJson(outputPath, report);
@@ -563,6 +605,7 @@ function main() {
     inputDir: args.input,
     outputPath: args.output,
     threshold: args.threshold,
+    requireDatabaseEvidence: args["require-database-evidence"],
   });
   const outputPath = args.output || path.join(path.resolve(args.input), "truth-readiness-report.json");
   console.log(`Truth readiness report written: ${outputPath}`);
