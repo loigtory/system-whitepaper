@@ -49,10 +49,18 @@ function sanitizeSampleRow(row = {}, columns = []) {
   return sanitized;
 }
 
+function sanitizeSecretValue(key, value) {
+  if (SECRET_FIELD_PATTERN.test(key)) return "[redacted]";
+  if (Array.isArray(value)) return value.map((item) => sanitizeSecretValue("", item));
+  if (value && typeof value === "object") return sanitizeSecret(value);
+  return value;
+}
+
 function sanitizeSecret(secret = {}) {
+  if (!secret || typeof secret !== "object" || Array.isArray(secret)) return {};
   const sanitized = {};
-  for (const [key, value] of Object.entries(secret || {})) {
-    sanitized[key] = SECRET_FIELD_PATTERN.test(key) ? "[redacted]" : value;
+  for (const [key, value] of Object.entries(secret)) {
+    sanitized[key] = sanitizeSecretValue(key, value);
   }
   return sanitized;
 }

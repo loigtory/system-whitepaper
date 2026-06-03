@@ -10980,6 +10980,14 @@ test("collect database profile writes redacted schema evidence from private meta
       database: "adp_test",
       user: "readonly",
       password: "secret",
+      ssl: {
+        ca: "public-ca",
+        password: "nested-secret",
+      },
+      options: [
+        { name: "keep", value: "plain" },
+        { token: "nested-token", endpointUrl: "https://db.internal" },
+      ],
       metadataFile: "./secrets/db/adp-metadata.json",
     }),
     "utf8",
@@ -11045,7 +11053,15 @@ test("collect database profile writes redacted schema evidence from private meta
   const customerPhoneColumn = profile.tables[0].columns.find((column) => column.name === "customer_phone");
   assert.equal(customerPhoneColumn.nullable, false);
   assert.equal(customerPhoneColumn.primaryKey, false);
-  assert.equal(sanitizeSecret({ password: "secret" }).password, "[redacted]");
+  assert.equal(profile.source.secret.ssl.ca, "public-ca");
+  assert.equal(profile.source.secret.ssl.password, "[redacted]");
+  assert.equal(profile.source.secret.options[0].value, "plain");
+  assert.equal(profile.source.secret.options[1].token, "[redacted]");
+  assert.equal(profile.source.secret.options[1].endpointUrl, "[redacted]");
+  assert.deepEqual(sanitizeSecret({ password: "secret", nested: { token: "abc", keep: "ok" } }), {
+    password: "[redacted]",
+    nested: { token: "[redacted]", keep: "ok" },
+  });
   assert.equal(sanitizeSampleRow({ customerName: "张三" }).customerName, "***");
 });
 
