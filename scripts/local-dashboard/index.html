@@ -806,6 +806,9 @@
           const repairQueue = run.repairQueue;
           const repairQueueSummary = repairQueue?.summary || {};
           const repairQueueArtifacts = repairQueue?.artifacts || {};
+          const repairFollowUp = run.repairFollowUp;
+          const repairFollowUpSummary = repairFollowUp?.summary || {};
+          const repairFollowUpArtifacts = repairFollowUp?.artifacts || {};
           const items = systems
             .map(
               (item) => {
@@ -843,6 +846,8 @@
                   ${diagnosisArtifacts.diagnosisMarkdown ? `<div class="muted">诊断文件 ${escapeHtml(diagnosisArtifacts.diagnosisMarkdown)}</div>` : ""}
                   ${repairQueue ? `<div class="muted">修复队列 自动 ${escapeHtml(String(repairQueueSummary.autoRunnable || 0))}/${escapeHtml(String(repairQueueSummary.total || 0))} · 阻塞 ${escapeHtml(String(repairQueueSummary.blocked || 0))} · 写稿额度 ${escapeHtml(String(repairQueueSummary.requiresAgentWriting || 0))}</div>` : ""}
                   ${repairQueueArtifacts.repairQueueMarkdown ? `<div class="muted">修复队列文件 ${escapeHtml(repairQueueArtifacts.repairQueueMarkdown)}</div>` : ""}
+                  ${repairFollowUp ? `<div class="muted">Repair follow-up ${escapeHtml(repairFollowUp.status || "-")} · commands ${escapeHtml(String(repairFollowUpSummary.commands || 0))} · ${escapeHtml(repairFollowUp.nextBestAction || "-")}</div>` : ""}
+                  ${repairFollowUpArtifacts.followUpMarkdown ? `<div class="muted">Repair follow-up file ${escapeHtml(repairFollowUpArtifacts.followUpMarkdown)}</div>` : ""}
                   ${run.lastError ? `<div class="status failed">${escapeHtml(run.lastError)}</div>` : ""}
                 </div>
                 <div class="muted">PID ${run.pid || "-"} · ${formatDuration(run.runningMs)}</div>

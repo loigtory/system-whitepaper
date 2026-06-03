@@ -875,6 +875,7 @@ function buildBatchActiveRun(run, systems, batch) {
   const failureSummary = batch?.failureSummary || { counts: {}, recoverable: 0, quotaSensitive: 0 };
   const diagnosis = batch?.diagnosis || null;
   const repairQueue = batch?.repairQueue || null;
+  const repairFollowUp = batch?.repairFollowUp || null;
   return {
     mode: "batch",
     systemCode: currentCodes.join(","),
@@ -890,6 +891,7 @@ function buildBatchActiveRun(run, systems, batch) {
     failureSummary,
     diagnosis,
     repairQueue,
+    repairFollowUp,
     startedAt: run.startedAt || batch?.startedAt || "",
     runningMs:
       run.startedAt || batch?.startedAt
@@ -1024,12 +1026,15 @@ function buildDashboardSnapshot(options = {}) {
   const batchRepairRunState = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-run-state.json"));
   const batchRepairRunPlan = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-run-plan.json"));
   const batchRepairClosure = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-closure.json"));
+  const batchRepairFollowUpPlan = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-follow-up-plan.json"));
   const batchRepairRunArtifacts = {
     state: fileInfo(path.join(outputRoot, "_batch", "repair-run-state.json")),
     planJson: fileInfo(path.join(outputRoot, "_batch", "repair-run-plan.json")),
     planMarkdown: fileInfo(path.join(outputRoot, "_batch", "repair-run-plan.md")),
     closureJson: fileInfo(path.join(outputRoot, "_batch", "repair-closure.json")),
     closureMarkdown: fileInfo(path.join(outputRoot, "_batch", "repair-closure.md")),
+    followUpJson: fileInfo(path.join(outputRoot, "_batch", "repair-follow-up-plan.json")),
+    followUpMarkdown: fileInfo(path.join(outputRoot, "_batch", "repair-follow-up-plan.md")),
   };
   const batchForActiveRun = batch
     ? {
@@ -1050,6 +1055,21 @@ function buildDashboardSnapshot(options = {}) {
                 summary: batchRepairQueue.summary || {},
                 artifacts: { repairQueueJson: "repair-queue.json", repairQueueMarkdown: "repair-queue.md" },
                 generatedAt: batchRepairQueue.generatedAt || "",
+              }
+            : null),
+        repairFollowUp:
+          batch.repairFollowUp ||
+          batch.followUpPlan ||
+          (batchRepairFollowUpPlan
+            ? {
+                status: batchRepairFollowUpPlan.status || "",
+                nextBestAction: batchRepairFollowUpPlan.nextBestAction || "",
+                summary: batchRepairFollowUpPlan.summary || {},
+                artifacts: {
+                  followUpJson: "repair-follow-up-plan.json",
+                  followUpMarkdown: "repair-follow-up-plan.md",
+                },
+                generatedAt: batchRepairFollowUpPlan.generatedAt || "",
               }
             : null),
       }
@@ -1120,6 +1140,7 @@ function buildDashboardSnapshot(options = {}) {
     batchRepairRunState,
     batchRepairRunPlan,
     batchRepairClosure,
+    batchRepairFollowUpPlan,
     batchRepairRunArtifacts,
     summary: buildSummary(systems),
     activeRun,

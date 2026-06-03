@@ -6937,6 +6937,7 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   const { EventEmitter } = require("node:events");
   const {
     buildRepairClosureReport,
+    buildRepairFollowUpPlan,
     buildRepairRunPlan,
     runRepairQueue,
     validateRepairItem,
@@ -7074,6 +7075,93 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   assert.ok(blockedClosure.blockers.some((item) => item.includes("below 95%")));
   assert.ok(blockedClosure.blockers.some((item) => item.includes("repair queue")));
 
+  const passedFollowUp = buildRepairFollowUpPlan(
+    { status: "success", groups: [] },
+    {
+      closure: passedClosure,
+      diagnosis: {
+        artifactType: "batch-diagnosis",
+        summary: { total: 1, ready: 1, blocked: 0, missingWritableClaims: 0 },
+        systems: [
+          {
+            code: "adp",
+            ready: true,
+            truthScorePercent: 96,
+            canSubmitReview: true,
+            missingWritableClaimCount: 0,
+          },
+        ],
+      },
+      repairQueue: {
+        artifactType: "batch-repair-queue",
+        summary: { total: 0, autoRunnable: 0, blocked: 0, requiresAgentWriting: 0 },
+        items: [],
+      },
+    },
+  );
+  assert.equal(passedFollowUp.status, "complete");
+  assert.equal(passedFollowUp.summary.commands, 0);
+
+  const followUpPlan = buildRepairFollowUpPlan(
+    {
+      status: "partial",
+      groups: [
+        {
+          id: "repair-group-02",
+          status: "pending",
+          systems: ["adp"],
+          nodesCsv: "fact-check,quality,truth-readiness",
+          requiresAgentWriting: false,
+        },
+      ],
+    },
+    {
+      closure: blockedClosure,
+      diagnosis: {
+        artifactType: "batch-diagnosis",
+        summary: { total: 1, ready: 0, blocked: 1, missingWritableClaims: 2 },
+        systems: [
+          {
+            code: "claim",
+            ready: false,
+            truthScorePercent: 91,
+            canSubmitReview: false,
+            missingWritableClaimCount: 2,
+            actions: [
+              {
+                id: "narrative.cover-missing-writable-claims",
+                message: "Cover missing writable claims.",
+                canRetry: true,
+                rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+                narrativePart: "function-sections",
+                quotaImpact: "agent-writing",
+              },
+            ],
+          },
+        ],
+      },
+      repairQueue: queue,
+      concurrency: 4,
+    },
+  );
+  assert.equal(followUpPlan.status, "ready-to-run");
+  assert.ok(followUpPlan.summary.lowQuotaCommands > 0);
+  assert.ok(followUpPlan.summary.agentWritingCommands > 0);
+  assert.ok(followUpPlan.commands.some((item) => item.id === "repair-remaining-low-quota"));
+  assert.ok(followUpPlan.commands.some((item) => item.id === "repair-remaining-agent-writing"));
+  assert.equal(
+    followUpPlan.commands.find((item) => item.id === "repair-remaining-agent-writing").canAutoRun,
+    false,
+  );
+  assert.match(
+    followUpPlan.commands.find((item) => item.id === "repair-remaining-low-quota").command.preview,
+    /npm run repair:batch/,
+  );
+  assert.equal(
+    followUpPlan.commands.find((item) => item.id === "repair-remaining-low-quota").command.args.includes("--max-items"),
+    false,
+  );
+
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "repair-queue-runner-"));
   const configPath = path.join(dir, "systems.local.yaml");
   fs.writeFileSync(
@@ -7101,7 +7189,11 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-run-state.json")), true);
   assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-closure.json")), true);
   assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-closure.md")), true);
+  assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-follow-up-plan.json")), true);
+  assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-follow-up-plan.md")), true);
   assert.equal(dryRunState.closure.status, "blocked");
+  assert.equal(dryRunState.followUpPlan.status, "ready-to-run");
+  assert.equal(dryRunState.closure.followUp.status, "ready-to-run");
 
   const launched = [];
   const fakeSpawn = (command, args) => {
@@ -7119,6 +7211,7 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   });
   assert.equal(runState.status, "success");
   assert.equal(runState.closure.status, "blocked");
+  assert.equal(runState.followUpPlan.status, "ready-to-run");
   assert.equal(launched.length, 1);
   assert.equal(launched[0].command, process.execPath);
   assert.ok(launched[0].args.includes("--systems"));
@@ -7324,6 +7417,29 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   );
   fs.writeFileSync(path.join(dir, "outputs", "_batch", "repair-closure.md"), "# Batch Repair Closure", "utf8");
   fs.writeFileSync(
+    path.join(dir, "outputs", "_batch", "repair-follow-up-plan.json"),
+    JSON.stringify({
+      artifactType: "batch-repair-follow-up-plan",
+      status: "needs-agent-writing",
+      nextBestAction: "Run an agent-writing follow-up command only when quota policy permits it.",
+      summary: { commands: 1, lowQuotaCommands: 0, agentWritingCommands: 1 },
+      commands: [
+        {
+          id: "repair-remaining-agent-writing",
+          requiresAgentWriting: true,
+          canAutoRun: false,
+          command: { npmScript: "repair:batch", args: ["--allow-agent-writing"] },
+        },
+      ],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "outputs", "_batch", "repair-follow-up-plan.md"),
+    "# Batch Repair Follow-up Plan",
+    "utf8",
+  );
+  fs.writeFileSync(
     path.join(dir, "outputs", "_batch", "repair-run-state.json"),
     JSON.stringify({
       artifactType: "batch-repair-run-state",
@@ -7343,8 +7459,11 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(snapshot.batchRepairRunPlan.summary.runnableGroups, 1);
   assert.equal(snapshot.batchRepairRunState.status, "dry-run");
   assert.equal(snapshot.batchRepairClosure.status, "blocked");
+  assert.equal(snapshot.batchRepairFollowUpPlan.status, "needs-agent-writing");
   assert.equal(snapshot.batchRepairRunArtifacts.planMarkdown.exists, true);
   assert.equal(snapshot.batchRepairRunArtifacts.closureMarkdown.exists, true);
+  assert.equal(snapshot.batchRepairRunArtifacts.followUpMarkdown.exists, true);
+  assert.equal(snapshot.activeRun.repairFollowUp.status, "needs-agent-writing");
   assert.equal(snapshot.activeRun.repairQueue.summary.requiresAgentWriting, 1);
 });
 
