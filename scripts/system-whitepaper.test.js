@@ -7709,6 +7709,117 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   assert.ok(stale.blockers.some((item) => item.id === "truth-readiness.stale-sources"));
 
   fs.writeFileSync(
+    path.join(systemOutput, "fact-check-report.json"),
+    JSON.stringify({
+      canFinalize: false,
+      failures: [],
+      metrics: {
+        claimCount: 1,
+        writableClaimCount: 1,
+        checkedAssertions: 1,
+        supportedAssertions: 1,
+        supportedRatio: 1,
+        coveredWritableClaimCount: 0,
+        missingWritableClaimCount: 1,
+        writableClaimCoverageRatio: 0,
+        minWritableClaimCoverage: 0.8,
+      },
+      missingWritableClaimIds: ["function:保单任务:任务列表"],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "quality-report.json"),
+    JSON.stringify({
+      canFinalize: true,
+      menuCoverage: 1,
+      corePageScreenshotCoverage: 1,
+      coreFunctionClassificationCoverage: 1,
+      writeOperationSafetyCompliance: 1,
+      unverifiedContentLabeling: 1,
+      coreConclusionTraceability: 1,
+      failures: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      artifactType: "truth-readiness-report",
+      version: 1,
+      threshold: 0.95,
+      score: 0.99,
+      scorePercent: 99,
+      canSubmitReview: true,
+      canFinalize: true,
+      gates: {
+        database: { pass: true, available: true, required: true, profileAvailable: true },
+        factCheck: {
+          pass: true,
+          metrics: {
+            writableClaimCoverageRatio: 1,
+            minWritableClaimCoverage: 0.8,
+            missingWritableClaimCount: 0,
+          },
+        },
+      },
+      requirements: { databaseEvidenceRequired: true },
+      blockers: [],
+      improvementActions: [],
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+      generatedAt: "2026-06-03T00:03:00.000Z",
+    }),
+    "utf8",
+  );
+  const currentGateFailed = buildBatchAcceptanceReport({ args: { config: configPath } });
+  assert.equal(currentGateFailed.status, "blocked");
+  assert.equal(currentGateFailed.systems[0].scorePercent, 75);
+  assert.equal(currentGateFailed.systems[0].canSubmitReview, false);
+  assert.ok(currentGateFailed.blockers.some((item) => item.id === "truth-readiness.current-gate-failed"));
+  assert.ok(currentGateFailed.blockers.some((item) => item.id === "fact-check.writable-coverage"));
+  assert.ok(currentGateFailed.blockers.some((item) => item.id === "fact-check.missing-writable-claims"));
+
+  fs.writeFileSync(
+    path.join(systemOutput, "fact-check-report.json"),
+    JSON.stringify({
+      canFinalize: true,
+      failures: [],
+      metrics: {
+        claimCount: 1,
+        writableClaimCount: 1,
+        checkedAssertions: 1,
+        supportedAssertions: 1,
+        supportedRatio: 1,
+        coveredWritableClaimCount: 1,
+        missingWritableClaimCount: 0,
+        writableClaimCoverageRatio: 1,
+        minWritableClaimCoverage: 0.8,
+      },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      artifactType: "truth-readiness-report",
+      version: 1,
+      threshold: 0.95,
+      score: 0.94,
+      scorePercent: 94,
+      canSubmitReview: true,
+      canFinalize: true,
+      gates: {
+        database: { available: true },
+        factCheck: { metrics: { writableClaimCoverageRatio: 1, minWritableClaimCoverage: 0.8, missingWritableClaimCount: 0 } },
+      },
+      requirements: { databaseEvidenceRequired: true },
+      blockers: [],
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
+
+  fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
     JSON.stringify({
       ...accepted.systems[0],

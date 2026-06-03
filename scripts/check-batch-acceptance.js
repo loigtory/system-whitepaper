@@ -7,7 +7,13 @@ const {
   readOptionalJsonObject,
   writeJson,
 } = require("./system-whitepaper-lib");
-const { findStaleReadinessSources, isValidDatabaseProfile, normalizeThreshold } = require("./check-truth-readiness");
+const {
+  buildTruthReadinessReport,
+  findStaleReadinessSources,
+  isValidDatabaseProfile,
+  loadReadinessInputs,
+  normalizeThreshold,
+} = require("./check-truth-readiness");
 
 const DEFAULT_TARGET_TRUTH_SCORE_PERCENT = 95;
 const ACCEPTED_BATCH_STATUSES = new Set(["success", "review-pending", "finalized"]);
@@ -28,6 +34,10 @@ function splitCsv(value) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function unique(items) {
+  return [...new Set((items || []).filter(Boolean))];
 }
 
 function percentFromReport(report = {}) {
@@ -78,6 +88,35 @@ function truthReportLooksLikeSmoke(report = {}) {
   return (Array.isArray(report.improvementActions) ? report.improvementActions : []).some((item) =>
     /smoke|local-e2e/i.test(`${item.id || ""} ${item.message || ""}`),
   );
+}
+
+function truthRequiresDatabaseEvidence(truth = {}, databaseProfileConfigured = false) {
+  if (databaseProfileConfigured) return true;
+  if (truth.requirements?.databaseEvidenceRequired !== undefined) {
+    return truth.requirements.databaseEvidenceRequired;
+  }
+  if (truth.gates?.database?.required !== undefined) return truth.gates.database.required;
+  return false;
+}
+
+function currentTruthFailureSummary(report = {}) {
+  const blockers = Array.isArray(report.blockers)
+    ? report.blockers.map((item) => item.id || item.message || "").filter(Boolean)
+    : [];
+  const failures = Object.values(report.gates || {})
+    .flatMap((gate) => (Array.isArray(gate?.failures) ? gate.failures : []))
+    .map(String)
+    .filter(Boolean);
+  return unique([...blockers, ...failures]).slice(0, 8).join(", ");
+}
+
+function currentTruthRerunNodes(report = {}) {
+  const nodes = unique(
+    (Array.isArray(report.blockers) ? report.blockers : []).flatMap((item) =>
+      Array.isArray(item.rerunNodes) ? item.rerunNodes : [],
+    ),
+  );
+  return nodes.length ? nodes : ["truth-readiness"];
 }
 
 function markdownLooksLikeSmoke(markdown = "") {
@@ -138,6 +177,16 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
     canFinalize = Boolean(truth.canFinalize);
     staleSources = findStaleReadinessSources(outputDir, truth);
     smokeTruth = truthReportLooksLikeSmoke(truth);
+    const currentTruth = buildTruthReadinessReport({
+      artifacts: loadReadinessInputs(outputDir),
+      threshold: targetTruthScorePercent,
+      requireDatabaseEvidence: truthRequiresDatabaseEvidence(truth, databaseProfileConfigured),
+      expectedSystem: { code, name: system.name || "" },
+    });
+    const currentScorePercent = percentFromReport(currentTruth);
+    scorePercent = Math.min(scorePercent, currentScorePercent);
+    canSubmitReview = canSubmitReview && Boolean(currentTruth.canSubmitReview);
+    canFinalize = canFinalize && Boolean(currentTruth.canFinalize);
     if (smokeTruth) {
       blockers.push(
         blocker("truth-readiness.smoke-report", "truth-readiness-report.json is marked as local smoke evidence.", {
@@ -146,7 +195,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
         }),
       );
     }
-    if (!canSubmitReview) {
+    if (truth.canSubmitReview !== true) {
       blockers.push(
         blocker("truth-readiness.not-submittable", "truth-readiness-report.json does not allow review submission.", {
           systemCode: code,
@@ -166,6 +215,24 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
         ),
       );
     }
+    if (!currentTruth.canSubmitReview || currentScorePercent < targetTruthScorePercent) {
+      const summary = currentTruthFailureSummary(currentTruth);
+      blockers.push(
+        blocker(
+          "truth-readiness.current-gate-failed",
+          [
+            `Current truth readiness gate fails against latest artifacts: canSubmitReview=${Boolean(currentTruth.canSubmitReview)}, score=${currentScorePercent}%.`,
+            summary ? `Reasons: ${summary}.` : "",
+          ]
+            .filter(Boolean)
+            .join(" "),
+          {
+            systemCode: code,
+            rerunNodes: currentTruthRerunNodes(currentTruth),
+          },
+        ),
+      );
+    }
     if (staleSources.length) {
       blockers.push(
         blocker("truth-readiness.stale-sources", "truth-readiness source fingerprints are stale.", {
@@ -174,7 +241,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
         }),
       );
     }
-    const factMetrics = truth.gates?.factCheck?.metrics || factCheck?.metrics || {};
+    const factMetrics = currentTruth.gates?.factCheck?.metrics || truth.gates?.factCheck?.metrics || factCheck?.metrics || {};
     missingWritableClaimCount = Number(factMetrics.missingWritableClaimCount || 0);
     writableClaimCoverageRatio = Number(factMetrics.writableClaimCoverageRatio);
     minWritableClaimCoverage = Number(factMetrics.minWritableClaimCoverage || 0.8);
@@ -202,7 +269,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
       );
     }
     databaseEvidenceAvailable = Boolean(
-      truth.gates?.database?.profileAvailable || isValidDatabaseProfile(databaseProfile, { code }),
+      currentTruth.gates?.database?.profileAvailable || isValidDatabaseProfile(databaseProfile, { code }),
     );
   }
 
