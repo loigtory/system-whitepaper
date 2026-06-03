@@ -10,7 +10,13 @@ const {
   readOptionalJsonObject,
   readRequiredJsonObject,
 } = require("./system-whitepaper-lib");
-const { buildOperationSpec } = require("./operation-spec/lib");
+const {
+  assertValidOperationGuideGateArtifact,
+  assertValidOperationSpecArtifact,
+  buildOperationSpec,
+  buildOperationSpecSourceArtifacts,
+  fingerprintFile,
+} = require("./operation-spec/lib");
 
 function loadSystemContext(configPath, systemCode) {
   const resolvedConfig = path.resolve(configPath);
@@ -48,28 +54,45 @@ function main() {
   }
 
   const evidencePath = path.join(systemOutput, "evidence.json");
+  const writeValidationPath = path.join(systemOutput, "write-validation-result.json");
+  const networkIndexPath = path.join(systemOutput, "network-index.json");
   if (!fs.existsSync(evidencePath)) {
     throw new Error(`Evidence file not found: ${evidencePath}`);
   }
 
   const evidence = readRequiredJsonObject(evidencePath, { label: "Evidence file" });
-  const writeValidation = readOptionalJsonObject(
-    path.join(systemOutput, "write-validation-result.json"),
-  );
-  const networkIndex = readOptionalJsonObject(path.join(systemOutput, "network-index.json"));
+  const writeValidation = readOptionalJsonObject(writeValidationPath);
+  const networkIndex = readOptionalJsonObject(networkIndexPath);
 
   const { spec, gate } = buildOperationSpec({
     evidence,
     system,
     writeValidation,
     networkIndex,
+    sourceArtifacts: buildOperationSpecSourceArtifacts({
+      evidencePath,
+      writeValidationPath,
+      networkIndexPath,
+    }),
     allowDraft: Boolean(args["allow-draft"] || system.operationGuideAllowDraft),
   });
 
-  writeJson(path.join(systemOutput, "operation-spec.json"), spec);
-  writeJson(path.join(systemOutput, "operation-guide-gate.json"), gate);
+  const specPath = path.join(systemOutput, "operation-spec.json");
+  const gatePath = path.join(systemOutput, "operation-guide-gate.json");
+  assertValidOperationSpecArtifact(spec);
+  writeJson(specPath, spec);
+  gate.sourceArtifacts = {
+    operationSpec: {
+      file: "operation-spec.json",
+      status: "ok",
+      fingerprint: fingerprintFile(specPath),
+    },
+    evidence: spec.sourceArtifacts.evidence,
+  };
+  assertValidOperationGuideGateArtifact(gate, spec);
+  writeJson(gatePath, gate);
 
-  console.log(`Operation spec written: ${path.join(systemOutput, "operation-spec.json")}`);
+  console.log(`Operation spec written: ${specPath}`);
   console.log(
     `Guide gate: readiness=${gate.readinessPercent}% canComposeGuide=${gate.canComposeGuide}`,
   );

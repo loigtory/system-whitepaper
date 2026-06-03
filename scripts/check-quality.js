@@ -10,6 +10,10 @@ const {
   readRequiredJsonObject,
   writeJson,
 } = require("./system-whitepaper-lib");
+const {
+  assertValidOperationGuideGateArtifact,
+  assertValidOperationSpecArtifact,
+} = require("./operation-spec/lib");
 
 function fingerprintFile(filePath) {
   if (!fs.existsSync(filePath)) {
@@ -39,12 +43,23 @@ function buildQualitySourceArtifacts(input = {}) {
       fingerprint: fingerprintFile(input.operationGuideGatePath),
     };
   }
+  if (input.operationSpecPath) {
+    result.operationSpec = {
+      file: path.basename(input.operationSpecPath),
+      fingerprint: fingerprintFile(input.operationSpecPath),
+    };
+  }
   return result;
 }
 
 function readOperationGuideGate(gatePath) {
   if (!fs.existsSync(gatePath)) return null;
   return readRequiredJsonObject(gatePath, { label: "Operation guide gate" });
+}
+
+function readOperationSpec(specPath) {
+  if (!fs.existsSync(specPath)) return null;
+  return readRequiredJsonObject(specPath, { label: "Operation spec" });
 }
 
 function assertValidQualityReportArtifact(report = {}) {
@@ -92,8 +107,24 @@ function main() {
   });
 
   const gatePath = path.join(inputDir, "operation-guide-gate.json");
+  const specPath = path.join(inputDir, "operation-spec.json");
+  const operationSpec = readOperationSpec(specPath);
+  if (operationSpec) {
+    try {
+      assertValidOperationSpecArtifact(operationSpec);
+    } catch (error) {
+      report.canFinalize = false;
+      report.failures.push(`operation-spec: ${error.message}`);
+    }
+  }
   const guideGate = readOperationGuideGate(gatePath);
   if (guideGate) {
+    try {
+      assertValidOperationGuideGateArtifact(guideGate, operationSpec);
+    } catch (error) {
+      report.canFinalize = false;
+      report.failures.push(`operation-guide: ${error.message}`);
+    }
     report.operationGuideGate = guideGate;
     report.canComposeGuide = Boolean(guideGate.canComposeGuide);
     if (!guideGate.canComposeGuide) {
@@ -110,6 +141,7 @@ function main() {
     counts: metrics.counts,
     sourceArtifacts: buildQualitySourceArtifacts({
       evidencePath,
+      operationSpecPath: specPath,
       operationGuideGatePath: gatePath,
     }),
   });
@@ -134,6 +166,7 @@ module.exports = {
   buildQualitySourceArtifacts,
   fingerprintFile,
   readOperationGuideGate,
+  readOperationSpec,
 };
 
 if (require.main === module) {

@@ -10,6 +10,10 @@ const {
 } = require("./fact-check-whitepaper");
 const { assertValidNarrativeQualityReportArtifact } = require("./check-narrative");
 const { assertValidQualityReportArtifact } = require("./check-quality");
+const {
+  assertValidOperationGuideGateArtifact,
+  assertValidOperationSpecArtifact,
+} = require("./operation-spec/lib");
 
 const DEFAULT_THRESHOLD = 0.95;
 const REDACTED_VALUE = "[redacted]";
@@ -31,6 +35,7 @@ const REQUIRED_ARTIFACTS = {
 const OPTIONAL_ARTIFACTS = {
   evidence: "evidence.json",
   evidenceSummary: "evidence-summary.json",
+  operationSpec: "operation-spec.json",
   operationGuideGate: "operation-guide-gate.json",
   dataDictionary: "data-dictionary.json",
   entityModel: "entity-model.json",
@@ -428,7 +433,9 @@ function buildLineageGate(artifacts = {}) {
   const failures = [];
   const checks = [
     ["evidence", artifacts.quality, artifacts.evidence, "quality-report.json"],
+    ["operationSpec", artifacts.quality, artifacts.operationSpec, "quality-report.json"],
     ["operationGuideGate", artifacts.quality, artifacts.operationGuideGate, "quality-report.json"],
+    ["operationSpec", artifacts.operationGuideGate, artifacts.operationSpec, "operation-guide-gate.json"],
     ["databaseProfile", artifacts.dataDictionary, artifacts.databaseProfile, "data-dictionary.json"],
     ["databaseProfile", artifacts.entityModel, artifacts.databaseProfile, "entity-model.json"],
     ["dataDictionary", artifacts.entityModel, artifacts.dataDictionary, "entity-model.json"],
@@ -611,7 +618,7 @@ function action(id, message, rerunNodes = [], extra = {}) {
   return { id, message, rerunNodes, ...extra };
 }
 
-function buildEvidenceGate(artifact) {
+function buildEvidenceGate(artifact, artifacts = {}) {
   const value = artifact.value || {};
   const contractFailures = [];
   if (artifact.status === "ok") {
@@ -619,6 +626,30 @@ function buildEvidenceGate(artifact) {
       assertValidQualityReportArtifact(value);
     } catch (error) {
       contractFailures.push(error.message);
+    }
+  }
+  const operationSpec = artifacts.operationSpec || {};
+  if (operationSpec.status === "ok" || operationSpec.fingerprint?.exists) {
+    if (operationSpec.status !== "ok") {
+      contractFailures.push(`${operationSpec.file || "operation-spec.json"} is ${operationSpec.status}.`);
+    } else {
+      try {
+        assertValidOperationSpecArtifact(operationSpec.value);
+      } catch (error) {
+        contractFailures.push(error.message);
+      }
+    }
+  }
+  const operationGuideGate = artifacts.operationGuideGate || {};
+  if (operationGuideGate.status === "ok" || operationGuideGate.fingerprint?.exists) {
+    if (operationGuideGate.status !== "ok") {
+      contractFailures.push(`${operationGuideGate.file || "operation-guide-gate.json"} is ${operationGuideGate.status}.`);
+    } else {
+      try {
+        assertValidOperationGuideGateArtifact(operationGuideGate.value, operationSpec.value || null);
+      } catch (error) {
+        contractFailures.push(error.message);
+      }
     }
   }
   const artifactContractValid = artifact.status === "ok" && contractFailures.length === 0;
@@ -1335,7 +1366,7 @@ function buildTruthReadinessReport(input = {}) {
   const databaseGate = buildDatabaseRequirementGate(buildDatabaseGate(artifacts, input), input);
   const lineageGate = buildLineageGate(artifacts);
   const gates = {
-    evidence: buildEvidenceGate(artifacts.quality || { status: "missing", file: REQUIRED_ARTIFACTS.quality }),
+    evidence: buildEvidenceGate(artifacts.quality || { status: "missing", file: REQUIRED_ARTIFACTS.quality }, artifacts),
     claims: buildClaimsGate(artifacts.claims || { status: "missing", file: REQUIRED_ARTIFACTS.claims }),
     factCheck: buildFactCheckFreshnessGate(
       buildFactCheckGate(

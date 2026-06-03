@@ -1,3 +1,5 @@
+const fs = require("node:fs");
+const crypto = require("node:crypto");
 const path = require("node:path");
 const {
   isEnvironmentSwitcherMenu,
@@ -10,6 +12,72 @@ const {
 
 const MAX_SPEC_BYTES = 50 * 1024;
 
+function fingerprintFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return { exists: false, size: 0, mtimeMs: null, sha256: "" };
+  }
+  const buffer = fs.readFileSync(filePath);
+  const stat = fs.statSync(filePath);
+  return {
+    exists: true,
+    size: stat.size,
+    mtimeMs: Math.round(stat.mtimeMs),
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+function buildSourceArtifact(filePath, status = "ok") {
+  return {
+    file: filePath ? path.basename(filePath) : "",
+    status,
+    fingerprint: fingerprintFile(filePath),
+  };
+}
+
+function buildOperationSpecSourceArtifacts(input = {}) {
+  const result = {};
+  if (input.evidencePath) result.evidence = buildSourceArtifact(input.evidencePath);
+  if (input.writeValidationPath) result.writeValidation = buildSourceArtifact(input.writeValidationPath);
+  if (input.networkIndexPath) result.networkIndex = buildSourceArtifact(input.networkIndexPath);
+  return result;
+}
+
+function assertJsonObject(value, message) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(message);
+  }
+}
+
+function assertArray(value, message) {
+  if (!Array.isArray(value)) {
+    throw new Error(message);
+  }
+}
+
+function assertBoolean(value, message) {
+  if (typeof value !== "boolean") {
+    throw new Error(message);
+  }
+}
+
+function assertFiniteNumber(value, message) {
+  if (!Number.isFinite(Number(value))) {
+    throw new Error(message);
+  }
+}
+
+function numberFrom(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function assertMetricEquals(metrics = {}, key, expected, fileName, containerName = "metrics") {
+  assertFiniteNumber(metrics[key], `${fileName} ${containerName}.${key} must be numeric.`);
+  if (Number(metrics[key]) !== expected) {
+    throw new Error(`${fileName} ${containerName}.${key} must match the artifact body count.`);
+  }
+}
+
 function uniqueStrings(values = []) {
   return Array.from(
     new Set(
@@ -18,6 +86,11 @@ function uniqueStrings(values = []) {
         .filter(Boolean),
     ),
   );
+}
+
+function isHomeModuleName(name) {
+  const normalized = String(name || "").trim().toLowerCase();
+  return normalized === "\u9996\u9875" || normalized === "home" || normalized === "welcome";
 }
 
 function pageById(evidence, pageId) {
@@ -49,7 +122,7 @@ function collectModuleNames(evidence, writeValidation = null) {
   for (const module of evidence.modules || []) {
     if (module.name) names.push(module.name);
   }
-  return uniqueStrings(names).filter((name) => !/^(首页|home|welcome)$/i.test(name));
+  return uniqueStrings(names).filter((name) => !isHomeModuleName(name));
 }
 
 function inferModuleBusinessHint(module) {
@@ -334,7 +407,7 @@ function enforceSpecSizeLimit(spec) {
 
 function evaluateOperationGuideGate(spec, system = {}) {
   const minMenus = Number(system.operationGuideMinMenus || 3);
-  const modules = (spec.modules || []).filter((module) => !/^(首页|home)$/i.test(module.name));
+  const modules = (spec.modules || []).filter((module) => !isHomeModuleName(module.name));
   const failures = [];
   const checks = [];
 
@@ -391,6 +464,9 @@ function evaluateOperationGuideGate(spec, system = {}) {
     : 0;
 
   return {
+    artifactType: "operation-guide-gate",
+    version: 1,
+    generatedAt: spec.generatedAt || new Date().toISOString(),
     canComposeGuide: failures.length === 0,
     readinessPercent,
     failures,
@@ -401,6 +477,104 @@ function evaluateOperationGuideGate(spec, system = {}) {
       specBytes: size,
     },
   };
+}
+
+function buildOperationSpecMetrics(spec = {}) {
+  const modules = Array.isArray(spec.modules) ? spec.modules : [];
+  const contentModules = modules.filter((module) => !isHomeModuleName(module.name));
+  return {
+    moduleCount: contentModules.length,
+    navigationCount: Array.isArray(spec.navigation) ? spec.navigation.length : 0,
+    flowCount: modules.reduce((sum, module) => sum + (Array.isArray(module.flows) ? module.flows.length : 0), 0),
+    screenshotCount: modules.reduce((sum, module) => sum + (Array.isArray(module.screenshots) ? module.screenshots.length : 0), 0),
+    pendingCount: Array.isArray(spec.pending) ? spec.pending.length : 0,
+    crossLinkCount: Array.isArray(spec.crossLinks) ? spec.crossLinks.length : 0,
+    networkEntryCount: numberFrom(spec.networkEntryCount),
+  };
+}
+
+function assertValidOperationSpecArtifact(spec = {}) {
+  assertJsonObject(spec, "operation-spec.json must be a JSON object.");
+  if (spec.artifactType !== "operation-spec") {
+    throw new Error("operation-spec.json artifactType must be operation-spec.");
+  }
+  assertFiniteNumber(spec.version, "operation-spec.json version must be numeric.");
+  assertFiniteNumber(spec.schemaVersion, "operation-spec.json schemaVersion must be numeric.");
+  if (!String(spec.generatedAt || "").trim()) {
+    throw new Error("operation-spec.json generatedAt must be present.");
+  }
+  assertJsonObject(spec.positioning, "operation-spec.json positioning must be a JSON object.");
+  if (!["high", "medium", "low"].includes(String(spec.positioning.confidence || ""))) {
+    throw new Error("operation-spec.json positioning.confidence must be high, medium, or low.");
+  }
+  assertArray(spec.positioning.sources, "operation-spec.json positioning.sources must be an array.");
+  assertArray(spec.navigation, "operation-spec.json navigation must be an array.");
+  assertArray(spec.modules, "operation-spec.json modules must be an array.");
+  assertArray(spec.crossLinks, "operation-spec.json crossLinks must be an array.");
+  assertArray(spec.pending, "operation-spec.json pending must be an array.");
+  assertJsonObject(spec.gate, "operation-spec.json gate must be a JSON object.");
+  assertBoolean(spec.gate.canComposeGuide, "operation-spec.json gate.canComposeGuide must be a boolean.");
+  assertFiniteNumber(spec.gate.readinessPercent, "operation-spec.json gate.readinessPercent must be numeric.");
+  assertArray(spec.gate.failures, "operation-spec.json gate.failures must be an array.");
+  assertJsonObject(spec.metrics, "operation-spec.json metrics must be a JSON object.");
+  assertMetricEquals(spec.metrics, "moduleCount", spec.modules.filter((module) => !isHomeModuleName(module.name)).length, "operation-spec.json");
+  assertMetricEquals(spec.metrics, "navigationCount", spec.navigation.length, "operation-spec.json");
+  assertMetricEquals(
+    spec.metrics,
+    "flowCount",
+    spec.modules.reduce((sum, module) => sum + (Array.isArray(module.flows) ? module.flows.length : 0), 0),
+    "operation-spec.json",
+  );
+  assertMetricEquals(
+    spec.metrics,
+    "screenshotCount",
+    spec.modules.reduce((sum, module) => sum + (Array.isArray(module.screenshots) ? module.screenshots.length : 0), 0),
+    "operation-spec.json",
+  );
+  assertMetricEquals(spec.metrics, "pendingCount", spec.pending.length, "operation-spec.json");
+  assertMetricEquals(spec.metrics, "crossLinkCount", spec.crossLinks.length, "operation-spec.json");
+  assertJsonObject(spec.sourceArtifacts, "operation-spec.json sourceArtifacts must be a JSON object.");
+  assertJsonObject(spec.sourceArtifacts.evidence, "operation-spec.json must record sourceArtifacts.evidence.");
+  for (const module of spec.modules) {
+    assertJsonObject(module, "operation-spec.json modules[] must be JSON objects.");
+    if (!String(module.name || "").trim()) {
+      throw new Error("operation-spec.json modules[].name must be present.");
+    }
+    assertJsonObject(module.list, "operation-spec.json modules[].list must be a JSON object.");
+    assertArray(module.list.columns, "operation-spec.json modules[].list.columns must be an array.");
+    assertArray(module.flows, "operation-spec.json modules[].flows must be an array.");
+    assertArray(module.screenshots, "operation-spec.json modules[].screenshots must be an array.");
+  }
+}
+
+function assertValidOperationGuideGateArtifact(gate = {}, spec = null) {
+  assertJsonObject(gate, "operation-guide-gate.json must be a JSON object.");
+  if (gate.artifactType !== "operation-guide-gate") {
+    throw new Error("operation-guide-gate.json artifactType must be operation-guide-gate.");
+  }
+  assertFiniteNumber(gate.version, "operation-guide-gate.json version must be numeric.");
+  if (!String(gate.generatedAt || "").trim()) {
+    throw new Error("operation-guide-gate.json generatedAt must be present.");
+  }
+  assertBoolean(gate.canComposeGuide, "operation-guide-gate.json canComposeGuide must be a boolean.");
+  assertFiniteNumber(gate.readinessPercent, "operation-guide-gate.json readinessPercent must be numeric.");
+  assertArray(gate.failures, "operation-guide-gate.json failures must be an array.");
+  assertArray(gate.checks, "operation-guide-gate.json checks must be an array.");
+  assertJsonObject(gate.counts, "operation-guide-gate.json counts must be a JSON object.");
+  assertJsonObject(gate.sourceArtifacts, "operation-guide-gate.json sourceArtifacts must be a JSON object.");
+  assertJsonObject(gate.sourceArtifacts.operationSpec, "operation-guide-gate.json must record sourceArtifacts.operationSpec.");
+  if (gate.canComposeGuide && gate.failures.length > 0) {
+    throw new Error("operation-guide-gate.json canComposeGuide=true requires zero failures.");
+  }
+  const failedChecks = gate.checks.filter((check) => check && check.pass === false);
+  if (gate.canComposeGuide && failedChecks.length > 0) {
+    throw new Error("operation-guide-gate.json canComposeGuide=true requires all checks to pass.");
+  }
+  if (spec) {
+    assertValidOperationSpecArtifact(spec);
+    const metrics = buildOperationSpecMetrics(spec);
+    assertMetricEquals(gate.counts, "modules", metrics.moduleCount, "operation-guide-gate.json", "counts");
+  }
 }
 
 function buildOperationSpec(options = {}) {
@@ -436,6 +610,8 @@ function buildOperationSpec(options = {}) {
 
   const positioning = resolvePositioning(evidence, system, writeValidation);
   let spec = {
+    artifactType: "operation-spec",
+    version: 1,
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
     systemCode: system.code || evidence.systemInfo?.code || "",
@@ -447,12 +623,15 @@ function buildOperationSpec(options = {}) {
     crossLinks: buildCrossLinks(evidence, writeValidation),
     networkEntryCount: (networkIndex?.entries || []).length,
     pending: [],
+    metrics: {},
+    sourceArtifacts: options.sourceArtifacts || {},
   };
 
   const trimmed = enforceSpecSizeLimit(spec);
   spec = trimmed.spec;
   const gate = evaluateOperationGuideGate(spec, system);
   spec.pending = buildPendingItems(spec, gate);
+  spec.metrics = buildOperationSpecMetrics(spec);
   spec.gate = {
     canComposeGuide: allowDraft ? true : gate.canComposeGuide,
     readinessPercent: gate.readinessPercent,
@@ -481,9 +660,14 @@ function loadOperationSpecInputs(systemOutput, system = {}) {
 
 module.exports = {
   MAX_SPEC_BYTES,
+  assertValidOperationGuideGateArtifact,
+  assertValidOperationSpecArtifact,
   buildOperationSpec,
   buildModuleAggregateHint,
+  buildOperationSpecMetrics,
+  buildOperationSpecSourceArtifacts,
   evaluateOperationGuideGate,
+  fingerprintFile,
   loadOperationSpecInputs,
   resolvePositioning,
 };

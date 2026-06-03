@@ -232,6 +232,7 @@ function writePassingTruthArtifacts(dir, options = {}) {
       failures: [],
       sourceArtifacts: buildQualitySourceArtifacts({
         evidencePath: path.join(dir, "evidence.json"),
+        operationSpecPath: path.join(dir, "operation-spec.json"),
         operationGuideGatePath: path.join(dir, "operation-guide-gate.json"),
       }),
     }),
@@ -11884,6 +11885,60 @@ test("generateOperationGuideMarkdown renders module and flow sections", () => {
   assert.match(markdown, /保险公司/);
 });
 
+function operationSpecFixture(overrides = {}) {
+  const spec = {
+    artifactType: "operation-spec",
+    version: 1,
+    schemaVersion: 1,
+    generatedAt: "2026-06-03T00:00:00.000Z",
+    systemCode: "adp",
+    systemName: "AI保单数据闭环平台",
+    testUrl: "https://pre-adp.hzins.com/",
+    positioning: { text: "平台定位句。", confidence: "high", sources: [{ type: "registry" }] },
+    navigation: [{ menuPath: "AI任务管理", entry: "左侧「AI任务管理」" }],
+    modules: [
+      {
+        name: "AI任务管理",
+        entry: "左侧「AI任务管理」",
+        businessHint: "管理 AI 任务。",
+        list: { columns: ["保险公司"], queryFields: [], rowActions: [] },
+        flows: [],
+        tabs: [],
+        screenshots: [],
+        apis: [],
+      },
+    ],
+    crossLinks: [],
+    networkEntryCount: 0,
+    pending: [],
+    metrics: {
+      moduleCount: 1,
+      navigationCount: 1,
+      flowCount: 0,
+      screenshotCount: 0,
+      pendingCount: 0,
+      crossLinkCount: 0,
+      networkEntryCount: 0,
+    },
+    gate: { canComposeGuide: true, readinessPercent: 100, failures: [] },
+    sourceArtifacts: {
+      evidence: {
+        file: "evidence.json",
+        status: "missing",
+        fingerprint: { exists: false, size: 0, mtimeMs: null, sha256: "" },
+      },
+    },
+  };
+  return {
+    ...spec,
+    ...overrides,
+    positioning: { ...spec.positioning, ...(overrides.positioning || {}) },
+    metrics: { ...spec.metrics, ...(overrides.metrics || {}) },
+    gate: { ...spec.gate, ...(overrides.gate || {}) },
+    sourceArtifacts: { ...spec.sourceArtifacts, ...(overrides.sourceArtifacts || {}) },
+  };
+}
+
 test("generate-operation-guide falls back to spec gate when gate cache is malformed", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -11908,25 +11963,7 @@ test("generate-operation-guide falls back to spec gate when gate cache is malfor
   );
   fs.writeFileSync(
     path.join(output, "operation-spec.json"),
-    JSON.stringify({
-      systemName: "AI保单数据闭环平台",
-      testUrl: "https://pre-adp.hzins.com/",
-      positioning: { text: "平台定位句。", confidence: "high", sources: [{ type: "registry" }] },
-      navigation: [{ menuPath: "AI任务管理", entry: "左侧「AI任务管理」" }],
-      modules: [
-        {
-          name: "AI任务管理",
-          entry: "左侧「AI任务管理」",
-          businessHint: "管理 AI 任务。",
-          list: { columns: ["保险公司"], queryFields: [], rowActions: [] },
-          flows: [],
-          tabs: [],
-          screenshots: [],
-        },
-      ],
-      pending: [],
-      gate: { canComposeGuide: true, readinessPercent: 100, failures: [] },
-    }),
+    JSON.stringify(operationSpecFixture()),
     "utf8",
   );
   fs.writeFileSync(path.join(output, "operation-guide-gate.json"), "{bad json", "utf8");
@@ -11969,25 +12006,7 @@ test("generate-operation-guide falls back to spec gate when gate cache is non-ob
   );
   fs.writeFileSync(
     path.join(output, "operation-spec.json"),
-    JSON.stringify({
-      systemName: "AI保单数据闭环平台",
-      testUrl: "https://pre-adp.hzins.com/",
-      positioning: { text: "平台定位句。", confidence: "high", sources: [{ type: "registry" }] },
-      navigation: [{ menuPath: "AI任务管理", entry: "左侧「AI任务管理」" }],
-      modules: [
-        {
-          name: "AI任务管理",
-          entry: "左侧「AI任务管理」",
-          businessHint: "管理 AI 任务。",
-          list: { columns: ["保险公司"], queryFields: [], rowActions: [] },
-          flows: [],
-          tabs: [],
-          screenshots: [],
-        },
-      ],
-      pending: [],
-      gate: { canComposeGuide: true, readinessPercent: 100, failures: [] },
-    }),
+    JSON.stringify(operationSpecFixture()),
     "utf8",
   );
   fs.writeFileSync(path.join(output, "operation-guide-gate.json"), "[]", "utf8");
@@ -12004,6 +12023,48 @@ test("generate-operation-guide falls back to spec gate when gate cache is non-ob
   assert.equal(result.status, 0, result.stderr);
   const markdown = fs.readFileSync(path.join(output, "operation-guide.md"), "utf8");
   assert.match(markdown, /AI任务管理/);
+});
+
+test("generate-operation-guide rejects forged operation spec artifacts", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { spawnSync } = require("node:child_process");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "operation-guide-forged-spec-"));
+  const configPath = path.join(dir, "systems.local.yaml");
+  const output = path.join(dir, "outputs", "adp");
+  fs.mkdirSync(output, { recursive: true });
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+    ].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(output, "operation-spec.json"),
+    JSON.stringify(operationSpecFixture({ metrics: { moduleCount: 99 } })),
+    "utf8",
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/generate-operation-guide.js", "--config", configPath, "--system", "adp"],
+    {
+      cwd: path.resolve(__dirname, ".."),
+      encoding: "utf8",
+    },
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /operation-spec\.json is not a valid operation spec artifact/);
+  assert.equal(fs.existsSync(path.join(output, "operation-guide.md")), false);
 });
 
 test("createNetworkRecorder stores xhr entries without response bodies", async () => {
@@ -14746,6 +14807,50 @@ test("truth readiness rejects invalid quality report artifact contract", () => {
   assert.equal(report.gates.evidence.scorePercent, 0);
   assert.equal(report.canSubmitReview, false);
   assert.ok(report.gates.evidence.failures.some((item) => /artifactType/.test(item)));
+  assert.ok(report.blockers.some((item) => item.id === "evidence.invalid-artifact"));
+});
+
+test("truth readiness rejects forged operation spec evidence artifacts", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const forgedSpec = operationSpecFixture({ metrics: { flowCount: 5 } });
+  const artifacts = {
+    quality: { status: "ok", file: "quality-report.json", value: qualityReportFixture() },
+    operationSpec: { status: "ok", file: "operation-spec.json", value: forgedSpec, fingerprint: { exists: true, size: 1, sha256: "spec" } },
+    operationGuideGate: { status: "missing", file: "operation-guide-gate.json", value: null, fingerprint: { exists: false } },
+    claims: {
+      status: "ok",
+      file: "verified-claims.json",
+      value: verifiedClaimsFixture([
+        {
+          id: "function:保单任务:任务列表",
+          subject: "任务列表",
+          module: "保单任务",
+          status: "confirmed",
+          writable: true,
+        },
+      ]),
+    },
+    factCheck: {
+      status: "ok",
+      file: "fact-check-report.json",
+      value: factCheckReportFixture(),
+    },
+    narrative: {
+      status: "ok",
+      file: "narrative-quality-report.json",
+      value: narrativeQualityReportFixture(),
+    },
+    databaseProfile: { status: "missing", file: "database-profile.json", value: null },
+    dataDictionary: { status: "missing", file: "data-dictionary.json", value: null },
+    entityModel: { status: "missing", file: "entity-model.json", value: null },
+    functionUniverse: { status: "missing", file: "function-universe.json", value: null },
+    evidenceSummary: { status: "missing", file: "evidence-summary.json", value: null },
+    pendingReview: { status: "ok", file: "whitepaper.pending-review.md", value: null },
+  };
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.evidence.artifactContractValid, false);
+  assert.ok(report.gates.evidence.failures.some((item) => /operation-spec\.json metrics\.flowCount/.test(item)));
   assert.ok(report.blockers.some((item) => item.id === "evidence.invalid-artifact"));
 });
 
