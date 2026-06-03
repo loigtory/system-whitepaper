@@ -488,6 +488,7 @@ function runReviewDecision(options = {}) {
       displayFinalPath: named.final ? path.join(inputDir, named.final) : "",
       displayPendingPath: named.pendingReview ? path.join(inputDir, named.pendingReview) : "",
       docxPath: word.outputPath,
+      docxManifestPath: word.manifestPath,
     };
   }
 
@@ -506,6 +507,9 @@ function runReviewDecision(options = {}) {
           ? path.basename(decision.displayFinalPath)
           : state.artifacts?.final || "whitepaper.final.md",
         docx: decision.docxPath ? path.basename(decision.docxPath) : state.artifacts?.docx || "",
+        docxManifest: decision.docxManifestPath
+          ? path.basename(decision.docxManifestPath)
+          : state.artifacts?.docxManifest || "",
       },
       review: {
         ...state.review,

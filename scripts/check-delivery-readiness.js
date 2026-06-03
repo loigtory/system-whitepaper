@@ -9,6 +9,7 @@ const {
   findStaleReadinessSources,
   loadReadinessInputs,
 } = require("./check-truth-readiness");
+const { fingerprintFile, resolveDocxManifestPath } = require("./export-whitepaper-word");
 
 const DEFAULT_TARGET_TRUTH_SCORE_PERCENT = 95;
 const REQUIRED_REAL_NODES = [
@@ -135,6 +136,84 @@ function fileExists(filePath) {
   }
 }
 
+function resolvedPathKey(filePath) {
+  const normalized = path.resolve(String(filePath || "")).replace(/\\/g, "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function sameResolvedPath(left, right) {
+  return resolvedPathKey(left) === resolvedPathKey(right);
+}
+
+function sameFingerprint(left = {}, right = {}) {
+  return (
+    left?.exists === true &&
+    right?.exists === true &&
+    Number(left.size) === Number(right.size) &&
+    String(left.sha256 || "") === String(right.sha256 || "")
+  );
+}
+
+function resolveArtifactPath(outputDir, artifactPath = "") {
+  const value = String(artifactPath || "").trim();
+  if (!value) return "";
+  return path.isAbsolute(value) ? value : path.join(outputDir, value);
+}
+
+function findDocxCandidate(outputDir, state = {}) {
+  const stateDocx = resolveArtifactPath(outputDir, state?.artifacts?.docx);
+  if (stateDocx) return stateDocx;
+  try {
+    return fs
+      .readdirSync(outputDir)
+      .filter((name) => /\.docx$/i.test(name))
+      .map((name) => path.join(outputDir, name))
+      .filter((filePath) => fs.statSync(filePath).isFile())
+      .sort((left, right) => {
+        const mtimeDelta = fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs;
+        return mtimeDelta || path.basename(left).localeCompare(path.basename(right));
+      })[0] || "";
+  } catch {
+    return "";
+  }
+}
+
+function validateFinalDocx(outputDir, state = {}, finalPath = "") {
+  const finalFingerprint = fingerprintFile(finalPath);
+  if (!finalFingerprint.exists) {
+    return { valid: false, docxPath: "", manifestPath: "", reason: "final-missing" };
+  }
+  const docxPath = findDocxCandidate(outputDir, state || {});
+  if (!docxPath) {
+    return { valid: false, docxPath: "", manifestPath: "", reason: "docx-missing" };
+  }
+  const docxFingerprint = fingerprintFile(docxPath);
+  const manifestPath = resolveArtifactPath(outputDir, state?.artifacts?.docxManifest) || resolveDocxManifestPath(docxPath);
+  if (!docxFingerprint.exists) {
+    return { valid: false, docxPath, manifestPath, reason: "docx-missing" };
+  }
+  const manifest = readOptionalJsonObject(manifestPath);
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    return { valid: false, docxPath, manifestPath, reason: "manifest-missing-or-malformed" };
+  }
+  if (manifest.artifactType !== "whitepaper-docx-manifest") {
+    return { valid: false, docxPath, manifestPath, reason: "manifest-type-mismatch" };
+  }
+  if (!sameResolvedPath(manifest.output?.path, docxPath)) {
+    return { valid: false, docxPath, manifestPath, reason: "manifest-output-path-mismatch" };
+  }
+  if (!sameResolvedPath(manifest.input?.path, finalPath)) {
+    return { valid: false, docxPath, manifestPath, reason: "manifest-input-path-mismatch" };
+  }
+  if (!sameFingerprint(manifest.input?.fingerprint, finalFingerprint)) {
+    return { valid: false, docxPath, manifestPath, reason: "final-fingerprint-stale" };
+  }
+  if (!sameFingerprint(manifest.output?.fingerprint, docxFingerprint)) {
+    return { valid: false, docxPath, manifestPath, reason: "docx-fingerprint-stale" };
+  }
+  return { valid: true, docxPath, manifestPath, reason: "" };
+}
+
 function nodeStatus(state = {}, nodeId) {
   return state.nodes?.[nodeId]?.status || "missing";
 }
@@ -207,6 +286,9 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
   const whitepaperExists = pendingReviewExists || finalExists;
   const pendingMarkdown = readTextIfExists(pendingPath);
   const finalMarkdown = readTextIfExists(finalPath);
+  const docx = finalExists
+    ? validateFinalDocx(outputDir, state || {}, finalPath)
+    : { valid: false, docxPath: "", manifestPath: "", reason: "" };
   const targetTruthScorePercent = Number(
     options.targetTruthScorePercent || DEFAULT_TARGET_TRUTH_SCORE_PERCENT,
   );
@@ -345,6 +427,15 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
       }),
     );
   }
+  if (finalExists && !docx.valid) {
+    blockers.push(
+      blocker(
+        "delivery.docx-not-current",
+        `Final whitepaper exists but Word output is not bound to the current final Markdown: ${docx.reason || "unknown"}.`,
+        { systemCode: code, rerunNodes: ["review"] },
+      ),
+    );
+  }
 
   return {
     code,
@@ -357,6 +448,11 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
     whitepaperExists,
     pendingReviewExists,
     finalExists,
+    docxExists: Boolean(docx.docxPath && fileExists(docx.docxPath)),
+    docxManifestExists: Boolean(docx.manifestPath && fileExists(docx.manifestPath)),
+    docxCurrent: Boolean(docx.valid),
+    docxPath: docx.docxPath ? path.basename(docx.docxPath) : "",
+    docxManifestPath: docx.manifestPath ? path.basename(docx.manifestPath) : "",
     databaseProfileConfigured: Boolean(systemReport.databaseProfileConfigured),
     databaseEvidenceAvailable,
     pipelineStatus: state?.overallStatus || "",
@@ -380,6 +476,9 @@ function summarizeSystems(systems = []) {
     accepted: systems.filter((item) => item.accepted).length,
     smokeEvidence: systems.filter((item) => item.smokeEvidence).length,
     whitepapers: systems.filter((item) => item.whitepaperExists).length,
+    finalWhitepapers: systems.filter((item) => item.finalExists).length,
+    docxCurrent: systems.filter((item) => item.docxCurrent).length,
+    docxManifested: systems.filter((item) => item.docxManifestExists).length,
     staleSystems: systems.filter((item) => Number(item.staleSourceCount || 0) > 0).length,
     databaseBacked: systems.filter((item) => item.databaseEvidenceAvailable).length,
     databaseConfigured: systems.filter((item) => item.databaseProfileConfigured).length,
@@ -450,6 +549,7 @@ function renderDeliveryReadinessMarkdown(report = {}) {
       mdCell(`${item.scorePercent}%`),
       mdCell(item.accepted ? "yes" : "no"),
       mdCell(item.pipelineStatus || "-"),
+      mdCell(item.finalExists ? (item.docxCurrent ? "yes" : "no") : "-"),
       mdCell(item.databaseEvidenceAvailable ? "yes" : "no"),
       mdCell(item.smokeEvidence ? "yes" : "no"),
       mdCell(item.blockers?.map((blockerItem) => blockerItem.id).join(", ") || "-"),
@@ -466,15 +566,16 @@ function renderDeliveryReadinessMarkdown(report = {}) {
     `- Can deliver: ${report.canDeliver ? "yes" : "no"}`,
     `- Target truth score: ${report.targetTruthScorePercent || DEFAULT_TARGET_TRUTH_SCORE_PERCENT}%`,
     `- Systems ready: ${summary.ready || 0}/${summary.total || 0}`,
+    `- Final Word current: ${summary.docxCurrent || 0}/${summary.finalWhitepapers || 0}`,
     `- Smoke evidence: ${summary.smokeEvidence || 0}`,
     `- Database-backed systems: ${summary.databaseBacked || 0}/${summary.total || 0}`,
     `- Acceptance status: ${report.acceptance?.status || "-"}`,
     "",
     "## Systems",
     "",
-    "| System | Status | Truth | Accepted | Pipeline | DB evidence | Smoke | Blockers |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |",
-    rows.length ? rows.join("\n") : "| - | - | - | - | - | - | - | - |",
+    "| System | Status | Truth | Accepted | Pipeline | Word current | DB evidence | Smoke | Blockers |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    rows.length ? rows.join("\n") : "| - | - | - | - | - | - | - | - | - |",
     "",
     "## Blockers",
     "",

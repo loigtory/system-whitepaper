@@ -53,6 +53,8 @@ The unattended pipeline is grouped into five business-visible phases:
    - **真实度门禁**: run `check-truth-readiness.js` to aggregate coverage, verified claims, fact-check, narrative gates, and source-artifact fingerprints into `truth-readiness-report.json`; review submission requires `canSubmitReview=true`, score >= 95%, and non-stale fingerprints.
 5. **审定**: the reviewer approves or rejects in the local dashboard. Approval creates `whitepaper.final.md` and Word output only after `run-review-decision.js` verifies `truth-readiness-report.json` has passed. Rejection must include comments; `run-review-decision.js` classifies the comment and writes `review-decision.json`; the Agent/LLM only executes the scoped narrative rewrite when required.
 
+Delivery note: approval also creates a `.docx.manifest.json` sidecar for the Word output. Treat the manifest as part of the final delivery evidence because it binds the current `whitepaper.final.md` fingerprint to the generated `.docx`.
+
 ## Parallel Batch Model
 
 Use the 4-thread model for unattended multi-system development:
@@ -97,7 +99,7 @@ Run `npm run real:check -- --systems <code1>,<code2>` before the first real-syst
 Prefer `npm run pipeline` for single-system production runs. Use `npm run batch` when multiple independent systems must be processed unattended. Watch `outputs/_batch/run-state.json`, `outputs/_batch/diagnosis.md`, `outputs/_batch/repair-queue.md`, or the dashboard "Batch 4 threads" panel to see all active system threads, truth-readiness scores, coverage-repair outcomes, and blocked next actions at once. Use `npm run phase3b` only for scoped narrative work, review rewrites, or prompt/fragment regeneration after evidence and summary artifacts already exist.
 Run `npm run repair:batch -- --dry-run` before consuming a repair queue. The runner rebuilds safe batch arguments from queue fields, ignores embedded command strings, writes `outputs/_batch/repair-run-plan.json`, `outputs/_batch/repair-run-plan.md`, `outputs/_batch/repair-run-state.json`, `outputs/_batch/repair-closure.json/md`, and `outputs/_batch/repair-follow-up-plan.json/md`, and never runs queue items that require Agent writing unless `-- --allow-agent-writing` is present. Treat closure `status=passed` as the batch-level repair signal: all systems are 95%+ ready, no missing writable claims remain, and the repair queue is empty. Treat follow-up `status=ready-to-run` as the next unattended low-quota repair step; run `npm run repair:loop -- --max-rounds 3` to consume those steps automatically. Treat `status=needs-agent-writing` as a hard stop until explicit quota approval is given.
 Batch, `repair:batch`, and `repair:loop` automatically refresh `outputs/_batch/acceptance-report.json/md` and `outputs/_batch/delivery-readiness-report.json/md` at terminal state; run `npm run batch:acceptance` or `npm run delivery:check` only for explicit re-checks after inspecting or moving artifacts. Treat `acceptance-report.json status=accepted` as the unattended delivery gate: every target system has a non-stale truth-readiness report, score >=95%, no uncovered writable claims, a pending-review/final whitepaper, and no remaining repair queue or follow-up blocker.
-Before calling a real-system batch deliverable complete, confirm the latest auto-refreshed `delivery-readiness-report.json status=ready`. Treat it as the final evidence audit: it confirms batch acceptance passed, each selected system came from a real pipeline output directory, smoke/local-e2e truth reports are absent, and required evidence/truth/narrative/fact-check nodes completed.
+Before calling a real-system batch deliverable complete, confirm the latest auto-refreshed `delivery-readiness-report.json status=ready`. Treat it as the final evidence audit: it confirms batch acceptance passed, each selected system came from a real pipeline output directory, smoke/local-e2e truth reports are absent, required evidence/truth/narrative/fact-check nodes completed, and any final Word output is manifest-bound to the current `whitepaper.final.md`.
 Run `npm run pack:check` before distributing or installing an updated copy of this skill.
 
 ## Hard Rules
@@ -139,6 +141,8 @@ Generate artifacts per system:
 - `whitepaper.final.md`: final Markdown after approval.
 - `{系统名称}_系统功能白皮书_{YYYYMMDD}.docx`: Word output after approval.
 
+The Word sidecar manifest follows the generated document name plus `.manifest.json`, for example `{system}_系统功能白皮书_{YYYYMMDD}.docx.manifest.json`. It must stay next to the `.docx` because delivery readiness uses it to reject stale Word output.
+
 The reviewed whitepaper keeps this structure:
 
 1. System overview
@@ -166,6 +170,7 @@ Before finalizing, verify:
 - `run-whitepaper-pipeline.js` automatically performs one bounded coverage repair when `fact-check-report.json` lists `missingWritableClaimIds`: it writes `coverage-repair-plan.json`, reruns scoped narrative work with the inferred module `--narrative-part`, then reruns fact-check. Use `--no-coverage-repair` only for debugging.
 - `fact-check-report.json` must have `canFinalize=true` before producing `whitepaper.final.md`.
 - `truth-readiness-report.json` must have `canSubmitReview=true`, score >= 95%, and matching source-artifact fingerprints before human review or final approval; `run-review-decision.js --status approved` blocks final Markdown/Word generation when this report is missing, malformed, non-passing, stale, smoke/local-e2e, or under an `_e2e` output directory.
+- If `whitepaper.final.md` exists, delivery readiness requires the `.docx` sidecar manifest to match the current final Markdown fingerprint and current Word file fingerprint.
 - No duplicated function explanations.
 - No source-code, database, or internal implementation claims without browser evidence.
 

@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const {
   formatWhitepaperDate,
   parseArgs,
@@ -213,6 +214,45 @@ function resolveDocxOutputPath(options = {}) {
   return path.join(inputDir, mdName.replace(/\.md$/i, ".docx"));
 }
 
+function fingerprintFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { exists: false, size: 0, mtimeMs: null, sha256: "" };
+  }
+  const buffer = fs.readFileSync(filePath);
+  const stat = fs.statSync(filePath);
+  return {
+    exists: true,
+    size: stat.size,
+    mtimeMs: Math.round(stat.mtimeMs),
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+function resolveDocxManifestPath(outputPath) {
+  return `${path.resolve(String(outputPath || ""))}.manifest.json`;
+}
+
+function buildDocxManifest(options = {}) {
+  const inputPath = path.resolve(String(options.inputPath || ""));
+  const outputPath = path.resolve(String(options.outputPath || ""));
+  return {
+    artifactType: "whitepaper-docx-manifest",
+    version: 1,
+    generatedAt: options.generatedAt || new Date().toISOString(),
+    systemName: options.systemName || "",
+    input: {
+      file: path.basename(inputPath),
+      path: inputPath,
+      fingerprint: fingerprintFile(inputPath),
+    },
+    output: {
+      file: path.basename(outputPath),
+      path: outputPath,
+      fingerprint: fingerprintFile(outputPath),
+    },
+  };
+}
+
 function exportWhitepaperWord(options = {}) {
   const inputPath = path.resolve(String(options.inputPath || options.input || "whitepaper.final.md"));
   if (!fs.existsSync(inputPath)) {
@@ -228,7 +268,17 @@ function exportWhitepaperWord(options = {}) {
   });
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, createZip(buildDocxFiles(markdown)));
-  return { inputPath, outputPath, systemName };
+  const manifest = buildDocxManifest({
+    inputPath,
+    outputPath,
+    systemName,
+    generatedAt: options.generatedAt,
+  });
+  const manifestPath = options.manifestPath
+    ? path.resolve(String(options.manifestPath))
+    : resolveDocxManifestPath(outputPath);
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+  return { inputPath, outputPath, manifestPath, manifest, systemName };
 }
 
 function main() {
@@ -255,10 +305,13 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildDocxManifest,
   buildDocxFiles,
   createZip,
   exportWhitepaperWord,
+  fingerprintFile,
   inferSystemName,
   markdownToWordDocumentXml,
+  resolveDocxManifestPath,
   resolveDocxOutputPath,
 };

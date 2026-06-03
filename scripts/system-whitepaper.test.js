@@ -8005,6 +8005,7 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
     renderDeliveryReadinessMarkdown,
     writeDeliveryReadinessReport,
   } = require("./check-delivery-readiness");
+  const { exportWhitepaperWord } = require("./export-whitepaper-word");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-readiness-"));
   const outputRoot = path.join(dir, "outputs");
   const configPath = path.join(dir, "systems.local.yaml");
@@ -8068,6 +8069,7 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.equal(ready.systems[0].whitepaperExists, true);
   assert.equal(ready.systems[0].pendingReviewExists, true);
   assert.equal(ready.systems[0].finalExists, false);
+  assert.equal(ready.systems[0].docxCurrent, false);
   assert.match(renderDeliveryReadinessMarkdown(ready), /Delivery Readiness Report/);
   const artifacts = writeDeliveryReadinessReport(outputRoot, ready);
   const stateSummary = buildDeliveryReadinessStateSummary(ready, artifacts);
@@ -8076,6 +8078,35 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.equal(stateSummary.artifacts.deliveryReadinessMarkdown, "delivery-readiness-report.md");
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.json")), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.md")), true);
+
+  const finalPath = path.join(systemOutput, "whitepaper.final.md");
+  fs.writeFileSync(
+    finalPath,
+    "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。",
+    "utf8",
+  );
+  const word = exportWhitepaperWord({
+    inputPath: finalPath,
+    systemName: "AI保单数据闭环平台",
+    date: "2026-06-03",
+  });
+  const finalReady = buildDeliveryReadinessReport({ acceptanceReport });
+  assert.equal(finalReady.status, "ready");
+  assert.equal(finalReady.canDeliver, true);
+  assert.equal(finalReady.summary.finalWhitepapers, 1);
+  assert.equal(finalReady.summary.docxCurrent, 1);
+  assert.equal(finalReady.systems[0].docxExists, true);
+  assert.equal(finalReady.systems[0].docxManifestExists, true);
+  assert.equal(finalReady.systems[0].docxCurrent, true);
+  fs.appendFileSync(finalPath, "\n\n## 未导出的变更\n这里模拟最终稿变更后未重新导出 Word。", "utf8");
+  const staleWord = buildDeliveryReadinessReport({ acceptanceReport });
+  assert.equal(staleWord.status, "blocked");
+  assert.equal(staleWord.canDeliver, false);
+  assert.equal(staleWord.systems[0].docxCurrent, false);
+  assert.ok(staleWord.blockers.some((item) => item.id === "delivery.docx-not-current"));
+  fs.unlinkSync(finalPath);
+  fs.unlinkSync(word.outputPath);
+  fs.unlinkSync(word.manifestPath);
 
   fs.unlinkSync(path.join(systemOutput, "whitepaper.pending-review.md"));
   const missingWhitepaper = buildDeliveryReadinessReport({ acceptanceReport });
@@ -10001,7 +10032,11 @@ test("word exporter writes a docx package from final markdown", () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { exportWhitepaperWord, markdownToWordDocumentXml } = require("./export-whitepaper-word");
+  const {
+    exportWhitepaperWord,
+    markdownToWordDocumentXml,
+    resolveDocxManifestPath,
+  } = require("./export-whitepaper-word");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "word-export-adp-"));
   const inputPath = path.join(dir, "whitepaper.final.md");
@@ -10023,6 +10058,13 @@ test("word exporter writes a docx package from final markdown", () => {
   const bytes = fs.readFileSync(result.outputPath);
   assert.equal(bytes.subarray(0, 2).toString("utf8"), "PK");
   assert.match(path.basename(result.outputPath), /AI保单数据闭环平台_系统功能白皮书_20260520\.docx/);
+  assert.equal(result.manifestPath, resolveDocxManifestPath(result.outputPath));
+  assert.equal(fs.existsSync(result.manifestPath), true);
+  assert.equal(result.manifest.artifactType, "whitepaper-docx-manifest");
+  assert.equal(result.manifest.input.file, "whitepaper.final.md");
+  assert.equal(result.manifest.input.fingerprint.exists, true);
+  assert.equal(result.manifest.output.file, path.basename(result.outputPath));
+  assert.equal(result.manifest.output.fingerprint.exists, true);
 });
 
 test("approved review creates final markdown and word output", () => {
@@ -10052,6 +10094,7 @@ test("approved review creates final markdown and word output", () => {
     /^# AI保单数据闭环平台功能白皮书\n/,
   );
   assert.ok(fs.existsSync(decision.docxPath));
+  assert.ok(fs.existsSync(decision.docxManifestPath));
   assert.match(path.basename(decision.docxPath), /\.docx$/);
 });
 
@@ -10236,6 +10279,7 @@ test("approved review tolerates malformed optional pipeline state", () => {
   assert.equal(decision.status, "approved");
   assert.ok(fs.existsSync(path.join(dir, "whitepaper.final.md")));
   assert.ok(fs.existsSync(decision.docxPath));
+  assert.ok(fs.existsSync(decision.docxManifestPath));
   assert.equal(fs.readFileSync(path.join(dir, "pipeline-state.json"), "utf8"), "{bad json");
 });
 
