@@ -1673,10 +1673,15 @@ async function routeRequest(request, response, options = {}) {
       const body = await readRequestJson(request);
       if (!body.system) throw new Error("system is required");
       const { configPath, config, outputRoot } = resolveDashboardPaths(options);
+      const system = (config.systems || []).find((item) => item.code === body.system);
+      if (!system) throw new Error(`System not found: ${body.system}`);
       const decision = runReviewDecision({
         inputDir: path.join(outputRoot, body.system),
         status: body.status || body.decision,
         comment: body.comment,
+        requireDatabaseEvidence: system.databaseProfile?.enabled,
+        systemCode: system.code,
+        systemName: system.name,
       });
       let payload = decision;
       if (decision.status === "rejected" && body.autoRerun !== false && decision.rerunNodes?.length) {

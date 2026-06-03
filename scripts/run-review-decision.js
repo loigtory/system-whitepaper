@@ -17,7 +17,9 @@ const {
 const { exportWhitepaperWord } = require("./export-whitepaper-word");
 const {
   DEFAULT_THRESHOLD,
+  buildTruthReadinessReport,
   findStaleReadinessSources,
+  loadReadinessInputs,
   normalizeThreshold,
 } = require("./check-truth-readiness");
 
@@ -276,6 +278,81 @@ function approvalTruthScore(report = {}) {
   return 0;
 }
 
+function normalizeSystemCode(value) {
+  return String(value || "").trim();
+}
+
+function resolveExpectedApprovalSystem(inputDir, report = {}, options = {}) {
+  const state = options.state || {};
+  const evidenceSummary = readOptionalJsonObject(path.join(inputDir, "evidence-summary.json"), {});
+  const databaseProfile = readOptionalJsonObject(path.join(inputDir, "database-profile.json"), {});
+  const code =
+    options.systemCode ||
+    options.system ||
+    state.code ||
+    report.system?.code ||
+    evidenceSummary.system?.code ||
+    databaseProfile.system?.code ||
+    "";
+  const name =
+    options.systemName ||
+    state.name ||
+    report.system?.name ||
+    evidenceSummary.system?.name ||
+    databaseProfile.system?.name ||
+    "";
+  return {
+    code: normalizeSystemCode(code),
+    name: String(name || "").trim(),
+  };
+}
+
+function approvalRequiresDatabaseEvidence(report = {}, options = {}) {
+  if (options.requireDatabaseEvidence !== undefined) return options.requireDatabaseEvidence;
+  if (report.requirements?.databaseEvidenceRequired !== undefined) {
+    return report.requirements.databaseEvidenceRequired;
+  }
+  if (report.gates?.database?.required !== undefined) return report.gates.database.required;
+  return false;
+}
+
+function currentTruthFailureSummary(report = {}) {
+  const blockers = Array.isArray(report.blockers)
+    ? report.blockers.map((item) => item.id || item.message || "").filter(Boolean)
+    : [];
+  const failures = Object.values(report.gates || {})
+    .flatMap((gate) => (Array.isArray(gate?.failures) ? gate.failures : []))
+    .map(String)
+    .filter(Boolean);
+  return unique([...blockers, ...failures]).slice(0, 8).join(", ");
+}
+
+function assertCurrentTruthReadiness(inputDir, report = {}, threshold, options = {}) {
+  const current = buildTruthReadinessReport({
+    artifacts: loadReadinessInputs(inputDir),
+    threshold,
+    requireDatabaseEvidence: approvalRequiresDatabaseEvidence(report, options),
+    expectedSystem: resolveExpectedApprovalSystem(inputDir, report, options),
+  });
+  const score = approvalTruthScore(current);
+  if (current.canSubmitReview === true && score >= threshold) {
+    return current;
+  }
+  const blockers = currentTruthFailureSummary(current);
+  throw new Error(
+    [
+      `Current truth readiness gate has not passed: ${path.join(inputDir, "truth-readiness-report.json")}`,
+      `canSubmitReview=${Boolean(current.canSubmitReview)}`,
+      `score=${Math.round(score * 1000) / 10}%`,
+      `threshold=${Math.round(threshold * 1000) / 10}%`,
+      blockers ? `blockers=${blockers}` : "",
+      "rerun truth-readiness before approval",
+    ]
+      .filter(Boolean)
+      .join("; "),
+  );
+}
+
 function outputPathHasE2eSegment(inputDir) {
   return path
     .resolve(String(inputDir || ""))
@@ -344,6 +421,9 @@ function assertApprovalTruthReadiness(inputDir, options = {}) {
   if (report.canSubmitReview === true && score >= threshold) {
     const staleSources = findStaleReadinessSources(inputDir, report);
     if (!staleSources.length) {
+      if (!options.allowSmokeTruthReadiness) {
+        assertCurrentTruthReadiness(inputDir, report, threshold, options);
+      }
       return report;
     }
     throw new Error(
@@ -388,7 +468,7 @@ function runReviewDecision(options = {}) {
     if (!fs.existsSync(pendingPath)) {
       throw new Error(`Pending review markdown not found: ${pendingPath}`);
     }
-    assertApprovalTruthReadiness(inputDir, options);
+    assertApprovalTruthReadiness(inputDir, { ...options, state });
     promotePendingReviewToFinal(pendingPath, finalPath, {
       systemName: options.systemName || state?.name,
     });
@@ -456,6 +536,9 @@ function main() {
     status,
     comment: args.comment,
     date: args.date,
+    requireDatabaseEvidence: args["require-database-evidence"],
+    systemCode: args["system-code"] || args.system,
+    systemName: args["system-name"],
   });
   console.log(JSON.stringify(decision, null, 2));
 }

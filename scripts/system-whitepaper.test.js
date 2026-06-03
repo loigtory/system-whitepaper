@@ -48,10 +48,64 @@ const {
 } = require("./system-whitepaper-lib");
 
 function writePassingTruthReadinessReport(dir, overrides = {}) {
+  const fs = require("node:fs");
+  const path = require("node:path");
   const {
     buildReadinessSourceArtifacts,
     loadReadinessInputs,
   } = require("./check-truth-readiness");
+  const writeJsonIfMissing = (fileName, value) => {
+    const filePath = path.join(dir, fileName);
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, JSON.stringify(value), "utf8");
+    }
+  };
+  writeJsonIfMissing("quality-report.json", {
+    canFinalize: true,
+    menuCoverage: 1,
+    corePageScreenshotCoverage: 1,
+    coreFunctionClassificationCoverage: 1,
+    writeOperationSafetyCompliance: 1,
+    unverifiedContentLabeling: 1,
+    coreConclusionTraceability: 1,
+    failures: [],
+  });
+  writeJsonIfMissing("verified-claims.json", {
+    rules: {
+      lowConfidenceNotWritable: true,
+      databaseOnlyNotConfirmed: true,
+      databaseOnlyNotWritable: true,
+    },
+    metrics: {
+      claimCount: 1,
+      writableClaimCount: 1,
+      confirmedCount: 1,
+      inferredCount: 0,
+      weakCount: 0,
+      databaseOnlyClaimCount: 0,
+    },
+    writableClaimIds: ["function:保单任务:任务列表"],
+  });
+  writeJsonIfMissing("fact-check-report.json", {
+    canFinalize: true,
+    failures: [],
+    metrics: {
+      claimCount: 1,
+      writableClaimCount: 1,
+      checkedAssertions: 1,
+      supportedAssertions: 1,
+      supportedRatio: 1,
+      coveredWritableClaimCount: 1,
+      missingWritableClaimCount: 0,
+      writableClaimCoverageRatio: 1,
+      minWritableClaimCoverage: 0.8,
+    },
+  });
+  writeJsonIfMissing("narrative-quality-report.json", {
+    canSubmitReview: true,
+    failures: [],
+    counts: { chars: 2000, evidencePages: 1 },
+  });
   const report = {
     artifactType: "truth-readiness-report",
     version: 1,
@@ -73,8 +127,8 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
     generatedAt: "2026-05-20T00:00:00.000Z",
     ...overrides,
   };
-  require("node:fs").writeFileSync(
-    require("node:path").join(dir, "truth-readiness-report.json"),
+  fs.writeFileSync(
+    path.join(dir, "truth-readiness-report.json"),
     JSON.stringify(report),
     "utf8",
   );
@@ -9692,6 +9746,42 @@ test("approved review rejects stale truth readiness fingerprints", () => {
   assert.throws(
     () => runReviewDecision({ inputDir: dir, status: "approved" }),
     /Truth readiness report is stale/,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "whitepaper.final.md")), false);
+});
+
+test("approved review recomputes current truth readiness before final approval", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runReviewDecision } = require("./run-review-decision");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "review-current-truth-"));
+  fs.writeFileSync(
+    path.join(dir, "whitepaper.pending-review.md"),
+    "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\n支撑保单数据闭环管理。",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "database-profile.json"),
+    JSON.stringify({ artifactType: "database-profile", system: { code: "other" }, tables: [] }),
+    "utf8",
+  );
+  writePassingTruthReadinessReport(dir, {
+    requirements: { databaseEvidenceRequired: true },
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    gates: {
+      evidence: { pass: true, scorePercent: 100 },
+      claims: { pass: true, scorePercent: 100 },
+      factCheck: { pass: true, scorePercent: 100 },
+      narrative: { pass: true, scorePercent: 100 },
+      database: { pass: true, required: true, profileAvailable: true, scorePercent: 100 },
+    },
+  });
+
+  assert.throws(
+    () => runReviewDecision({ inputDir: dir, status: "approved", systemCode: "adp" }),
+    /Current truth readiness gate has not passed.*belongs to other, expected adp/s,
   );
   assert.equal(fs.existsSync(path.join(dir, "whitepaper.final.md")), false);
 });

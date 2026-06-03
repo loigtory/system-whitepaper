@@ -141,6 +141,7 @@ function runLocalE2ESmoke(options = {}) {
   const decision = runReviewDecision({
     inputDir: smokeOutput,
     status: "approved",
+    systemCode,
     systemName,
     date: options.date,
     allowSmokeTruthReadiness: true,
