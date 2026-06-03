@@ -11,7 +11,11 @@ const {
 } = require("./system-whitepaper-lib");
 const { resolveDatabaseProfileConfig } = require("./collect-database-profile");
 const { runDoctor } = require("./doctor");
-const { findStaleReadinessSources } = require("./check-truth-readiness");
+const {
+  buildTruthReadinessReport,
+  findStaleReadinessSources,
+  loadReadinessInputs,
+} = require("./check-truth-readiness");
 
 function nowIso(value) {
   return value || new Date().toISOString();
@@ -262,6 +266,15 @@ function percentFromTruthReport(report = {}) {
   return 0;
 }
 
+function truthRequiresDatabaseEvidence(truth = {}, system = {}) {
+  if (system.databaseProfileConfigured || system.databaseProfileEnabled) return true;
+  if (truth.requirements?.databaseEvidenceRequired !== undefined) {
+    return truth.requirements.databaseEvidenceRequired;
+  }
+  if (truth.gates?.database?.required !== undefined) return truth.gates.database.required;
+  return false;
+}
+
 function truthReportLooksLikeSmoke(report = {}) {
   const mode = String(report.mode || "").toLowerCase();
   if (mode.includes("smoke") || mode.includes("local-e2e")) return true;
@@ -411,6 +424,19 @@ function bindDeliveryReportToCurrentSources(deliveryReport, context = {}) {
     const staleSources = findStaleReadinessSources(systemOutputDir, truthReport);
     if (staleSources.length) {
       invalidSystems.push({ code, reason: "stale-truth-sources" });
+      continue;
+    }
+    const currentTruth = buildTruthReadinessReport({
+      artifacts: loadReadinessInputs(systemOutputDir),
+      threshold: targetTruthScorePercent,
+      requireDatabaseEvidence: truthRequiresDatabaseEvidence(truthReport, system),
+      expectedSystem: { code, name: system.name || "" },
+    });
+    if (
+      currentTruth.canSubmitReview !== true ||
+      percentFromTruthReport(currentTruth) < targetTruthScorePercent
+    ) {
+      invalidSystems.push({ code, reason: "current-truth-gate-failed" });
     }
   }
   if (invalidSystems.length) {

@@ -135,6 +135,117 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
   return report;
 }
 
+function writePassingTruthArtifacts(dir, options = {}) {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const {
+    buildReadinessSourceArtifacts,
+    loadReadinessInputs,
+  } = require("./check-truth-readiness");
+  fs.writeFileSync(
+    path.join(dir, "quality-report.json"),
+    JSON.stringify({
+      canFinalize: true,
+      menuCoverage: 1,
+      corePageScreenshotCoverage: 1,
+      coreFunctionClassificationCoverage: 1,
+      writeOperationSafetyCompliance: 1,
+      unverifiedContentLabeling: 1,
+      coreConclusionTraceability: 1,
+      failures: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "verified-claims.json"),
+    JSON.stringify({
+      rules: {
+        lowConfidenceNotWritable: true,
+        databaseOnlyNotConfirmed: true,
+        databaseOnlyNotWritable: true,
+      },
+      metrics: {
+        claimCount: 1,
+        writableClaimCount: 1,
+        confirmedCount: 1,
+        inferredCount: 0,
+        weakCount: 0,
+        databaseOnlyClaimCount: 0,
+      },
+      writableClaimIds: ["function:保单任务:任务列表"],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "fact-check-report.json"),
+    JSON.stringify({
+      canFinalize: true,
+      failures: [],
+      metrics: {
+        claimCount: 1,
+        writableClaimCount: 1,
+        checkedAssertions: 1,
+        supportedAssertions: 1,
+        supportedRatio: 1,
+        coveredWritableClaimCount: 1,
+        missingWritableClaimCount: 0,
+        writableClaimCoverageRatio: 1,
+        minWritableClaimCoverage: 0.8,
+      },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "narrative-quality-report.json"),
+    JSON.stringify({ canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } }),
+    "utf8",
+  );
+  if (options.databaseProfile !== false) {
+    fs.writeFileSync(
+      path.join(dir, "database-profile.json"),
+      JSON.stringify({
+        artifactType: "database-profile",
+        system: { code: options.systemCode || "adp", name: options.systemName || "AI保单数据闭环平台" },
+        tables: [],
+        safety: { secretRedacted: true },
+      }),
+      "utf8",
+    );
+  }
+  const report = {
+    artifactType: "truth-readiness-report",
+    version: 1,
+    threshold: 0.95,
+    score: 0.98,
+    scorePercent: 98,
+    canSubmitReview: true,
+    canFinalize: true,
+    requirements: { databaseEvidenceRequired: options.requireDatabaseEvidence === true },
+    gates: {
+      database: {
+        pass: true,
+        available: options.databaseProfile !== false,
+        required: options.requireDatabaseEvidence === true,
+        profileAvailable: options.databaseProfile !== false,
+      },
+      factCheck: {
+        pass: true,
+        metrics: {
+          writableClaimCoverageRatio: 1,
+          minWritableClaimCoverage: 0.8,
+          missingWritableClaimCount: 0,
+        },
+      },
+    },
+    blockers: [],
+    improvementActions: [],
+    sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(dir)),
+    generatedAt: "2026-06-03T00:01:00.000Z",
+  };
+  fs.writeFileSync(path.join(dir, "truth-readiness-report.json"), JSON.stringify(report), "utf8");
+  return report;
+}
+
 test("safeScreenshotName removes unsafe path characters while preserving meaning", () => {
   assert.equal(
     safeScreenshotName("合同管理", "合同删除", "确认弹窗", "20260518"),
@@ -7883,42 +7994,8 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
     state = updateNodeStatus(state, nodeId, nodeId === "validate-write" ? "skipped" : "success");
   }
   writePipelineState(path.join(systemOutput, "pipeline-state.json"), state);
-  fs.writeFileSync(path.join(systemOutput, "quality-report.json"), JSON.stringify({ canFinalize: true }), "utf8");
-  fs.writeFileSync(path.join(systemOutput, "verified-claims.json"), JSON.stringify({ claims: [] }), "utf8");
-  fs.writeFileSync(
-    path.join(systemOutput, "fact-check-report.json"),
-    JSON.stringify({
-      canFinalize: true,
-      metrics: {
-        writableClaimCoverageRatio: 1,
-        minWritableClaimCoverage: 0.8,
-        missingWritableClaimCount: 0,
-      },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(systemOutput, "narrative-quality-report.json"),
-    JSON.stringify({ canSubmitReview: true, counts: { chars: 2000, evidencePages: 1 } }),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(systemOutput, "database-profile.json"), JSON.stringify({ tables: [] }), "utf8");
   fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
-  fs.writeFileSync(
-    path.join(systemOutput, "truth-readiness-report.json"),
-    JSON.stringify({
-      artifactType: "truth-readiness-report",
-      score: 0.98,
-      scorePercent: 98,
-      canSubmitReview: true,
-      canFinalize: true,
-      gates: { database: { available: true }, factCheck: { metrics: { writableClaimCoverageRatio: 1 } } },
-      blockers: [],
-      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
-      generatedAt: "2026-06-03T00:01:00.000Z",
-    }),
-    "utf8",
-  );
+  writePassingTruthArtifacts(systemOutput, { requireDatabaseEvidence: true });
 
   const acceptanceReport = {
     artifactType: "batch-acceptance-report",
@@ -7990,7 +8067,55 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.equal(stale.summary.staleSystems, 1);
   assert.equal(stale.systems[0].staleSourceCount > 0, true);
   assert.ok(stale.blockers.some((item) => item.id === "delivery.truth-readiness-stale-sources"));
-  fs.writeFileSync(path.join(systemOutput, "verified-claims.json"), JSON.stringify({ claims: [] }), "utf8");
+  writePassingTruthArtifacts(systemOutput, { requireDatabaseEvidence: true });
+
+  fs.writeFileSync(
+    path.join(systemOutput, "fact-check-report.json"),
+    JSON.stringify({
+      canFinalize: false,
+      failures: [],
+      metrics: {
+        claimCount: 1,
+        writableClaimCount: 1,
+        checkedAssertions: 1,
+        supportedAssertions: 1,
+        supportedRatio: 1,
+        coveredWritableClaimCount: 0,
+        missingWritableClaimCount: 1,
+        writableClaimCoverageRatio: 0,
+        minWritableClaimCoverage: 0.8,
+      },
+      missingWritableClaimIds: ["function:保单任务:任务列表"],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      artifactType: "truth-readiness-report",
+      version: 1,
+      threshold: 0.95,
+      score: 0.99,
+      scorePercent: 99,
+      canSubmitReview: true,
+      canFinalize: true,
+      requirements: { databaseEvidenceRequired: true },
+      gates: {
+        database: { pass: true, available: true, required: true, profileAvailable: true },
+        factCheck: { pass: true, metrics: { writableClaimCoverageRatio: 1, minWritableClaimCoverage: 0.8, missingWritableClaimCount: 0 } },
+      },
+      blockers: [],
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
+  const currentGateFailed = buildDeliveryReadinessReport({ acceptanceReport });
+  assert.equal(currentGateFailed.status, "blocked");
+  assert.equal(currentGateFailed.canDeliver, false);
+  assert.equal(currentGateFailed.systems[0].scorePercent, 75);
+  assert.equal(currentGateFailed.systems[0].canSubmitReview, false);
+  assert.ok(currentGateFailed.blockers.some((item) => item.id === "delivery.current-truth-gate-failed"));
+  writePassingTruthArtifacts(systemOutput, { requireDatabaseEvidence: true });
 
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
@@ -8035,11 +8160,8 @@ test("real run readiness unifies preflight and final delivery state", () => {
   fs.mkdirSync(systemOutput, { recursive: true });
   fs.writeFileSync(path.join(systemOutput, "evidence-summary.json"), JSON.stringify({ system: { code: "adp" } }), "utf8");
   fs.writeFileSync(path.join(systemOutput, "function-universe.json"), JSON.stringify({ functions: [] }), "utf8");
-  fs.writeFileSync(path.join(systemOutput, "verified-claims.json"), JSON.stringify({ claims: [] }), "utf8");
-  fs.writeFileSync(path.join(systemOutput, "fact-check-report.json"), JSON.stringify({ canFinalize: true }), "utf8");
-  fs.writeFileSync(path.join(systemOutput, "quality-report.json"), JSON.stringify({ canFinalize: true }), "utf8");
-  fs.writeFileSync(path.join(systemOutput, "narrative-quality-report.json"), JSON.stringify({ canSubmitReview: true }), "utf8");
   fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
+  writePassingTruthArtifacts(systemOutput, { databaseProfile: false });
   let state = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
   for (const nodeId of [
     "sync",
@@ -8062,18 +8184,6 @@ test("real run readiness unifies preflight and final delivery state", () => {
   }
   state = { ...state, overallStatus: "review-pending" };
   writePipelineState(path.join(systemOutput, "pipeline-state.json"), state);
-  fs.writeFileSync(
-    path.join(systemOutput, "truth-readiness-report.json"),
-    JSON.stringify({
-      artifactType: "truth-readiness-report",
-      scorePercent: 98,
-      canSubmitReview: true,
-      canFinalize: true,
-      blockers: [],
-      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
-    }),
-    "utf8",
-  );
   fs.writeFileSync(
     configPath,
     [
@@ -8261,7 +8371,7 @@ test("real run readiness unifies preflight and final delivery state", () => {
   assert.equal(staleTruthSources.status, "in-progress");
   assert.equal(staleTruthSources.canDeliver, false);
   assert.ok(staleTruthSources.warnings.some((item) => item.id === "delivery.current-truth-invalid"));
-  fs.writeFileSync(path.join(systemOutput, "verified-claims.json"), JSON.stringify({ claims: [] }), "utf8");
+  writePassingTruthArtifacts(systemOutput, { databaseProfile: false });
 
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
@@ -8290,6 +8400,28 @@ test("real run readiness unifies preflight and final delivery state", () => {
   assert.equal(staleSmokeTruth.status, "in-progress");
   assert.equal(staleSmokeTruth.canDeliver, false);
   assert.ok(staleSmokeTruth.warnings.some((item) => item.id === "delivery.current-truth-invalid"));
+  writePassingTruthArtifacts(systemOutput, { databaseProfile: false });
+
+  fs.writeFileSync(
+    path.join(systemOutput, "fact-check-report.json"),
+    JSON.stringify({
+      canFinalize: false,
+      failures: [],
+      metrics: {
+        claimCount: 1,
+        writableClaimCount: 1,
+        checkedAssertions: 1,
+        supportedAssertions: 1,
+        supportedRatio: 1,
+        coveredWritableClaimCount: 0,
+        missingWritableClaimCount: 1,
+        writableClaimCoverageRatio: 0,
+        minWritableClaimCoverage: 0.8,
+      },
+      missingWritableClaimIds: ["function:保单任务:任务列表"],
+    }),
+    "utf8",
+  );
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
     JSON.stringify({
@@ -8302,6 +8434,26 @@ test("real run readiness unifies preflight and final delivery state", () => {
     }),
     "utf8",
   );
+  const currentGateInvalidReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport,
+    deliveryReport,
+  });
+  assert.equal(currentGateInvalidReady.status, "in-progress");
+  assert.equal(currentGateInvalidReady.canDeliver, false);
+  assert.ok(currentGateInvalidReady.warnings.some((item) => item.id === "delivery.current-truth-invalid"));
+  assert.match(
+    currentGateInvalidReady.warnings.find((item) => item.id === "delivery.current-truth-invalid")?.message || "",
+    /adp:current-truth-gate-failed/,
+  );
+  writePassingTruthArtifacts(systemOutput, { databaseProfile: false });
 
   writePipelineState(path.join(systemOutput, "pipeline-state.json"), { ...state, overallStatus: "failed" });
   const stalePipelineState = buildRealRunReadinessReport({

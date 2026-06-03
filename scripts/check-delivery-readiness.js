@@ -4,7 +4,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { parseArgs, readOptionalJsonObject, writeJson } = require("./system-whitepaper-lib");
 const { runBatchAcceptance } = require("./check-batch-acceptance");
-const { findStaleReadinessSources } = require("./check-truth-readiness");
+const {
+  buildTruthReadinessReport,
+  findStaleReadinessSources,
+  loadReadinessInputs,
+} = require("./check-truth-readiness");
 
 const DEFAULT_TARGET_TRUTH_SCORE_PERCENT = 95;
 const REQUIRED_REAL_NODES = [
@@ -39,6 +43,10 @@ function percentFromReport(report = {}) {
   return 0;
 }
 
+function unique(items) {
+  return [...new Set((items || []).filter(Boolean))];
+}
+
 function blocker(id, message, extra = {}) {
   return {
     id,
@@ -70,6 +78,35 @@ function truthReportLooksLikeSmoke(report = {}) {
   return (Array.isArray(report.improvementActions) ? report.improvementActions : []).some((item) =>
     /smoke/i.test(`${item.id || ""} ${item.message || ""}`),
   );
+}
+
+function truthRequiresDatabaseEvidence(truth = {}, databaseProfileConfigured = false) {
+  if (databaseProfileConfigured) return true;
+  if (truth.requirements?.databaseEvidenceRequired !== undefined) {
+    return truth.requirements.databaseEvidenceRequired;
+  }
+  if (truth.gates?.database?.required !== undefined) return truth.gates.database.required;
+  return false;
+}
+
+function currentTruthFailureSummary(report = {}) {
+  const blockers = Array.isArray(report.blockers)
+    ? report.blockers.map((item) => item.id || item.message || "").filter(Boolean)
+    : [];
+  const failures = Object.values(report.gates || {})
+    .flatMap((gate) => (Array.isArray(gate?.failures) ? gate.failures : []))
+    .map(String)
+    .filter(Boolean);
+  return unique([...blockers, ...failures]).slice(0, 8).join(", ");
+}
+
+function currentTruthRerunNodes(report = {}) {
+  const nodes = unique(
+    (Array.isArray(report.blockers) ? report.blockers : []).flatMap((item) =>
+      Array.isArray(item.rerunNodes) ? item.rerunNodes : [],
+    ),
+  );
+  return nodes.length ? nodes : ["truth-readiness"];
 }
 
 function markdownLooksLikeSmoke(markdown = "") {
@@ -176,6 +213,9 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
   const blockers = [];
   const warnings = [];
   let staleSources = [];
+  let scorePercent = 0;
+  let canSubmitReview = false;
+  let databaseEvidenceAvailable = Boolean(systemReport.databaseEvidenceAvailable);
 
   if (!systemReport.accepted) {
     blockers.push(
@@ -218,8 +258,26 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
       }),
     );
   } else {
-    const scorePercent = percentFromReport(truth);
+    const recordedScorePercent = percentFromReport(truth);
+    scorePercent = recordedScorePercent;
+    canSubmitReview = Boolean(truth.canSubmitReview);
     staleSources = findStaleReadinessSources(outputDir, truth);
+    const currentTruth = buildTruthReadinessReport({
+      artifacts: loadReadinessInputs(outputDir),
+      threshold: targetTruthScorePercent,
+      requireDatabaseEvidence: truthRequiresDatabaseEvidence(
+        truth,
+        Boolean(systemReport.databaseProfileConfigured),
+      ),
+      expectedSystem: { code, name: systemReport.name || "" },
+    });
+    const currentScorePercent = percentFromReport(currentTruth);
+    scorePercent = Math.min(recordedScorePercent, currentScorePercent);
+    canSubmitReview = canSubmitReview && Boolean(currentTruth.canSubmitReview);
+    databaseEvidenceAvailable = Boolean(
+      currentTruth.gates?.database?.profileAvailable ||
+        (!systemReport.databaseProfileConfigured && systemReport.databaseEvidenceAvailable),
+    );
     if (truthReportLooksLikeSmoke(truth)) {
       blockers.push(
         blocker("delivery.smoke-truth-report", "truth-readiness-report.json is marked as local smoke evidence.", {
@@ -227,12 +285,30 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
         }),
       );
     }
-    if (!truth.canSubmitReview || scorePercent < targetTruthScorePercent) {
+    if (truth.canSubmitReview !== true || recordedScorePercent < targetTruthScorePercent) {
       blockers.push(
         blocker(
           "delivery.truth-not-ready",
-          `Truth readiness is not delivery-ready: canSubmitReview=${Boolean(truth.canSubmitReview)}, score=${scorePercent}%.`,
+          `Truth readiness is not delivery-ready: canSubmitReview=${Boolean(truth.canSubmitReview)}, score=${recordedScorePercent}%.`,
           { systemCode: code, rerunNodes: ["truth-readiness"] },
+        ),
+      );
+    }
+    if (!currentTruth.canSubmitReview || currentScorePercent < targetTruthScorePercent) {
+      const summary = currentTruthFailureSummary(currentTruth);
+      blockers.push(
+        blocker(
+          "delivery.current-truth-gate-failed",
+          [
+            `Current truth readiness gate fails against latest artifacts: canSubmitReview=${Boolean(currentTruth.canSubmitReview)}, score=${currentScorePercent}%.`,
+            summary ? `Reasons: ${summary}.` : "",
+          ]
+            .filter(Boolean)
+            .join(" "),
+          {
+            systemCode: code,
+            rerunNodes: currentTruthRerunNodes(currentTruth),
+          },
         ),
       );
     }
@@ -276,13 +352,13 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
     status: blockers.length ? "blocked" : "ready",
     ready: blockers.length === 0,
     accepted: Boolean(systemReport.accepted),
-    scorePercent: truth ? percentFromReport(truth) : 0,
-    canSubmitReview: Boolean(truth?.canSubmitReview),
+    scorePercent,
+    canSubmitReview,
     whitepaperExists,
     pendingReviewExists,
     finalExists,
     databaseProfileConfigured: Boolean(systemReport.databaseProfileConfigured),
-    databaseEvidenceAvailable: Boolean(systemReport.databaseEvidenceAvailable),
+    databaseEvidenceAvailable,
     pipelineStatus: state?.overallStatus || "",
     nodeStatus: state ? buildNodeStatusSummary(state, Boolean(systemReport.databaseProfileConfigured)) : {},
     staleSourceCount: staleSources.length,
