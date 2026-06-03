@@ -60,7 +60,7 @@ Use the 4-thread model for unattended multi-system development:
 - Run different systems in parallel. Each system must write to its own `outputs/<system-code>/` directory.
 - Do not run the same system twice at the same time. Duplicate system codes or duplicate batch requests are invalid because they can overwrite screenshots, state, prompts, and review artifacts.
 - The batch runner owns `outputs/_batch/run-state.json`. Single-system child pipelines are started with `--no-batch-state` so they cannot overwrite the aggregate batch state.
-- The local dashboard reads the same batch state and shows each running system's status, current phase/node, pid, and per-system log path.
+- The local dashboard reads the same batch state and shows each running system's status, current phase/node, pid, per-system log path, truth-readiness summary, writable-claim coverage, and coverage-repair status.
 - Batch execution increases throughput only. It does not multiply Cursor/Codex plan quota and it does not make Agent writing free.
 
 ## Execution Commands
@@ -85,7 +85,7 @@ Use the npm scripts as the stable entrypoints:
 
 Run `npm run init` once after installing the skill, then edit `config/systems.local.yaml` and write the Huntian token into `secrets/huntian-token.txt`.
 Run `npm run doctor` before first collection and after changing config or secret paths.
-Prefer `npm run pipeline` for single-system production runs. Use `npm run batch` when multiple independent systems must be processed unattended. Watch `outputs/_batch/run-state.json` or the dashboard "Batch 4 threads" panel to see all active system threads at once. Use `npm run phase3b` only for scoped narrative work, review rewrites, or prompt/fragment regeneration after evidence and summary artifacts already exist.
+Prefer `npm run pipeline` for single-system production runs. Use `npm run batch` when multiple independent systems must be processed unattended. Watch `outputs/_batch/run-state.json` or the dashboard "Batch 4 threads" panel to see all active system threads, truth-readiness scores, and coverage-repair outcomes at once. Use `npm run phase3b` only for scoped narrative work, review rewrites, or prompt/fragment regeneration after evidence and summary artifacts already exist.
 Run `npm run pack:check` before distributing or installing an updated copy of this skill.
 
 ## Hard Rules

@@ -802,14 +802,22 @@
           const systems = run.systems || [];
           const items = systems
             .map(
-              (item) => `
-                <div class="batch-item">
-                  <div><strong>${escapeHtml(item.name || item.code)}</strong> ${statusBadge(item.status)}</div>
-                  <div class="muted">${escapeHtml(item.code)} · ${escapeHtml(item.currentPhase || "-")} / ${escapeHtml(item.currentNode || "-")}</div>
-                  <div class="muted">run=${escapeHtml(item.runStatus || "-")} · pid=${escapeHtml(String(item.pid || "-"))}</div>
-                  ${item.lastError ? `<div class="status failed">${escapeHtml(item.lastError)}</div>` : ""}
-                </div>
-              `,
+              (item) => {
+                const readiness = item.truthReadiness;
+                const coverage = item.writableClaimCoverage;
+                const repair = item.coverageRepair;
+                return `
+                  <div class="batch-item">
+                    <div><strong>${escapeHtml(item.name || item.code)}</strong> ${statusBadge(item.status)}</div>
+                    <div class="muted">${escapeHtml(item.code)} · ${escapeHtml(item.currentPhase || "-")} / ${escapeHtml(item.currentNode || "-")}</div>
+                    <div class="muted">run=${escapeHtml(item.runStatus || "-")} · pid=${escapeHtml(String(item.pid || "-"))}</div>
+                    ${readiness ? `<div class="muted">真实度 ${escapeHtml(String(readiness.scorePercent || 0))}% · 可审 ${readiness.canSubmitReview ? "是" : "否"}</div>` : ""}
+                    ${coverage ? `<div class="muted">可写声明缺失 ${escapeHtml(String(coverage.missingWritableClaimCount || 0))}</div>` : ""}
+                    ${repair ? `<div class="muted">自动补写 ${escapeHtml(repair.status || "-")} · ${escapeHtml(repair.narrativePart || "-")}</div>` : ""}
+                    ${item.lastError ? `<div class="status failed">${escapeHtml(item.lastError)}</div>` : ""}
+                  </div>
+                `;
+              },
             )
             .join("");
           return `
@@ -819,6 +827,7 @@
                   <h2>Batch execution</h2>
                   <div><strong>${escapeHtml(run.systemName)}</strong> · ${statusBadge("running")}</div>
                   <div class="muted">concurrency=${escapeHtml(String(run.concurrency || 4))} · ${escapeHtml(run.currentNodeLabel || "")}</div>
+                  <div class="muted">真实度可审 ${escapeHtml(String(run.truthReadyCount || 0))} · 自动补写 ${escapeHtml(String(run.coverageRepairCount || 0))}</div>
                   ${run.lastError ? `<div class="status failed">${escapeHtml(run.lastError)}</div>` : ""}
                 </div>
                 <div class="muted">PID ${run.pid || "-"} · ${formatDuration(run.runningMs)}</div>

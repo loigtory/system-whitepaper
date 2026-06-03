@@ -7,6 +7,7 @@ const {
   normalizeAuthPaths,
   parseArgs,
   parseSystemsConfig,
+  readOptionalJsonObject,
   resolveConfigRelativePath,
   safeFileToken,
   writeJson,
@@ -292,10 +293,60 @@ function applyPipelineSnapshot(item, pipelineState) {
   return next;
 }
 
+function buildBatchTruthSummary(systemOutput) {
+  const truth = readOptionalJsonObject(path.join(systemOutput, "truth-readiness-report.json"));
+  const factCheck = readOptionalJsonObject(path.join(systemOutput, "fact-check-report.json"));
+  const repair = readOptionalJsonObject(path.join(systemOutput, "coverage-repair-plan.json"));
+  const factMetrics = truth?.gates?.factCheck?.metrics || factCheck?.metrics || {};
+  return {
+    truthReadiness: truth
+      ? {
+          scorePercent: Number(truth.scorePercent || 0),
+          canSubmitReview: Boolean(truth.canSubmitReview),
+          canFinalize: Boolean(truth.canFinalize),
+          blockerCount: Array.isArray(truth.blockers) ? truth.blockers.length : 0,
+          generatedAt: truth.generatedAt || "",
+        }
+      : null,
+    writableClaimCoverage: factCheck || truth?.gates?.factCheck
+      ? {
+          ratio: Number(factMetrics.writableClaimCoverageRatio || 0),
+          minRatio: Number(factMetrics.minWritableClaimCoverage || 0),
+          missingWritableClaimCount: Number(factMetrics.missingWritableClaimCount || 0),
+          missingWritableClaimIds: Array.isArray(factCheck?.missingWritableClaimIds)
+            ? factCheck.missingWritableClaimIds.slice(0, 12)
+            : Array.isArray(truth?.gates?.factCheck?.missingWritableClaimIds)
+              ? truth.gates.factCheck.missingWritableClaimIds.slice(0, 12)
+              : [],
+        }
+      : null,
+    coverageRepair: repair
+      ? {
+          status: repair.status || "",
+          narrativePart: repair.narrativePart || "",
+          targetModules: Array.isArray(repair.targetModules) ? repair.targetModules.slice(0, 12) : [],
+          missingWritableClaimCount: Array.isArray(repair.missingWritableClaimIds)
+            ? repair.missingWritableClaimIds.length
+            : 0,
+          error: repair.error || "",
+        }
+      : null,
+  };
+}
+
+function applySystemArtifactSummary(item, outputRoot) {
+  const systemOutput = path.join(outputRoot, item.code);
+  return {
+    ...item,
+    ...buildBatchTruthSummary(systemOutput),
+  };
+}
+
 function refreshBatchStateFromDisk(state, outputRoot, options = {}) {
   const systems = (state.systems || []).map((item) => {
     const statePath = path.join(outputRoot, item.code, "pipeline-state.json");
-    return applyPipelineSnapshot(item, readPipelineStateSafe(statePath, { persist: true }));
+    const next = applyPipelineSnapshot(item, readPipelineStateSafe(statePath, { persist: true }));
+    return applySystemArtifactSummary(next, outputRoot);
   });
   return recomputeBatchState({ ...state, systems }, options);
 }
@@ -467,6 +518,7 @@ if (require.main === module) {
 module.exports = {
   DEFAULT_BATCH_CONCURRENCY,
   buildBatchChildArgs,
+  buildBatchTruthSummary,
   createBatchState,
   loadBatchConfig,
   recomputeBatchState,

@@ -870,6 +870,8 @@ function buildBatchActiveRun(run, systems, batch) {
       : run.stale
         ? "Batch state is running, but no local pipeline process was detected."
         : "";
+  const truthReadyCount = batchSystems.filter((item) => item.truthReadiness?.canSubmitReview).length;
+  const repairCount = batchSystems.filter((item) => item.coverageRepair).length;
   return {
     mode: "batch",
     systemCode: currentCodes.join(","),
@@ -880,6 +882,8 @@ function buildBatchActiveRun(run, systems, batch) {
     nodes: run.nodes || "",
     concurrency: run.concurrency || batch?.concurrency || 4,
     systems: batchSystems,
+    truthReadyCount,
+    coverageRepairCount: repairCount,
     startedAt: run.startedAt || batch?.startedAt || "",
     runningMs:
       run.startedAt || batch?.startedAt

@@ -5923,6 +5923,52 @@ test("dashboard frontend renders truth readiness gate summary", () => {
   assert.match(html, /无阻塞项/);
 });
 
+test("dashboard frontend renders batch truth and repair summary", () => {
+  const vm = require("node:vm");
+  const script = loadDashboardFrontendScript();
+  const context = createDashboardFrontendContext();
+
+  const snapshotPayload = {
+    activeRun: {
+      mode: "batch",
+      systemName: "Batch 1/2 running",
+      concurrency: 4,
+      currentNodeLabel: "1 running / 1 queued",
+      truthReadyCount: 1,
+      coverageRepairCount: 1,
+      runningMs: 120000,
+      progress: { total: 2, completed: 1, percent: 50 },
+      systems: [
+        {
+          code: "adp",
+          name: "AI保单数据闭环平台",
+          status: "running",
+          runStatus: "running",
+          currentPhase: "compose",
+          currentNode: "fact-check",
+          truthReadiness: { scorePercent: 96, canSubmitReview: true },
+          writableClaimCoverage: { missingWritableClaimCount: 0 },
+          coverageRepair: { status: "completed", narrativePart: "保单任务" },
+        },
+      ],
+    },
+  };
+  const html = vm.runInNewContext(
+    `${script}\nsnapshot = ${JSON.stringify(snapshotPayload)};\nrenderActiveRun();`,
+    context,
+    { filename: "local-dashboard/index.html" },
+  );
+
+  assert.match(html, /Batch execution/);
+  assert.match(html, /真实度可审 1/);
+  assert.match(html, /自动补写 1/);
+  assert.match(html, /真实度 96%/);
+  assert.match(html, /可审 是/);
+  assert.match(html, /可写声明缺失 0/);
+  assert.match(html, /自动补写 completed/);
+  assert.match(html, /保单任务/);
+});
+
 function createDashboardFrontendContext() {
   return {
     console,
@@ -6422,6 +6468,36 @@ test("batch runner refreshes aggregate state from per-system pipeline states", (
   pipelineState = updateNodeStatus(pipelineState, "sync", "success");
   pipelineState = updateNodeStatus(pipelineState, "session", "running");
   writePipelineState(path.join(adpOutput, "pipeline-state.json"), pipelineState);
+  fs.writeFileSync(
+    path.join(adpOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      scorePercent: 96,
+      canSubmitReview: true,
+      canFinalize: true,
+      blockers: [],
+      generatedAt: "2026-06-03T00:02:00.000Z",
+      gates: {
+        factCheck: {
+          metrics: {
+            writableClaimCoverageRatio: 1,
+            minWritableClaimCoverage: 0.8,
+            missingWritableClaimCount: 0,
+          },
+        },
+      },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(adpOutput, "coverage-repair-plan.json"),
+    JSON.stringify({
+      status: "completed",
+      narrativePart: "保单任务",
+      targetModules: ["保单任务"],
+      missingWritableClaimIds: ["function:保单任务:任务详情"],
+    }),
+    "utf8",
+  );
 
   const batchState = createBatchState(
     [
@@ -6436,12 +6512,19 @@ test("batch runner refreshes aggregate state from per-system pipeline states", (
   const adp = refreshed.systems.find((item) => item.code === "adp");
   assert.equal(adp.status, "running");
   assert.equal(adp.currentNode, "session");
+  assert.equal(adp.truthReadiness.scorePercent, 96);
+  assert.equal(adp.truthReadiness.canSubmitReview, true);
+  assert.equal(adp.writableClaimCoverage.ratio, 1);
+  assert.equal(adp.coverageRepair.status, "completed");
+  assert.equal(adp.coverageRepair.narrativePart, "保单任务");
   assert.equal(refreshed.status, "running");
 
   const writtenPath = writeBatchRunState(outputRoot, refreshed);
   const written = JSON.parse(fs.readFileSync(writtenPath, "utf8"));
   assert.equal(written.systems[0].code, "adp");
   assert.equal(written.concurrency, 4);
+  assert.equal(written.systems[0].truthReadiness.scorePercent, 96);
+  assert.equal(written.systems[0].coverageRepair.status, "completed");
 });
 
 test("dashboard supports batch pipeline command and active run snapshot", () => {
@@ -6502,6 +6585,8 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
           runStatus: "running",
           currentPhase: "evidence",
           currentNode: "collect",
+          truthReadiness: { canSubmitReview: true, scorePercent: 96 },
+          coverageRepair: { status: "completed", narrativePart: "保单任务" },
         },
         {
           code: "claim",
@@ -6519,6 +6604,8 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(batchActiveRun.systems.length, 2);
   assert.equal(batchActiveRun.currentNodeLabel, "1 running / 1 queued");
   assert.equal(batchActiveRun.progress.total, 2);
+  assert.equal(batchActiveRun.truthReadyCount, 1);
+  assert.equal(batchActiveRun.coverageRepairCount, 1);
 
   const fs = require("node:fs");
   const os = require("node:os");
