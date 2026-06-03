@@ -5052,6 +5052,83 @@ test("dashboard snapshot regenerates missing docx for finalized system", () => {
   assert.equal(snapshot.systems[0].currentNode, "end");
   assert.equal(snapshot.systems[0].artifacts.docx.exists, true);
   assert.match(snapshot.systems[0].artifacts.docx.file || "", /\.docx$/i);
+  assert.equal(fs.existsSync(`${snapshot.systems[0].artifacts.docx.path}.manifest.json`), true);
+});
+
+test("dashboard snapshot regenerates stale docx for finalized system", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
+  const { buildDashboardSnapshot } = require("./local-dashboard/server");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-docx-stale-"));
+  const configPath = path.join(dir, "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const adpOutput = path.join(dir, "outputs", "adp");
+  fs.mkdirSync(adpOutput, { recursive: true });
+  let adpState = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
+  for (const nodeId of [
+    "sync",
+    "session",
+    "collect",
+    "inspect",
+    "validate-write",
+    "db-profile",
+    "db-model",
+    "truth-universe",
+    "truth-claims",
+    "build-spec",
+    "compose-guide",
+    "draft",
+    "summary",
+    "narrative",
+    "fact-check",
+    "quality",
+    "truth-readiness",
+    "review",
+  ]) {
+    adpState = updateNodeStatus(adpState, nodeId, nodeId === "validate-write" ? "skipped" : "success");
+  }
+  adpState.review.status = "approved";
+  adpState = {
+    ...adpState,
+    overallStatus: "finalized",
+    currentPhase: "completed",
+    currentNode: "end",
+    artifacts: { ...(adpState.artifacts || {}), docx: "stale-old.docx" },
+  };
+  writePipelineState(path.join(adpOutput, "pipeline-state.json"), adpState);
+  fs.writeFileSync(
+    path.join(adpOutput, "whitepaper.final.md"),
+    "# AI保单数据闭环平台功能白皮书\n\n## 1. 系统概览\n当前最终稿。",
+    "utf8",
+  );
+  fs.writeFileSync(path.join(adpOutput, "stale-old.docx"), "PK\x03\x04stale-docx", "utf8");
+  fs.writeFileSync(
+    path.join(adpOutput, "evidence-summary.json"),
+    JSON.stringify({ system: { name: "AI保单数据闭环平台", collectedAt: "2026-05-21T08:00:00.000Z" } }),
+    "utf8",
+  );
+
+  const snapshot = buildDashboardSnapshot({ configPath });
+  const docx = snapshot.systems[0].artifacts.docx;
+  assert.equal(docx.exists, true);
+  assert.match(docx.file || "", /\.docx$/i);
+  assert.notEqual(docx.file, "stale-old.docx");
+  assert.equal(fs.existsSync(`${docx.path}.manifest.json`), true);
 });
 
 test("stopRunningPipelineState pauses running nodes and overall status", () => {
@@ -10699,7 +10776,12 @@ test("dashboard download route serves docx artifact", async () => {
     "utf8",
   );
   const docxPath = path.join(output, "AI保单数据闭环平台_系统功能白皮书_20260524.docx");
-  fs.writeFileSync(docxPath, "PK\x03\x04fake-docx", "utf8");
+  fs.writeFileSync(docxPath, "PK\x03\x04stale-docx", "utf8");
+  fs.writeFileSync(
+    path.join(output, "whitepaper.final.md"),
+    "# AI保单数据闭环平台功能白皮书\n\n## 1. 系统概览\n下载接口应返回当前 final 重新导出的 Word。",
+    "utf8",
+  );
   fs.writeFileSync(
     path.join(output, "pipeline-state.json"),
     JSON.stringify({
@@ -10738,6 +10820,10 @@ test("dashboard download route serves docx artifact", async () => {
     assert.equal(response.statusCode, 200);
     assert.match(String(response.headers["content-disposition"] || ""), /attachment/i);
     assert.equal(response.body.subarray(0, 2).toString("utf8"), "PK");
+    assert.notEqual(response.body.toString("utf8"), "PK\x03\x04stale-docx");
+    assert.equal(fs.existsSync(`${path.join(output, path.basename(docxPath))}.manifest.json`), false);
+    const generated = fs.readdirSync(output).find((file) => file.endsWith(".docx.manifest.json"));
+    assert.ok(generated);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

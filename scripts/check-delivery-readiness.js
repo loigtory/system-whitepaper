@@ -665,9 +665,11 @@ module.exports = {
   buildDeliveryReadinessReport,
   buildDeliveryReadinessStateSummary,
   buildSystemDeliveryReadiness,
+  findDocxCandidate,
   renderDeliveryReadinessMarkdown,
   runDeliveryReadiness,
   runDeliveryReadinessCheck,
   truthReportLooksLikeSmoke,
+  validateFinalDocx,
   writeDeliveryReadinessReport,
 };

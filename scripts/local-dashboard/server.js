@@ -34,6 +34,7 @@ const {
 } = require("./process-control");
 const { runReviewDecision } = require("../run-review-decision");
 const { findStaleReadinessSources } = require("../check-truth-readiness");
+const { validateFinalDocx } = require("../check-delivery-readiness");
 const { isCursorSdkConfigured, resolveNarrativeProvider } = require("../narrative/resolve-provider");
 const { formatCny, formatUsd } = require("../narrative/usage-cost");
 
@@ -109,11 +110,21 @@ function resolveFinalMarkdownPath(systemOutput, state, system = {}) {
 
 function ensureDocxArtifact(systemOutput, state, system = {}) {
   let docxPath = resolveDocxArtifact(systemOutput, state.artifacts?.docx);
-  if (docxPath && fs.existsSync(docxPath)) return docxPath;
+  const mdPath = resolveFinalMarkdownPath(systemOutput, state, system);
+  if (docxPath && fs.existsSync(docxPath)) {
+    if (!mdPath) return docxPath;
+    const docxState = {
+      ...state,
+      artifacts: {
+        ...(state.artifacts || {}),
+        docx: path.basename(docxPath),
+      },
+    };
+    if (validateFinalDocx(systemOutput, docxState, mdPath).valid) return docxPath;
+  }
   const reviewApproved =
     state.overallStatus === "finalized" || state.review?.status === "approved";
   if (!reviewApproved) return docxPath || "";
-  const mdPath = resolveFinalMarkdownPath(systemOutput, state, system);
   if (!mdPath) return docxPath || "";
   const { exportWhitepaperWord } = require("../export-whitepaper-word");
   return exportWhitepaperWord({
