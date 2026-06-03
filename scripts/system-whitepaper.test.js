@@ -1991,21 +1991,17 @@ test("buildPhase3bPrompt uses low-token inline inputs without reading large repo
       warnings: ["证据边界需说明"],
       counts: { evidencePages: 1 },
     },
-    verifiedClaims: {
-      claims: [
-        {
-          id: "function:ai-task:list",
-          type: "function-presence",
-          subject: "任务列表",
-          module: "AI任务",
-          writable: true,
-          status: "confirmed",
-          text: "AI任务模块提供任务列表。",
-        },
-      ],
-      writableClaimIds: ["function:ai-task:list"],
-      metrics: { writableClaimCount: 1 },
-    },
+    verifiedClaims: verifiedClaimsFixture([
+      {
+        id: "function:ai-task:list",
+        type: "function-presence",
+        subject: "任务列表",
+        module: "AI任务",
+        writable: true,
+        status: "confirmed",
+        text: "AI任务模块提供任务列表。",
+      },
+    ]),
     factCheckReport: {
       canFinalize: false,
       missingWritableClaimIds: ["function:ai-task:list"],
@@ -2101,6 +2097,44 @@ test("phase3b prompt rejects non-object verified claims file", () => {
   );
 });
 
+test("phase3b prompt requires verified claims artifact before writing", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { buildPhase3bPrompt } = require("./narrative/phase3b");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-missing-claims-"));
+
+  assert.throws(
+    () =>
+      buildPhase3bPrompt({
+        systemCode: "adp",
+        systemName: "AI保单数据闭环平台",
+        evidenceSummary: { system: { code: "adp", name: "AI保单数据闭环平台" } },
+        outputPath: path.join(dir, "whitepaper.pending-review.md"),
+        qualityReport: {},
+      }),
+    /Verified claims not found/,
+  );
+
+  fs.writeFileSync(
+    path.join(dir, "verified-claims.json"),
+    JSON.stringify({ artifactType: "verified-claims", claims: [], rules: {} }),
+    "utf8",
+  );
+  assert.throws(
+    () =>
+      buildPhase3bPrompt({
+        systemCode: "adp",
+        systemName: "AI保单数据闭环平台",
+        evidenceSummary: { system: { code: "adp", name: "AI保单数据闭环平台" } },
+        outputPath: path.join(dir, "whitepaper.pending-review.md"),
+        qualityReport: {},
+      }),
+    /boundary rules are incomplete/,
+  );
+});
+
 test("narrative brief and assembly keep business sections while appendix is script generated", () => {
   const {
     assemblePendingReviewMarkdown,
@@ -2174,6 +2208,7 @@ test("phase3b split prompts scope overview and module writing separately", () =>
     outputPath: "outputs/adp/whitepaper.pending-review.md",
     part: parts[0],
     qualityReport: {},
+    verifiedClaims: verifiedClaimsFixture([]),
   });
   const modulePrompt = buildPhase3bPartPrompt({
     systemCode: "adp",
@@ -2181,6 +2216,7 @@ test("phase3b split prompts scope overview and module writing separately", () =>
     outputPath: "outputs/adp/whitepaper.pending-review.md",
     part: parts.find((item) => item.moduleName === "AI任务"),
     qualityReport: {},
+    verifiedClaims: verifiedClaimsFixture([]),
   });
 
   assert.equal(overview.functions, undefined);
@@ -2212,27 +2248,24 @@ test("phase3b part prompt filters writable claim gap to selected module", () => 
       { module: "发布管理", name: "发布列表" },
     ],
   };
-  const claims = {
-    claims: [
-      {
-        id: "function:ai-task:list",
-        type: "function-presence",
-        subject: "任务列表",
-        module: "AI任务",
-        writable: true,
-        status: "confirmed",
-      },
-      {
-        id: "function:publish:list",
-        type: "function-presence",
-        subject: "发布列表",
-        module: "发布管理",
-        writable: true,
-        status: "confirmed",
-      },
-    ],
-    writableClaimIds: ["function:ai-task:list", "function:publish:list"],
-  };
+  const claims = verifiedClaimsFixture([
+    {
+      id: "function:ai-task:list",
+      type: "function-presence",
+      subject: "任务列表",
+      module: "AI任务",
+      writable: true,
+      status: "confirmed",
+    },
+    {
+      id: "function:publish:list",
+      type: "function-presence",
+      subject: "发布列表",
+      module: "发布管理",
+      writable: true,
+      status: "confirmed",
+    },
+  ]);
   const parts = buildNarrativeParts({ outputPath: "outputs/adp/whitepaper.pending-review.md" }, summary);
   const prompt = buildPhase3bPartPrompt({
     systemCode: "adp",
@@ -2309,6 +2342,7 @@ test("manual phase3b provider writes prompt without fabricating pending review",
     JSON.stringify({ failures: [], warnings: [], counts: { evidencePages: 1 } }),
     "utf8",
   );
+  writeVerifiedClaimsFixture(dir);
   const result = await runPhase3b({
     provider: "manual",
     systemCode: "adp",
@@ -2351,6 +2385,7 @@ test("manual phase3b can expose only selected narrative part prompts", async () 
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "quality-report.json"), "{}", "utf8");
+  writeVerifiedClaimsFixture(dir);
 
   const result = await runPhase3b({
     provider: "manual",
@@ -2385,6 +2420,7 @@ test("manual phase3b part rerun ignores stale review decision without review fla
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "quality-report.json"), "{}", "utf8");
+  writeVerifiedClaimsFixture(dir);
   fs.writeFileSync(
     path.join(dir, "review-decision.json"),
     JSON.stringify({
@@ -2437,6 +2473,7 @@ test("phase3b cursor-sdk part mode sends selected prompts and records actual pro
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "quality-report.json"), "{}", "utf8");
+  writeVerifiedClaimsFixture(dir);
 
   const context = {
     provider: "cursor-sdk",
@@ -2759,6 +2796,7 @@ test("phase3b cursor-sdk part mode supports multi-module selectors", () => {
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "quality-report.json"), "{}", "utf8");
+  writeVerifiedClaimsFixture(dir);
 
   const context = {
     provider: "cursor-sdk",
@@ -2796,6 +2834,7 @@ test("phase3b rejects unknown narrative part selectors", () => {
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "quality-report.json"), "{}", "utf8");
+  writeVerifiedClaimsFixture(dir);
 
   assert.throws(
     () =>
@@ -2837,6 +2876,7 @@ test("manual phase3b assembles pending review from split fragments", async () =>
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "quality-report.json"), "{}", "utf8");
+  writeVerifiedClaimsFixture(dir);
   fs.mkdirSync(path.join(dir, "narrative-fragments"), { recursive: true });
   fs.writeFileSync(
     path.join(dir, "narrative-fragments", "overview-flow.md"),
@@ -2897,6 +2937,7 @@ test("phase3b part assembly replaces selected fragments while preserving baselin
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "quality-report.json"), "{}", "utf8");
+  writeVerifiedClaimsFixture(dir);
   fs.writeFileSync(
     path.join(dir, "narrative-fragments.md"),
     [
@@ -3215,6 +3256,7 @@ test("manual phase3b appends usage history for cost comparison", async () => {
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "quality-report.json"), "{}", "utf8");
+  writeVerifiedClaimsFixture(dir);
 
   const context = {
     provider: "manual",
@@ -3253,6 +3295,7 @@ test("manual phase3b usage does not count stale pending review without fragments
   );
   fs.writeFileSync(path.join(dir, "quality-report.json"), "{}", "utf8");
   fs.writeFileSync(path.join(dir, "whitepaper.pending-review.md"), "# stale", "utf8");
+  writeVerifiedClaimsFixture(dir);
 
   const result = await runPhase3b({
     provider: "manual",
@@ -3287,6 +3330,7 @@ test("manual phase3b usage records review rerun metadata", async () => {
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "quality-report.json"), "{}", "utf8");
+  writeVerifiedClaimsFixture(dir);
   fs.writeFileSync(
     path.join(dir, "review-decision.json"),
     JSON.stringify({
@@ -3327,6 +3371,7 @@ test("phase3b prompt reads review decision for targeted narrative rewrite", () =
   const { buildPhase3bPrompt } = require("./narrative/phase3b");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-review-"));
+  writeVerifiedClaimsFixture(dir);
   fs.writeFileSync(
     path.join(dir, "review-decision.json"),
     JSON.stringify({
@@ -3361,6 +3406,7 @@ test("phase3b prompt describes evidence refresh as full narrative rerun", () => 
   const { buildPhase3bPrompt } = require("./narrative/phase3b");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-evidence-refresh-"));
+  writeVerifiedClaimsFixture(dir);
   fs.writeFileSync(
     path.join(dir, "review-decision.json"),
     JSON.stringify({
@@ -3396,6 +3442,7 @@ test("phase3b part prompt describes evidence refresh as scoped part rerun", () =
   const { buildPhase3bPartPrompt, buildNarrativeParts } = require("./narrative/phase3b");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-part-evidence-refresh-"));
+  writeVerifiedClaimsFixture(dir);
   fs.writeFileSync(
     path.join(dir, "review-decision.json"),
     JSON.stringify({
@@ -3441,6 +3488,7 @@ test("phase3b prompt ignores stale review decision outside review reruns", () =>
   const { buildPhase3bPrompt } = require("./narrative/phase3b");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-stale-review-"));
+  writeVerifiedClaimsFixture(dir);
   fs.writeFileSync(
     path.join(dir, "review-decision.json"),
     JSON.stringify({
@@ -3472,6 +3520,7 @@ test("phase3b prompt keeps explicit review comment independent from stale decisi
   const { buildPhase3bPrompt } = require("./narrative/phase3b");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-comment-stale-review-"));
+  writeVerifiedClaimsFixture(dir);
   fs.writeFileSync(
     path.join(dir, "review-decision.json"),
     JSON.stringify({
@@ -3508,6 +3557,7 @@ test("phase3b prompt keeps explicit review comment when decision cache is malfor
   const { buildPhase3bPrompt } = require("./narrative/phase3b");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-comment-bad-review-"));
+  writeVerifiedClaimsFixture(dir);
   fs.writeFileSync(path.join(dir, "review-decision.json"), "{bad json", "utf8");
 
   const prompt = buildPhase3bPrompt({
@@ -3532,6 +3582,7 @@ test("phase3b prompt keeps explicit review comment when decision cache is non-ob
   const { buildPhase3bPrompt } = require("./narrative/phase3b");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-comment-review-array-"));
+  writeVerifiedClaimsFixture(dir);
   fs.writeFileSync(path.join(dir, "review-decision.json"), "[]", "utf8");
 
   const prompt = buildPhase3bPrompt({
@@ -3556,6 +3607,7 @@ test("phase3b prompt still rejects malformed review decision without explicit co
   const { buildPhase3bPrompt } = require("./narrative/phase3b");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-bad-review-required-"));
+  writeVerifiedClaimsFixture(dir);
   fs.writeFileSync(path.join(dir, "review-decision.json"), "{bad json", "utf8");
 
   assert.throws(
@@ -3579,6 +3631,7 @@ test("phase3b prompt rejects non-object review decision without explicit comment
   const { buildPhase3bPrompt } = require("./narrative/phase3b");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-review-array-"));
+  writeVerifiedClaimsFixture(dir);
   fs.writeFileSync(path.join(dir, "review-decision.json"), "[]", "utf8");
 
   assert.throws(
@@ -3717,6 +3770,7 @@ test("run-phase3b CLI forwards narrative part and review rerun options", () => {
     "utf8",
   );
   fs.writeFileSync(path.join(output, "quality-report.json"), "{}", "utf8");
+  writeVerifiedClaimsFixture(output);
   fs.writeFileSync(
     path.join(output, "review-decision.json"),
     JSON.stringify({
@@ -3792,6 +3846,7 @@ test("run-phase3b CLI tolerates malformed optional pipeline state", () => {
     "utf8",
   );
   fs.writeFileSync(path.join(output, "quality-report.json"), "{}", "utf8");
+  writeVerifiedClaimsFixture(output);
   fs.writeFileSync(path.join(output, "pipeline-state.json"), "{bad json", "utf8");
 
   const result = spawnSync(
@@ -12718,6 +12773,16 @@ function verifiedClaimsFixture(claims = [], overrides = {}) {
       ...(overrides.rules || {}),
     },
   };
+}
+
+function writeVerifiedClaimsFixture(dir, claims = [], overrides = {}) {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  fs.writeFileSync(
+    path.join(dir, "verified-claims.json"),
+    JSON.stringify(verifiedClaimsFixture(claims, overrides)),
+    "utf8",
+  );
 }
 
 test("fact check passes writable claims and allows weak claims only in pending section", () => {

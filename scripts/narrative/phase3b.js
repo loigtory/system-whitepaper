@@ -4,7 +4,9 @@ const {
   readExistingJsonObject,
   readOptionalJson,
   readOptionalJsonObject,
+  readRequiredJsonObject,
 } = require("../system-whitepaper-lib");
+const { assertValidVerifiedClaimsArtifact } = require("../fact-check-whitepaper");
 
 function normalizePromptPath(filePath) {
   return String(filePath || "").replace(/\\/g, "/");
@@ -70,13 +72,16 @@ function loadQualitySummary(context = {}) {
 }
 
 function loadVerifiedClaims(context = {}) {
-  if (context.verifiedClaims) return ensureJsonObject(context.verifiedClaims, "Verified claims");
+  if (context.verifiedClaims) {
+    const claimsArtifact = ensureJsonObject(context.verifiedClaims, "Verified claims");
+    assertValidVerifiedClaimsArtifact(claimsArtifact);
+    return claimsArtifact;
+  }
   const outputDir = resolveOutputDir(context);
   const claimsPath = context.verifiedClaimsPath || path.join(outputDir, "verified-claims.json");
-  if (!context.verifiedClaimsPath && !fs.existsSync(claimsPath)) {
-    return { artifactType: "verified-claims", claims: [], writableClaimIds: [], metrics: {} };
-  }
-  return readExistingJsonObject(claimsPath, {}, { label: "Verified claims" });
+  const claimsArtifact = readRequiredJsonObject(claimsPath, { label: "Verified claims" });
+  assertValidVerifiedClaimsArtifact(claimsArtifact);
+  return claimsArtifact;
 }
 
 function loadFactCheckReport(context = {}) {
