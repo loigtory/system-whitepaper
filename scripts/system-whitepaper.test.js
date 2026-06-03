@@ -14499,6 +14499,70 @@ test("truth readiness rejects invalid fact-check report artifact contract", () =
   assert.ok(report.blockers.some((item) => item.id === "fact-check.invalid-artifact"));
 });
 
+test("truth readiness rejects forged fact-check coverage metrics", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const artifacts = {
+    quality: {
+      file: "quality-report.json",
+      status: "ok",
+      value: qualityReportFixture(),
+    },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: verifiedClaimsFixture([
+        {
+          id: "function:保单任务:任务列表",
+          subject: "任务列表",
+          module: "保单任务",
+          status: "confirmed",
+          writable: true,
+        },
+        {
+          id: "function:保单任务:任务详情",
+          subject: "任务详情",
+          module: "保单任务",
+          status: "confirmed",
+          writable: true,
+        },
+      ]),
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: factCheckReportFixture({
+        canFinalize: true,
+        missingWritableClaimIds: ["function:保单任务:任务详情"],
+        metrics: {
+          claimCount: 2,
+          writableClaimCount: 2,
+          checkedAssertions: 1,
+          supportedAssertions: 1,
+          supportedRatio: 1,
+          coveredWritableClaimCount: 1,
+          missingWritableClaimCount: 1,
+          writableClaimCoverageRatio: 1,
+          minWritableClaimCoverage: 0.8,
+        },
+      }),
+    },
+    narrative: {
+      file: "narrative-quality-report.json",
+      status: "ok",
+      value: narrativeQualityReportFixture(),
+    },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.gates.factCheck.pass, false);
+  assert.equal(report.gates.factCheck.artifactContractValid, false);
+  assert.equal(report.gates.factCheck.scorePercent, 0);
+  assert.equal(report.canSubmitReview, false);
+  assert.ok(report.gates.factCheck.failures.some((item) => /writableClaimCoverageRatio must match/.test(item)));
+  assert.ok(report.blockers.some((item) => item.id === "fact-check.invalid-artifact"));
+});
+
 test("truth readiness rejects invalid narrative quality report artifact contract", () => {
   const { buildTruthReadinessReport } = require("./check-truth-readiness");
   const artifacts = {

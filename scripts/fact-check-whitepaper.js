@@ -198,6 +198,27 @@ function assertMetricEquals(metrics = {}, key, expected) {
   }
 }
 
+function assertFactCheckMetric(metrics = {}, key) {
+  if (!Number.isFinite(Number(metrics[key]))) {
+    throw new Error(`fact-check-report.json metrics.${key} must be numeric.`);
+  }
+  return Number(metrics[key]);
+}
+
+function assertFactCheckMetricEquals(metrics = {}, key, expected, message = "must be internally consistent") {
+  const actual = assertFactCheckMetric(metrics, key);
+  if (actual !== expected) {
+    throw new Error(`fact-check-report.json metrics.${key} ${message}.`);
+  }
+}
+
+function assertFactCheckRatioEquals(metrics = {}, key, expected, message = "must match its supporting counts") {
+  const actual = assertFactCheckMetric(metrics, key);
+  if (Math.abs(actual - expected) > 0.000001) {
+    throw new Error(`fact-check-report.json metrics.${key} ${message}.`);
+  }
+}
+
 function sameStringSet(left = [], right = []) {
   const normalize = (items) => [...new Set(items.map((item) => String(item || "")))].sort();
   const a = normalize(left);
@@ -293,6 +314,44 @@ function assertValidFactCheckReportArtifact(report = {}) {
   }
   if (!report.metrics || typeof report.metrics !== "object" || Array.isArray(report.metrics)) {
     throw new Error("fact-check-report.json metrics must be a JSON object.");
+  }
+  const metrics = report.metrics;
+  const claimCount = assertFactCheckMetric(metrics, "claimCount");
+  const writableClaimCount = assertFactCheckMetric(metrics, "writableClaimCount");
+  const checkedAssertions = assertFactCheckMetric(metrics, "checkedAssertions");
+  const supportedAssertions = assertFactCheckMetric(metrics, "supportedAssertions");
+  const coveredWritableClaimCount = assertFactCheckMetric(metrics, "coveredWritableClaimCount");
+  const missingWritableClaimCount = assertFactCheckMetric(metrics, "missingWritableClaimCount");
+  assertFactCheckMetric(metrics, "minWritableClaimCoverage");
+  if (supportedAssertions > checkedAssertions) {
+    throw new Error("fact-check-report.json metrics.supportedAssertions must not exceed checkedAssertions.");
+  }
+  if (coveredWritableClaimCount > writableClaimCount) {
+    throw new Error("fact-check-report.json metrics.coveredWritableClaimCount must not exceed writableClaimCount.");
+  }
+  assertFactCheckMetricEquals(
+    metrics,
+    "missingWritableClaimCount",
+    Math.max(0, writableClaimCount - coveredWritableClaimCount),
+  );
+  assertFactCheckRatioEquals(
+    metrics,
+    "supportedRatio",
+    checkedAssertions ? supportedAssertions / checkedAssertions : 1,
+  );
+  assertFactCheckRatioEquals(
+    metrics,
+    "writableClaimCoverageRatio",
+    writableClaimCount ? coveredWritableClaimCount / writableClaimCount : 1,
+  );
+  if (Array.isArray(report.coveredWritableClaimIds) && report.coveredWritableClaimIds.length !== coveredWritableClaimCount) {
+    throw new Error("fact-check-report.json coveredWritableClaimIds must match metrics.coveredWritableClaimCount.");
+  }
+  if (Array.isArray(report.missingWritableClaimIds) && report.missingWritableClaimIds.length !== missingWritableClaimCount) {
+    throw new Error("fact-check-report.json missingWritableClaimIds must match metrics.missingWritableClaimCount.");
+  }
+  if (claimCount < writableClaimCount) {
+    throw new Error("fact-check-report.json metrics.writableClaimCount must not exceed claimCount.");
   }
 }
 
