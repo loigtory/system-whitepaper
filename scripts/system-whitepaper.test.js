@@ -50,6 +50,7 @@ const {
 function writePassingTruthReadinessReport(dir, overrides = {}) {
   const fs = require("node:fs");
   const path = require("node:path");
+  const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
   const {
     buildReadinessSourceArtifacts,
     loadReadinessInputs,
@@ -58,6 +59,12 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
     const filePath = path.join(dir, fileName);
     if (!fs.existsSync(filePath)) {
       fs.writeFileSync(filePath, JSON.stringify(value), "utf8");
+    }
+  };
+  const writeTextIfMissing = (fileName, value) => {
+    const filePath = path.join(dir, fileName);
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, value, "utf8");
     }
   };
   writeJsonIfMissing("quality-report.json", {
@@ -86,7 +93,10 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
     },
     writableClaimIds: ["function:保单任务:任务列表"],
   });
+  writeTextIfMissing("whitepaper.pending-review.md", "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。");
   writeJsonIfMissing("fact-check-report.json", {
+    artifactType: "fact-check-report",
+    version: 1,
     canFinalize: true,
     failures: [],
     metrics: {
@@ -100,6 +110,10 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
       writableClaimCoverageRatio: 1,
       minWritableClaimCoverage: 0.8,
     },
+    sourceArtifacts: buildFactCheckSourceArtifacts({
+      markdownPath: path.join(dir, "whitepaper.pending-review.md"),
+      claimsPath: path.join(dir, "verified-claims.json"),
+    }),
   });
   writeJsonIfMissing("narrative-quality-report.json", {
     canSubmitReview: true,
@@ -138,6 +152,7 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
 function writePassingTruthArtifacts(dir, options = {}) {
   const fs = require("node:fs");
   const path = require("node:path");
+  const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
   const {
     buildReadinessSourceArtifacts,
     loadReadinessInputs,
@@ -176,9 +191,18 @@ function writePassingTruthArtifacts(dir, options = {}) {
     }),
     "utf8",
   );
+  if (!fs.existsSync(path.join(dir, "whitepaper.pending-review.md"))) {
+    fs.writeFileSync(
+      path.join(dir, "whitepaper.pending-review.md"),
+      "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。",
+      "utf8",
+    );
+  }
   fs.writeFileSync(
     path.join(dir, "fact-check-report.json"),
     JSON.stringify({
+      artifactType: "fact-check-report",
+      version: 1,
       canFinalize: true,
       failures: [],
       metrics: {
@@ -192,6 +216,10 @@ function writePassingTruthArtifacts(dir, options = {}) {
         writableClaimCoverageRatio: 1,
         minWritableClaimCoverage: 0.8,
       },
+      sourceArtifacts: buildFactCheckSourceArtifacts({
+        markdownPath: path.join(dir, "whitepaper.pending-review.md"),
+        claimsPath: path.join(dir, "verified-claims.json"),
+      }),
     }),
     "utf8",
   );
@@ -7564,6 +7592,7 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
     renderBatchAcceptanceMarkdown,
     runBatchAcceptanceCheck,
   } = require("./check-batch-acceptance");
+  const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
   const { buildReadinessSourceArtifacts, loadReadinessInputs } = require("./check-truth-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "batch-acceptance-"));
   const outputRoot = path.join(dir, "outputs");
@@ -7616,9 +7645,12 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
     }),
     "utf8",
   );
+  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
   fs.writeFileSync(
     path.join(systemOutput, "fact-check-report.json"),
     JSON.stringify({
+      artifactType: "fact-check-report",
+      version: 1,
       canFinalize: true,
       failures: [],
       metrics: {
@@ -7632,6 +7664,10 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
         writableClaimCoverageRatio: 1,
         minWritableClaimCoverage: 0.8,
       },
+      sourceArtifacts: buildFactCheckSourceArtifacts({
+        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
+        claimsPath: path.join(systemOutput, "verified-claims.json"),
+      }),
     }),
     "utf8",
   );
@@ -7645,7 +7681,6 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
     JSON.stringify({ artifactType: "database-profile", system: { code: "adp" }, tables: [], safety: { secretRedacted: true } }),
     "utf8",
   );
-  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
     JSON.stringify({
@@ -12333,12 +12368,83 @@ test("run fact check writes report and requires verified claims object", () => {
   const report = runFactCheck({ inputDir: dir });
 
   assert.equal(report.canFinalize, true);
+  assert.equal(report.artifactType, "fact-check-report");
+  assert.equal(report.sourceArtifacts.pendingReview.file, "whitepaper.pending-review.md");
+  assert.equal(report.sourceArtifacts.pendingReview.fingerprint.exists, true);
+  assert.equal(report.sourceArtifacts.claims.file, "verified-claims.json");
+  assert.equal(report.sourceArtifacts.claims.fingerprint.exists, true);
   assert.equal(fs.existsSync(path.join(dir, "fact-check-report.json")), true);
   fs.writeFileSync(path.join(dir, "verified-claims.json"), "[]", "utf8");
   assert.throws(
     () => runFactCheck({ inputDir: dir }),
     /Verified claims must be a JSON object/,
   );
+});
+
+test("truth readiness rejects stale fact check source fingerprints", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runFactCheck } = require("./fact-check-whitepaper");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-stale-fact-check-"));
+  fs.writeFileSync(
+    path.join(dir, "quality-report.json"),
+    JSON.stringify({
+      canFinalize: true,
+      menuCoverage: 1,
+      corePageScreenshotCoverage: 1,
+      coreFunctionClassificationCoverage: 1,
+      writeOperationSafetyCompliance: 1,
+      unverifiedContentLabeling: 1,
+      coreConclusionTraceability: 1,
+      failures: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "verified-claims.json"),
+    JSON.stringify({
+      rules: {
+        lowConfidenceNotWritable: true,
+        databaseOnlyNotConfirmed: true,
+        databaseOnlyNotWritable: true,
+      },
+      metrics: { claimCount: 1, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0 },
+      writableClaimIds: ["function:保单任务:任务列表"],
+      claims: [
+        {
+          id: "function:保单任务:任务列表",
+          subject: "任务列表",
+          module: "保单任务",
+          writable: true,
+          status: "confirmed",
+        },
+      ],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "whitepaper.pending-review.md"),
+    ["# AI保单数据闭环平台功能白皮书", "保单任务模块提供任务列表。"].join("\n"),
+    "utf8",
+  );
+  runFactCheck({ inputDir: dir });
+  fs.writeFileSync(
+    path.join(dir, "narrative-quality-report.json"),
+    JSON.stringify({ canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } }),
+    "utf8",
+  );
+
+  const passing = runTruthReadinessCheck({ inputDir: dir });
+  assert.equal(passing.canSubmitReview, true);
+
+  fs.appendFileSync(path.join(dir, "whitepaper.pending-review.md"), "\n新增未经 fact-check 的功能结论。", "utf8");
+  const stale = runTruthReadinessCheck({ inputDir: dir });
+  assert.equal(stale.canSubmitReview, false);
+  assert.equal(stale.gates.factCheck.pass, false);
+  assert.ok(stale.gates.factCheck.staleSources.some((item) => item.key === "pendingReview"));
+  assert.ok(stale.blockers.some((item) => item.id === "fact-check.unsupported-assertions"));
 });
 
 test("truth readiness passes only when evidence claims fact-check and narrative gates pass", () => {

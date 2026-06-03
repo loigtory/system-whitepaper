@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const {
   parseArgs,
   readRequiredJsonObject,
@@ -119,6 +120,37 @@ function extractClaimReferences(markdown) {
     refs.push(match[1].trim());
   }
   return refs;
+}
+
+function fingerprintFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { exists: false, size: 0, mtimeMs: null, sha256: "" };
+  }
+  const buffer = fs.readFileSync(filePath);
+  const stat = fs.statSync(filePath);
+  return {
+    exists: true,
+    size: stat.size,
+    mtimeMs: Math.round(stat.mtimeMs),
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+function sourceArtifact(filePath, status) {
+  return {
+    file: path.basename(filePath),
+    status,
+    fingerprint: fingerprintFile(filePath),
+  };
+}
+
+function buildFactCheckSourceArtifacts(options = {}) {
+  const markdownPath = path.resolve(String(options.markdownPath || "whitepaper.pending-review.md"));
+  const claimsPath = path.resolve(String(options.claimsPath || "verified-claims.json"));
+  return {
+    pendingReview: sourceArtifact(markdownPath, fs.existsSync(markdownPath) ? "ok" : "missing"),
+    claims: sourceArtifact(claimsPath, fs.existsSync(claimsPath) ? "ok" : "missing"),
+  };
 }
 
 function buildFactCheckReport(input = {}) {
@@ -293,6 +325,9 @@ function runFactCheck(options = {}) {
 
   if (!fs.existsSync(markdownPath)) {
     const report = {
+      artifactType: "fact-check-report",
+      version: 1,
+      generatedAt: options.generatedAt || new Date().toISOString(),
       canSubmitReview: false,
       canFinalize: false,
       failures: [`Whitepaper markdown not found: ${markdownPath}`],
@@ -308,6 +343,7 @@ function runFactCheck(options = {}) {
         writableClaimCoverageRatio: 0,
         minWritableClaimCoverage: DEFAULT_MIN_WRITABLE_CLAIM_COVERAGE,
       },
+      sourceArtifacts: buildFactCheckSourceArtifacts({ markdownPath, claimsPath }),
     };
     writeJson(outputPath, report);
     return report;
@@ -317,12 +353,18 @@ function runFactCheck(options = {}) {
   const claimsArtifact = readRequiredJsonObject(claimsPath, {
     label: "Verified claims",
   });
-  const report = buildFactCheckReport({
-    markdown,
-    claimsArtifact,
-    minSupportedRatio: options.minSupportedRatio,
-    minWritableClaimCoverage: options.minWritableClaimCoverage,
-  });
+  const report = {
+    artifactType: "fact-check-report",
+    version: 1,
+    generatedAt: options.generatedAt || new Date().toISOString(),
+    ...buildFactCheckReport({
+      markdown,
+      claimsArtifact,
+      minSupportedRatio: options.minSupportedRatio,
+      minWritableClaimCoverage: options.minWritableClaimCoverage,
+    }),
+    sourceArtifacts: buildFactCheckSourceArtifacts({ markdownPath, claimsPath }),
+  };
   writeJson(outputPath, report);
   return report;
 }
@@ -358,6 +400,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildFactCheckSourceArtifacts,
   buildFactCheckReport,
   runFactCheck,
 };

@@ -135,6 +135,16 @@ function normalizeSourceFingerprint(record = {}) {
   };
 }
 
+function sourceFingerprintMatches(expected, actual) {
+  const expectedFingerprint = normalizeSourceFingerprint(expected);
+  const actualFingerprint = normalizeSourceFingerprint(actual);
+  return (
+    expectedFingerprint.exists === actualFingerprint.exists &&
+    expectedFingerprint.size === actualFingerprint.size &&
+    expectedFingerprint.sha256 === actualFingerprint.sha256
+  );
+}
+
 function findStaleReadinessSources(inputDir, report = {}) {
   const recorded = report.sourceArtifacts;
   if (!recorded || typeof recorded !== "object" || Array.isArray(recorded)) {
@@ -178,6 +188,55 @@ function findStaleReadinessSources(inputDir, report = {}) {
       expectedFingerprint.sha256 !== actualFingerprint.sha256
     ) {
       stale.push({ key, file: actual.file || expected.file || "", reason: "content fingerprint changed" });
+    }
+  }
+  return stale;
+}
+
+function findStaleFactCheckSources(artifacts = {}) {
+  const factCheck = artifacts.factCheck || {};
+  const value = factCheck.value || {};
+  const recorded = value.sourceArtifacts;
+  const required = {
+    pendingReview: artifacts.pendingReview,
+    claims: artifacts.claims,
+  };
+  const presentRequired = Object.entries(required).filter(([, artifact]) => artifact?.fingerprint?.exists);
+  if (!presentRequired.length) return [];
+  if (!recorded || typeof recorded !== "object" || Array.isArray(recorded)) {
+    return [
+      {
+        key: "sourceArtifacts",
+        file: factCheck.file || REQUIRED_ARTIFACTS.factCheck,
+        reason: "missing fact-check source fingerprints",
+      },
+    ];
+  }
+  const stale = [];
+  for (const [key, current] of presentRequired) {
+    const expected = recorded[key];
+    if (!expected) {
+      stale.push({ key, file: current.file || "", reason: "not recorded in fact-check report" });
+      continue;
+    }
+    if (String(expected.file || "") !== String(current.file || "")) {
+      stale.push({ key, file: current.file || expected.file || "", reason: "file mapping changed" });
+      continue;
+    }
+    if (String(expected.status || "") !== String(current.status || "")) {
+      stale.push({
+        key,
+        file: current.file || expected.file || "",
+        reason: `status changed from ${expected.status || "unknown"} to ${current.status || "unknown"}`,
+      });
+      continue;
+    }
+    if (!normalizeSourceFingerprint(expected).sha256 && current.fingerprint?.exists) {
+      stale.push({ key, file: current.file || expected.file || "", reason: "missing recorded sha256" });
+      continue;
+    }
+    if (!sourceFingerprintMatches(expected, current)) {
+      stale.push({ key, file: current.file || expected.file || "", reason: "content fingerprint changed" });
     }
   }
   return stale;
@@ -314,6 +373,22 @@ function buildFactCheckGate(artifact) {
     missingWritableClaimIds: Array.isArray(value.missingWritableClaimIds) ? value.missingWritableClaimIds : [],
     failures,
     warnings,
+  };
+}
+
+function buildFactCheckFreshnessGate(gate, artifacts = {}) {
+  const staleSources = findStaleFactCheckSources(artifacts);
+  if (!staleSources.length) return gate;
+  return {
+    ...gate,
+    pass: false,
+    score: 0,
+    scorePercent: 0,
+    staleSources,
+    failures: [
+      ...(Array.isArray(gate.failures) ? gate.failures : []),
+      "fact-check-report.json was not generated from the current whitepaper or verified claims.",
+    ],
   };
 }
 
@@ -580,8 +655,11 @@ function buildTruthReadinessReport(input = {}) {
   const gates = {
     evidence: buildEvidenceGate(artifacts.quality || { status: "missing", file: REQUIRED_ARTIFACTS.quality }),
     claims: buildClaimsGate(artifacts.claims || { status: "missing", file: REQUIRED_ARTIFACTS.claims }),
-    factCheck: buildFactCheckGate(
-      artifacts.factCheck || { status: "missing", file: REQUIRED_ARTIFACTS.factCheck },
+    factCheck: buildFactCheckFreshnessGate(
+      buildFactCheckGate(
+        artifacts.factCheck || { status: "missing", file: REQUIRED_ARTIFACTS.factCheck },
+      ),
+      artifacts,
     ),
     narrative: buildNarrativeGate(
       artifacts.narrative || { status: "missing", file: REQUIRED_ARTIFACTS.narrative },
@@ -681,6 +759,7 @@ module.exports = {
   DEFAULT_THRESHOLD,
   buildReadinessSourceArtifacts,
   buildTruthReadinessReport,
+  findStaleFactCheckSources,
   findStaleReadinessSources,
   isValidDatabaseProfile,
   loadReadinessInputs,
