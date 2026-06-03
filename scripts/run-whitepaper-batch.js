@@ -14,6 +14,7 @@ const {
 } = require("./system-whitepaper-lib");
 const { NODES, readPipelineStateSafe } = require("./pipeline-state");
 const { runBatchAcceptance } = require("./check-batch-acceptance");
+const { runDeliveryReadiness } = require("./check-delivery-readiness");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_BATCH_CONCURRENCY = 4;
@@ -1095,6 +1096,23 @@ function writeBatchAcceptance(outputRoot, context, args = {}, systems = []) {
   return state;
 }
 
+function writeBatchTerminalChecks(outputRoot, context, args = {}, systems = []) {
+  const acceptance = runBatchAcceptance({
+    args,
+    context,
+    systems,
+  });
+  const delivery = runDeliveryReadiness({
+    args,
+    acceptanceResult: acceptance,
+    outputRoot,
+  });
+  return {
+    acceptance: acceptance.state,
+    deliveryReadiness: delivery.state,
+  };
+}
+
 async function runBatchPipeline(options = {}) {
   const args = options.args || parseArgs(process.argv.slice(2));
   const context = loadBatchConfig(args.config || options.configPath);
@@ -1160,7 +1178,9 @@ async function runBatchPipeline(options = {}) {
           generatedAt: repairQueue.generatedAt,
         },
       };
-      state.acceptance = writeBatchAcceptance(context.outputRoot, context, args, systems);
+      const terminalChecks = writeBatchTerminalChecks(context.outputRoot, context, args, systems);
+      state.acceptance = terminalChecks.acceptance;
+      state.deliveryReadiness = terminalChecks.deliveryReadiness;
       writeBatchRunState(context.outputRoot, state);
       resolve(state);
     };
@@ -1324,7 +1344,9 @@ async function runBatchPipeline(options = {}) {
             generatedAt: repairQueue.generatedAt,
           },
         };
-        state.acceptance = writeBatchAcceptance(context.outputRoot, context, args, systems);
+        const terminalChecks = writeBatchTerminalChecks(context.outputRoot, context, args, systems);
+        state.acceptance = terminalChecks.acceptance;
+        state.deliveryReadiness = terminalChecks.deliveryReadiness;
         writeBatchRunState(context.outputRoot, state);
         process.exit(130);
       });
@@ -1376,5 +1398,6 @@ module.exports = {
   writeBatchDiagnosis,
   writeBatchRepairQueue,
   writeBatchAcceptance,
+  writeBatchTerminalChecks,
   writeBatchRunState,
 };

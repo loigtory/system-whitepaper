@@ -359,20 +359,53 @@ function writeDeliveryReadinessReport(outputRoot, report) {
   const markdownPath = path.join(batchDir, "delivery-readiness-report.md");
   writeJson(jsonPath, report);
   fs.writeFileSync(markdownPath, renderDeliveryReadinessMarkdown(report), "utf8");
-  return { jsonPath, markdownPath };
+  return {
+    jsonPath,
+    markdownPath,
+    artifacts: {
+      deliveryReadinessJson: path.relative(batchDir, jsonPath).replace(/\\/g, "/"),
+      deliveryReadinessMarkdown: path.relative(batchDir, markdownPath).replace(/\\/g, "/"),
+    },
+  };
 }
 
-function runDeliveryReadinessCheck(options = {}) {
+function buildDeliveryReadinessStateSummary(report = {}, artifacts = {}) {
+  return {
+    status: report.status || "",
+    canDeliver: Boolean(report.canDeliver),
+    summary: report.summary || {},
+    acceptance: report.acceptance || {},
+    artifacts: artifacts.artifacts || artifacts || {},
+    generatedAt: report.generatedAt || "",
+  };
+}
+
+function runDeliveryReadiness(options = {}) {
   const args = options.args || parseArgs(process.argv.slice(2));
-  const { report: acceptanceReport } =
-    options.acceptanceReport ? { report: options.acceptanceReport } : runBatchAcceptance({ args });
+  const acceptanceResult =
+    options.acceptanceResult ||
+    (options.acceptanceReport
+      ? { report: options.acceptanceReport }
+      : runBatchAcceptance({
+          ...options,
+          args,
+        }));
+  const acceptanceReport = acceptanceResult.report || {};
   const report = buildDeliveryReadinessReport({
     ...options,
     acceptanceReport,
     targetTruthScorePercent: options.targetTruthScorePercent || args.threshold,
   });
   const artifacts = writeDeliveryReadinessReport(acceptanceReport.outputRoot || options.outputRoot, report);
-  return { report, artifacts };
+  return {
+    report,
+    artifacts,
+    state: buildDeliveryReadinessStateSummary(report, artifacts),
+  };
+}
+
+function runDeliveryReadinessCheck(options = {}) {
+  return runDeliveryReadiness(options);
 }
 
 function main() {
@@ -397,8 +430,10 @@ if (require.main === module) {
 
 module.exports = {
   buildDeliveryReadinessReport,
+  buildDeliveryReadinessStateSummary,
   buildSystemDeliveryReadiness,
   renderDeliveryReadinessMarkdown,
+  runDeliveryReadiness,
   runDeliveryReadinessCheck,
   truthReportLooksLikeSmoke,
   writeDeliveryReadinessReport,

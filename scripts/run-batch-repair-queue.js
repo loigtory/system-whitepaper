@@ -12,6 +12,7 @@ const {
 const { NODES } = require("./pipeline-state");
 const { loadBatchConfig, resolveBatchConcurrency } = require("./run-whitepaper-batch");
 const { runBatchAcceptance } = require("./check-batch-acceptance");
+const { runDeliveryReadiness } = require("./check-delivery-readiness");
 
 const REPAIR_NODE_ORDER = NODES.map((node) => node.id).filter((nodeId) => nodeId !== "review");
 const REPAIR_NODE_ALLOWLIST = new Set(REPAIR_NODE_ORDER);
@@ -848,6 +849,22 @@ function writeRepairAcceptance(context, args = {}) {
   }).state;
 }
 
+function writeRepairTerminalChecks(context, args = {}) {
+  const acceptance = runBatchAcceptance({
+    args,
+    context,
+  });
+  const delivery = runDeliveryReadiness({
+    args,
+    acceptanceResult: acceptance,
+    outputRoot: context.outputRoot,
+  });
+  return {
+    acceptance: acceptance.state,
+    deliveryReadiness: delivery.state,
+  };
+}
+
 function waitForChild(child, logFile) {
   return new Promise((resolve) => {
     let settled = false;
@@ -929,7 +946,9 @@ async function runRepairQueue(options = {}) {
       batchRetries: args["batch-retries"],
       concurrency,
     });
-    state.acceptance = writeRepairAcceptance(context, args);
+    const terminalChecks = writeRepairTerminalChecks(context, args);
+    state.acceptance = terminalChecks.acceptance;
+    state.deliveryReadiness = terminalChecks.deliveryReadiness;
     writeRepairRunState(context.outputRoot, state);
     return state;
   }
@@ -1003,7 +1022,9 @@ async function runRepairQueue(options = {}) {
     batchRetries: args["batch-retries"],
     concurrency,
   });
-  state.acceptance = writeRepairAcceptance(context, args);
+  const terminalChecks = writeRepairTerminalChecks(context, args);
+  state.acceptance = terminalChecks.acceptance;
+  state.deliveryReadiness = terminalChecks.deliveryReadiness;
   writeRepairRunState(context.outputRoot, state);
   return state;
 }
@@ -1037,6 +1058,7 @@ module.exports = {
   runRepairQueue,
   validateRepairItem,
   writeRepairAcceptance,
+  writeRepairTerminalChecks,
   writeRepairClosure,
   writeRepairFollowUpPlan,
   writeRepairRunPlan,

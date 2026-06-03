@@ -6924,15 +6924,23 @@ test("batch runner classifies failed children and retries recoverable failures o
   assert.equal(written.repairQueue.artifacts.repairQueueJson, "repair-queue.json");
   assert.equal(written.acceptance.status, "blocked");
   assert.equal(written.acceptance.artifacts.acceptanceJson, "acceptance-report.json");
+  assert.equal(written.deliveryReadiness.status, "blocked");
+  assert.equal(written.deliveryReadiness.artifacts.deliveryReadinessJson, "delivery-readiness-report.json");
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "diagnosis.json")), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "diagnosis.md")), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "repair-queue.json")), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "repair-queue.md")), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "acceptance-report.json")), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "acceptance-report.md")), true);
+  assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.json")), true);
+  assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.md")), true);
   assert.match(fs.readFileSync(path.join(outputRoot, "_batch", "diagnosis.md"), "utf8"), /Batch Diagnosis/);
   assert.match(fs.readFileSync(path.join(outputRoot, "_batch", "repair-queue.md"), "utf8"), /Batch Repair Queue/);
   assert.match(fs.readFileSync(path.join(outputRoot, "_batch", "acceptance-report.md"), "utf8"), /Batch Acceptance Report/);
+  assert.match(
+    fs.readFileSync(path.join(outputRoot, "_batch", "delivery-readiness-report.md"), "utf8"),
+    /Delivery Readiness Report/,
+  );
 });
 
 test("batch repair queue runner builds safe plans and executes runnable groups", async () => {
@@ -7197,10 +7205,12 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-follow-up-plan.json")), true);
   assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-follow-up-plan.md")), true);
   assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "acceptance-report.json")), true);
+  assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "delivery-readiness-report.json")), true);
   assert.equal(dryRunState.closure.status, "blocked");
   assert.equal(dryRunState.followUpPlan.status, "ready-to-run");
   assert.equal(dryRunState.closure.followUp.status, "ready-to-run");
   assert.equal(dryRunState.acceptance.status, "blocked");
+  assert.equal(dryRunState.deliveryReadiness.status, "blocked");
 
   const launched = [];
   const fakeSpawn = (command, args) => {
@@ -7220,6 +7230,7 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   assert.equal(runState.closure.status, "blocked");
   assert.equal(runState.followUpPlan.status, "ready-to-run");
   assert.equal(runState.acceptance.status, "blocked");
+  assert.equal(runState.deliveryReadiness.status, "blocked");
   assert.equal(launched.length, 1);
   assert.equal(launched[0].command, process.execPath);
   assert.ok(launched[0].args.includes("--systems"));
@@ -7318,7 +7329,9 @@ test("repair follow-up loop consumes low-quota commands only", async () => {
   assert.equal(dryRunState.rounds[0].commandId, "repair-remaining-low-quota");
   assert.equal(fs.existsSync(path.join(batchDir, "repair-follow-up-loop-state.json")), true);
   assert.equal(fs.existsSync(path.join(batchDir, "acceptance-report.json")), true);
+  assert.equal(fs.existsSync(path.join(batchDir, "delivery-readiness-report.json")), true);
   assert.equal(dryRunState.acceptance.status, "blocked");
+  assert.equal(dryRunState.deliveryReadiness.status, "blocked");
 
   let launchCount = 0;
   const fakeSpawn = (command, args) => {
@@ -7354,6 +7367,7 @@ test("repair follow-up loop consumes low-quota commands only", async () => {
   assert.equal(runState.rounds.length, 1);
   assert.equal(runState.finalPlan.status, "complete");
   assert.equal(runState.acceptance.status, "blocked");
+  assert.equal(runState.deliveryReadiness.status, "blocked");
   assert.equal(launchCount, 1);
 });
 
@@ -7566,6 +7580,7 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   const { buildReadinessSourceArtifacts, loadReadinessInputs } = require("./check-truth-readiness");
   const {
     buildDeliveryReadinessReport,
+    buildDeliveryReadinessStateSummary,
     renderDeliveryReadinessMarkdown,
     writeDeliveryReadinessReport,
   } = require("./check-delivery-readiness");
@@ -7658,7 +7673,11 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.equal(ready.canDeliver, true);
   assert.equal(ready.summary.ready, 1);
   assert.match(renderDeliveryReadinessMarkdown(ready), /Delivery Readiness Report/);
-  writeDeliveryReadinessReport(outputRoot, ready);
+  const artifacts = writeDeliveryReadinessReport(outputRoot, ready);
+  const stateSummary = buildDeliveryReadinessStateSummary(ready, artifacts);
+  assert.equal(stateSummary.status, "ready");
+  assert.equal(stateSummary.canDeliver, true);
+  assert.equal(stateSummary.artifacts.deliveryReadinessMarkdown, "delivery-readiness-report.md");
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.json")), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.md")), true);
 
@@ -7788,6 +7807,15 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
         summary: { total: 2, accepted: 1, blocked: 1, blockers: 1 },
         artifacts: { acceptanceMarkdown: "acceptance-report.md", acceptanceJson: "acceptance-report.json" },
       },
+      deliveryReadiness: {
+        status: "blocked",
+        canDeliver: false,
+        summary: { total: 2, ready: 1, blocked: 1, smokeEvidence: 0 },
+        artifacts: {
+          deliveryReadinessMarkdown: "delivery-readiness-report.md",
+          deliveryReadinessJson: "delivery-readiness-report.json",
+        },
+      },
     },
   );
   assert.equal(batchActiveRun.mode, "batch");
@@ -7804,6 +7832,8 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(batchActiveRun.repairQueue.summary.requiresAgentWriting, 1);
   assert.equal(batchActiveRun.acceptance.status, "blocked");
   assert.equal(batchActiveRun.acceptance.summary.accepted, 1);
+  assert.equal(batchActiveRun.deliveryReadiness.status, "blocked");
+  assert.equal(batchActiveRun.deliveryReadiness.summary.ready, 1);
 
   const fs = require("node:fs");
   const os = require("node:os");
@@ -7876,6 +7906,23 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "outputs", "_batch", "acceptance-report.md"), "# Batch Acceptance Report", "utf8");
+  fs.writeFileSync(
+    path.join(dir, "outputs", "_batch", "delivery-readiness-report.json"),
+    JSON.stringify({
+      artifactType: "delivery-readiness-report",
+      status: "blocked",
+      canDeliver: false,
+      summary: { total: 1, ready: 0, blocked: 1, blockers: 1, smokeEvidence: 0 },
+      acceptance: { status: "blocked", canSubmitAll: false },
+      blockers: [{ id: "delivery.acceptance-not-accepted", message: "Batch acceptance is not accepted." }],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "outputs", "_batch", "delivery-readiness-report.md"),
+    "# Delivery Readiness Report",
+    "utf8",
+  );
   fs.writeFileSync(
     path.join(dir, "outputs", "_batch", "repair-run-plan.json"),
     JSON.stringify({
@@ -7951,6 +7998,9 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(snapshot.batchAcceptanceReport.status, "blocked");
   assert.equal(snapshot.batchAcceptanceArtifacts.markdown.exists, true);
   assert.equal(snapshot.activeRun.acceptance.summary.blockers, 1);
+  assert.equal(snapshot.batchDeliveryReadinessReport.status, "blocked");
+  assert.equal(snapshot.batchDeliveryReadinessArtifacts.markdown.exists, true);
+  assert.equal(snapshot.activeRun.deliveryReadiness.summary.blockers, 1);
   assert.equal(snapshot.batchRepairRunPlan.summary.runnableGroups, 1);
   assert.equal(snapshot.batchRepairRunState.status, "dry-run");
   assert.equal(snapshot.batchRepairClosure.status, "blocked");

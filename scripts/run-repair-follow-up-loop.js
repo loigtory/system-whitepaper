@@ -12,6 +12,7 @@ const {
 } = require("./system-whitepaper-lib");
 const { loadBatchConfig, resolveBatchConcurrency } = require("./run-whitepaper-batch");
 const { runBatchAcceptance } = require("./check-batch-acceptance");
+const { runDeliveryReadiness } = require("./check-delivery-readiness");
 
 const DEFAULT_MAX_ROUNDS = 3;
 const SAFE_REPAIR_VALUE_FLAGS = new Set([
@@ -182,6 +183,22 @@ function writeFollowUpLoopAcceptance(context, args = {}) {
   }).state;
 }
 
+function writeFollowUpLoopTerminalChecks(context, args = {}) {
+  const acceptance = runBatchAcceptance({
+    args,
+    context,
+  });
+  const delivery = runDeliveryReadiness({
+    args,
+    acceptanceResult: acceptance,
+    outputRoot: context.outputRoot,
+  });
+  return {
+    acceptance: acceptance.state,
+    deliveryReadiness: delivery.state,
+  };
+}
+
 function summarizeLoopStatus(plan = {}, rounds = [], options = {}) {
   if (plan.status === "complete") return { status: "complete", reason: "follow-up plan is complete" };
   if (plan.source?.closureStatus === "passed") return { status: "complete", reason: "repair closure passed" };
@@ -329,7 +346,9 @@ async function runRepairFollowUpLoop(options = {}) {
     nextBestAction: plan.nextBestAction || "",
     summary: plan.summary || {},
   };
-  state.acceptance = writeFollowUpLoopAcceptance(context, args);
+  const terminalChecks = writeFollowUpLoopTerminalChecks(context, args);
+  state.acceptance = terminalChecks.acceptance;
+  state.deliveryReadiness = terminalChecks.deliveryReadiness;
   state.updatedAt = new Date().toISOString();
   writeFollowUpLoopState(context.outputRoot, state);
   return state;
@@ -358,5 +377,6 @@ module.exports = {
   selectNextFollowUpCommand,
   summarizeLoopStatus,
   writeFollowUpLoopAcceptance,
+  writeFollowUpLoopTerminalChecks,
   writeFollowUpLoopState,
 };

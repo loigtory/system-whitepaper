@@ -876,6 +876,7 @@ function buildBatchActiveRun(run, systems, batch) {
   const diagnosis = batch?.diagnosis || null;
   const repairQueue = batch?.repairQueue || null;
   const acceptance = batch?.acceptance || null;
+  const deliveryReadiness = batch?.deliveryReadiness || null;
   const repairFollowUp = batch?.repairFollowUp || null;
   return {
     mode: "batch",
@@ -893,6 +894,7 @@ function buildBatchActiveRun(run, systems, batch) {
     diagnosis,
     repairQueue,
     acceptance,
+    deliveryReadiness,
     repairFollowUp,
     startedAt: run.startedAt || batch?.startedAt || "",
     runningMs:
@@ -1030,6 +1032,13 @@ function buildDashboardSnapshot(options = {}) {
     json: fileInfo(path.join(outputRoot, "_batch", "acceptance-report.json")),
     markdown: fileInfo(path.join(outputRoot, "_batch", "acceptance-report.md")),
   };
+  const batchDeliveryReadinessReport = readOptionalJsonObject(
+    path.join(outputRoot, "_batch", "delivery-readiness-report.json"),
+  );
+  const batchDeliveryReadinessArtifacts = {
+    json: fileInfo(path.join(outputRoot, "_batch", "delivery-readiness-report.json")),
+    markdown: fileInfo(path.join(outputRoot, "_batch", "delivery-readiness-report.md")),
+  };
   const batchRepairRunState = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-run-state.json"));
   const batchRepairRunPlan = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-run-plan.json"));
   const batchRepairClosure = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-closure.json"));
@@ -1077,6 +1086,21 @@ function buildDashboardSnapshot(options = {}) {
                 summary: batchAcceptanceReport.summary || {},
                 artifacts: { acceptanceJson: "acceptance-report.json", acceptanceMarkdown: "acceptance-report.md" },
                 generatedAt: batchAcceptanceReport.generatedAt || "",
+              }
+            : null),
+        deliveryReadiness:
+          batch.deliveryReadiness ||
+          (batchDeliveryReadinessReport
+            ? {
+                status: batchDeliveryReadinessReport.status || "",
+                canDeliver: Boolean(batchDeliveryReadinessReport.canDeliver),
+                summary: batchDeliveryReadinessReport.summary || {},
+                acceptance: batchDeliveryReadinessReport.acceptance || {},
+                artifacts: {
+                  deliveryReadinessJson: "delivery-readiness-report.json",
+                  deliveryReadinessMarkdown: "delivery-readiness-report.md",
+                },
+                generatedAt: batchDeliveryReadinessReport.generatedAt || "",
               }
             : null),
         repairFollowUp:
@@ -1161,6 +1185,8 @@ function buildDashboardSnapshot(options = {}) {
     batchRepairQueueArtifacts,
     batchAcceptanceReport,
     batchAcceptanceArtifacts,
+    batchDeliveryReadinessReport,
+    batchDeliveryReadinessArtifacts,
     batchRepairRunState,
     batchRepairRunPlan,
     batchRepairClosure,
