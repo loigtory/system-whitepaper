@@ -154,10 +154,75 @@ function buildSystemPreparation(system = {}, context = {}) {
   };
 }
 
+function reportSystemCodes(report = {}) {
+  if (!Array.isArray(report.systems)) return null;
+  return report.systems
+    .map((item) => String(item?.code || item?.systemCode || "").trim())
+    .filter(Boolean);
+}
+
+function sameCodeSet(left = [], right = []) {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  if (leftSet.size !== rightSet.size) return false;
+  return [...leftSet].every((code) => rightSet.has(code));
+}
+
+function reportScopeWarning(kind, id, message) {
+  return warning(`${kind}.${id}`, message);
+}
+
+function selectScopedReport(report, kind, selectedCodes = []) {
+  if (!report) return { report: null, warnings: [] };
+  const expectedArtifactType = kind === "acceptance" ? "batch-acceptance-report" : "delivery-readiness-report";
+  if (report.artifactType && report.artifactType !== expectedArtifactType) {
+    return {
+      report: null,
+      warnings: [
+        reportScopeWarning(kind, "artifact-type-mismatch", `Ignored ${kind} report with unsupported artifactType: ${report.artifactType}`),
+      ],
+    };
+  }
+  const reportCodes = reportSystemCodes(report);
+  if (!reportCodes || !reportCodes.length) {
+    return {
+      report: null,
+      warnings: [
+        reportScopeWarning(kind, "scope-unknown", `Ignored ${kind} report because it does not list system codes.`),
+      ],
+    };
+  }
+  if (!sameCodeSet(reportCodes, selectedCodes)) {
+    return {
+      report: null,
+      warnings: [
+        reportScopeWarning(
+          kind,
+          "scope-mismatch",
+          `Ignored ${kind} report because systems do not match current selection. selected=${selectedCodes.join(",") || "-"} report=${reportCodes.join(",") || "-"}`,
+        ),
+      ],
+    };
+  }
+  return { report, warnings: [] };
+}
+
+function hasAcceptedEvidence(acceptanceReport, deliveryReport) {
+  if (acceptanceReport?.status === "accepted" && acceptanceReport.canSubmitAll === true) return true;
+  const embeddedAcceptance = deliveryReport?.acceptance || {};
+  return embeddedAcceptance.status === "accepted" && embeddedAcceptance.canSubmitAll === true;
+}
+
 function deriveStatus(preparationStatus, acceptanceReport, deliveryReport) {
   if (preparationStatus === "blocked") return "blocked";
   if (deliveryReport?.status === "blocked" || acceptanceReport?.status === "blocked") return "blocked";
-  if (deliveryReport?.status === "ready" && deliveryReport.canDeliver === true) return "ready";
+  if (
+    deliveryReport?.status === "ready" &&
+    deliveryReport.canDeliver === true &&
+    hasAcceptedEvidence(acceptanceReport, deliveryReport)
+  ) {
+    return "ready";
+  }
   if (acceptanceReport?.status === "accepted" && !deliveryReport) return "in-progress";
   if (preparationStatus === "ready-to-run") return "ready-to-run";
   return "blocked";
@@ -186,8 +251,14 @@ function buildRealRunReadinessReport(input = {}) {
   blockers.push(...systems.flatMap((system) => system.blockers));
   warnings.push(...systems.flatMap((system) => system.warnings));
 
-  const acceptanceReport = input.acceptanceReport || readJsonObjectIfExists(path.join(context.outputRoot, "_batch", "acceptance-report.json"));
-  const deliveryReport = input.deliveryReport || readJsonObjectIfExists(path.join(context.outputRoot, "_batch", "delivery-readiness-report.json"));
+  const selectedCodes = systems.map((system) => system.code).filter(Boolean);
+  const rawAcceptanceReport = input.acceptanceReport || readJsonObjectIfExists(path.join(context.outputRoot, "_batch", "acceptance-report.json"));
+  const rawDeliveryReport = input.deliveryReport || readJsonObjectIfExists(path.join(context.outputRoot, "_batch", "delivery-readiness-report.json"));
+  const acceptanceSelection = selectScopedReport(rawAcceptanceReport, "acceptance", selectedCodes);
+  const deliverySelection = selectScopedReport(rawDeliveryReport, "delivery", selectedCodes);
+  warnings.push(...acceptanceSelection.warnings, ...deliverySelection.warnings);
+  const acceptanceReport = acceptanceSelection.report;
+  const deliveryReport = deliverySelection.report;
   const preparationStatus = blockers.length ? "blocked" : "ready-to-run";
   const status = deriveStatus(preparationStatus, acceptanceReport, deliveryReport);
   return {

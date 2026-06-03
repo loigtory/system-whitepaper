@@ -7789,6 +7789,7 @@ test("real run readiness unifies preflight and final delivery state", () => {
     canSubmitAll: true,
     generatedAt: "2026-06-03T00:00:00.000Z",
     summary: { total: 1, accepted: 1, blocked: 0, blockers: 0 },
+    systems: [{ code: "adp", status: "accepted" }],
   };
   const deliveryReport = {
     artifactType: "delivery-readiness-report",
@@ -7796,6 +7797,7 @@ test("real run readiness unifies preflight and final delivery state", () => {
     canDeliver: true,
     generatedAt: "2026-06-03T00:01:00.000Z",
     summary: { total: 1, ready: 1, blocked: 0, blockers: 0 },
+    systems: [{ code: "adp", status: "ready" }],
   };
   const ready = buildRealRunReadinessReport({
     args: { systems: "adp" },
@@ -7877,6 +7879,43 @@ test("real run readiness unifies preflight and final delivery state", () => {
     },
   });
   assert.equal(connectorReady.status, "ready-to-run");
+
+  const staleScopeReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport: {
+      ...acceptanceReport,
+      systems: [{ code: "claim", status: "accepted" }],
+    },
+    deliveryReport: {
+      ...deliveryReport,
+      systems: [{ code: "claim", status: "ready" }],
+    },
+  });
+  assert.equal(staleScopeReady.status, "ready-to-run");
+  assert.equal(staleScopeReady.canDeliver, false);
+  assert.ok(staleScopeReady.warnings.some((item) => item.id === "acceptance.scope-mismatch"));
+  assert.ok(staleScopeReady.warnings.some((item) => item.id === "delivery.scope-mismatch"));
+
+  const deliveryOnlyReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    deliveryReport,
+  });
+  assert.equal(deliveryOnlyReady.status, "ready-to-run");
+  assert.equal(deliveryOnlyReady.canDeliver, false);
 
   const blockedWithStaleReady = buildRealRunReadinessReport({
     args: { systems: "adp" },
