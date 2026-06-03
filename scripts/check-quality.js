@@ -33,6 +33,12 @@ function buildQualitySourceArtifacts(input = {}) {
       fingerprint: fingerprintFile(input.evidencePath),
     };
   }
+  if (input.operationGuideGatePath) {
+    result.operationGuideGate = {
+      file: path.basename(input.operationGuideGatePath),
+      fingerprint: fingerprintFile(input.operationGuideGatePath),
+    };
+  }
   return result;
 }
 
@@ -75,7 +81,10 @@ function main() {
   writeJson(output, {
     ...report,
     counts: metrics.counts,
-    sourceArtifacts: buildQualitySourceArtifacts({ evidencePath }),
+    sourceArtifacts: buildQualitySourceArtifacts({
+      evidencePath,
+      operationGuideGatePath: gatePath,
+    }),
   });
   console.log(`Quality report written: ${output}`);
   console.log(

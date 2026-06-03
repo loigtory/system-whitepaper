@@ -82,7 +82,10 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
     unverifiedContentLabeling: 1,
     coreConclusionTraceability: 1,
     failures: [],
-    sourceArtifacts: buildQualitySourceArtifacts({ evidencePath: path.join(dir, "evidence.json") }),
+    sourceArtifacts: buildQualitySourceArtifacts({
+      evidencePath: path.join(dir, "evidence.json"),
+      operationGuideGatePath: path.join(dir, "operation-guide-gate.json"),
+    }),
   });
   writeJsonIfMissing("verified-claims.json", {
     rules: {
@@ -190,7 +193,10 @@ function writePassingTruthArtifacts(dir, options = {}) {
       unverifiedContentLabeling: 1,
       coreConclusionTraceability: 1,
       failures: [],
-      sourceArtifacts: buildQualitySourceArtifacts({ evidencePath: path.join(dir, "evidence.json") }),
+      sourceArtifacts: buildQualitySourceArtifacts({
+        evidencePath: path.join(dir, "evidence.json"),
+        operationGuideGatePath: path.join(dir, "operation-guide-gate.json"),
+      }),
     }),
     "utf8",
   );
@@ -12824,6 +12830,26 @@ test("truth readiness rejects stale database truth lineage", () => {
     }),
     "utf8",
   );
+
+  fs.writeFileSync(
+    path.join(dir, "operation-guide-gate.json"),
+    JSON.stringify({
+      canComposeGuide: false,
+      readinessPercent: 40,
+      failures: ["操作指引证据不足"],
+    }),
+    "utf8",
+  );
+  const staleOperationGuideGate = runTruthReadinessCheck({
+    inputDir: dir,
+    requireDatabaseEvidence: true,
+    systemCode: "adp",
+  });
+  assert.equal(staleOperationGuideGate.canSubmitReview, false);
+  assert.equal(staleOperationGuideGate.gates.lineage.pass, false);
+  assert.ok(staleOperationGuideGate.gates.lineage.failures.some((item) => /operation-guide-gate\.json/.test(item)));
+  assert.ok(staleOperationGuideGate.blockers.some((item) => item.id === "truth.lineage-stale"));
+  fs.unlinkSync(path.join(dir, "operation-guide-gate.json"));
 
   fs.writeFileSync(
     path.join(dir, "evidence-summary.json"),

@@ -306,7 +306,10 @@ async function main() {
   writeJson(path.join(systemOutput, "quality-report.json"), {
     ...qualityReport,
     counts: metrics.counts,
-    sourceArtifacts: buildQualitySourceArtifacts({ evidencePath }),
+    sourceArtifacts: buildQualitySourceArtifacts({
+      evidencePath,
+      operationGuideGatePath: path.join(systemOutput, "operation-guide-gate.json"),
+    }),
   });
   console.log(`Evidence package written: ${systemOutput}`);
   console.log(

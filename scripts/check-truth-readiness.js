@@ -17,6 +17,7 @@ const REQUIRED_ARTIFACTS = {
 const OPTIONAL_ARTIFACTS = {
   evidence: "evidence.json",
   evidenceSummary: "evidence-summary.json",
+  operationGuideGate: "operation-guide-gate.json",
   dataDictionary: "data-dictionary.json",
   entityModel: "entity-model.json",
   functionUniverse: "function-universe.json",
@@ -167,6 +168,7 @@ function buildLineageGate(artifacts = {}) {
   const failures = [];
   const checks = [
     ["evidence", artifacts.quality, artifacts.evidence, "quality-report.json"],
+    ["operationGuideGate", artifacts.quality, artifacts.operationGuideGate, "quality-report.json"],
     ["databaseProfile", artifacts.dataDictionary, artifacts.databaseProfile, "data-dictionary.json"],
     ["databaseProfile", artifacts.entityModel, artifacts.databaseProfile, "entity-model.json"],
     ["dataDictionary", artifacts.entityModel, artifacts.dataDictionary, "entity-model.json"],
