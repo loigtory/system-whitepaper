@@ -7558,6 +7558,130 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   assert.ok(belowTarget.blockers.some((item) => item.id === "truth-readiness.below-target"));
 });
 
+test("delivery readiness distinguishes real pipeline delivery from local smoke artifacts", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
+  const { buildReadinessSourceArtifacts, loadReadinessInputs } = require("./check-truth-readiness");
+  const {
+    buildDeliveryReadinessReport,
+    renderDeliveryReadinessMarkdown,
+    writeDeliveryReadinessReport,
+  } = require("./check-delivery-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-readiness-"));
+  const outputRoot = path.join(dir, "outputs");
+  const systemOutput = path.join(outputRoot, "adp");
+  fs.mkdirSync(systemOutput, { recursive: true });
+
+  let state = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
+  for (const nodeId of [
+    "sync",
+    "session",
+    "collect",
+    "inspect",
+    "validate-write",
+    "db-profile",
+    "db-model",
+    "truth-universe",
+    "truth-claims",
+    "build-spec",
+    "compose-guide",
+    "draft",
+    "summary",
+    "narrative",
+    "fact-check",
+    "quality",
+    "truth-readiness",
+  ]) {
+    state = updateNodeStatus(state, nodeId, nodeId === "validate-write" ? "skipped" : "success");
+  }
+  writePipelineState(path.join(systemOutput, "pipeline-state.json"), state);
+  fs.writeFileSync(path.join(systemOutput, "quality-report.json"), JSON.stringify({ canFinalize: true }), "utf8");
+  fs.writeFileSync(path.join(systemOutput, "verified-claims.json"), JSON.stringify({ claims: [] }), "utf8");
+  fs.writeFileSync(
+    path.join(systemOutput, "fact-check-report.json"),
+    JSON.stringify({
+      canFinalize: true,
+      metrics: {
+        writableClaimCoverageRatio: 1,
+        minWritableClaimCoverage: 0.8,
+        missingWritableClaimCount: 0,
+      },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "narrative-quality-report.json"),
+    JSON.stringify({ canSubmitReview: true, counts: { chars: 2000, evidencePages: 1 } }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(systemOutput, "database-profile.json"), JSON.stringify({ tables: [] }), "utf8");
+  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      artifactType: "truth-readiness-report",
+      score: 0.98,
+      scorePercent: 98,
+      canSubmitReview: true,
+      canFinalize: true,
+      gates: { database: { available: true }, factCheck: { metrics: { writableClaimCoverageRatio: 1 } } },
+      blockers: [],
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+      generatedAt: "2026-06-03T00:01:00.000Z",
+    }),
+    "utf8",
+  );
+
+  const acceptanceReport = {
+    artifactType: "batch-acceptance-report",
+    status: "accepted",
+    canSubmitAll: true,
+    targetTruthScorePercent: 95,
+    outputRoot,
+    generatedAt: "2026-06-03T00:02:00.000Z",
+    summary: { total: 1, accepted: 1, blockers: 0 },
+    systems: [
+      {
+        code: "adp",
+        name: "AI保单数据闭环平台",
+        accepted: true,
+        databaseProfileConfigured: true,
+        databaseEvidenceAvailable: true,
+      },
+    ],
+  };
+
+  const ready = buildDeliveryReadinessReport({ acceptanceReport });
+  assert.equal(ready.status, "ready");
+  assert.equal(ready.canDeliver, true);
+  assert.equal(ready.summary.ready, 1);
+  assert.match(renderDeliveryReadinessMarkdown(ready), /Delivery Readiness Report/);
+  writeDeliveryReadinessReport(outputRoot, ready);
+  assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.json")), true);
+  assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.md")), true);
+
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      ...JSON.parse(fs.readFileSync(path.join(systemOutput, "truth-readiness-report.json"), "utf8")),
+      mode: "local-e2e-smoke",
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "whitepaper.pending-review.md"),
+    "# AI保单数据闭环平台功能白皮书\n\n本地冒烟，不代表最终业务白皮书内容。",
+    "utf8",
+  );
+  const smoke = buildDeliveryReadinessReport({ acceptanceReport });
+  assert.equal(smoke.status, "blocked");
+  assert.equal(smoke.canDeliver, false);
+  assert.ok(smoke.blockers.some((item) => item.id === "delivery.smoke-truth-report"));
+  assert.ok(smoke.blockers.some((item) => item.id === "delivery.smoke-whitepaper"));
+});
+
 test("dashboard supports batch pipeline command and active run snapshot", () => {
   const {
     buildActiveRun,
@@ -11233,6 +11357,7 @@ test("package manifest whitelists only skill runtime assets", () => {
     "scripts/build-function-universe.js",
     "scripts/build-verified-claims.js",
     "scripts/check-batch-acceptance.js",
+    "scripts/check-delivery-readiness.js",
     "scripts/check-truth-readiness.js",
     "scripts/fact-check-whitepaper.js",
     "scripts/system-whitepaper-lib.js",
@@ -11299,6 +11424,7 @@ test("npm pack dry-run excludes private and process-only assets", () => {
     "scripts/build-function-universe.js",
     "scripts/build-verified-claims.js",
     "scripts/check-batch-acceptance.js",
+    "scripts/check-delivery-readiness.js",
     "scripts/check-truth-readiness.js",
     "scripts/fact-check-whitepaper.js",
     "scripts/system-whitepaper-lib.js",
@@ -11384,6 +11510,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
       "scripts/build-function-universe.js",
       "scripts/build-verified-claims.js",
       "scripts/check-batch-acceptance.js",
+      "scripts/check-delivery-readiness.js",
       "scripts/check-truth-readiness.js",
       "scripts/fact-check-whitepaper.js",
       "scripts/system-whitepaper-lib.js",
@@ -11412,6 +11539,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
           'require("./scripts/build-function-universe");',
           'require("./scripts/build-verified-claims");',
           'require("./scripts/check-batch-acceptance");',
+          'require("./scripts/check-delivery-readiness");',
           'require("./scripts/check-truth-readiness");',
           'require("./scripts/fact-check-whitepaper");',
           'require("./scripts/system-whitepaper-lib");',
