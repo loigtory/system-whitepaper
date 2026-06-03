@@ -5941,6 +5941,10 @@ test("dashboard frontend renders batch truth and repair summary", () => {
         summary: { total: 2, ready: 1, blocked: 1, missingWritableClaims: 1 },
         artifacts: { diagnosisMarkdown: "diagnosis.md" },
       },
+      repairQueue: {
+        summary: { total: 1, autoRunnable: 0, blocked: 1, requiresAgentWriting: 1 },
+        artifacts: { repairQueueMarkdown: "repair-queue.md" },
+      },
       runningMs: 120000,
       progress: { total: 2, completed: 1, percent: 50 },
       systems: [
@@ -5992,6 +5996,10 @@ test("dashboard frontend renders batch truth and repair summary", () => {
   assert.match(html, /Blocked 1/);
   assert.match(html, /缺失可写声明 1/);
   assert.match(html, /诊断文件 diagnosis\.md/);
+  assert.match(html, /修复队列/);
+  assert.match(html, /自动 0\/1/);
+  assert.match(html, /写稿额度 1/);
+  assert.match(html, /修复队列文件 repair-queue\.md/);
 });
 
 function createDashboardFrontendContext() {
@@ -6398,16 +6406,19 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
   const {
     buildBatchChildArgs,
     buildBatchDiagnosis,
+    buildBatchRepairQueue,
     buildRetryArgs,
     buildRetryNodes,
     classifyBatchFailure,
     createBatchState,
     renderBatchDiagnosisMarkdown,
+    renderBatchRepairQueueMarkdown,
     resolveBatchConcurrency,
     resolveBatchRetries,
     selectBatchSystems,
     updateBatchSystem,
     writeBatchDiagnosis,
+    writeBatchRepairQueue,
   } = require("./run-whitepaper-batch");
   const config = {
     runtime: {},
@@ -6622,6 +6633,42 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
   assert.equal(fs.existsSync(path.join(diagDir, "_batch", "diagnosis.json")), true);
   assert.equal(fs.existsSync(path.join(diagDir, "_batch", "diagnosis.md")), true);
   assert.equal(writtenDiagnosis.artifacts.diagnosisMarkdown, "diagnosis.md");
+
+  const repairQueue = buildBatchRepairQueue(diagnosis, { allowAgentWriting: false });
+  assert.equal(repairQueue.summary.total, 1);
+  assert.equal(repairQueue.summary.autoRunnable, 0);
+  assert.equal(repairQueue.summary.blocked, 1);
+  assert.equal(repairQueue.summary.requiresAgentWriting, 1);
+  assert.equal(repairQueue.items[0].systemCode, "claim");
+  assert.equal(repairQueue.items[0].reset, false);
+  assert.equal(repairQueue.items[0].reviewRerun, false);
+  assert.equal(repairQueue.items[0].actionId, "narrative.cover-missing-writable-claims");
+  assert.deepEqual(repairQueue.items[0].nodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.equal(repairQueue.items[0].canAutoRun, false);
+  assert.match(repairQueue.items[0].blockedReason, /Agent-writing quota/);
+  assert.deepEqual(repairQueue.items[0].missingWritableClaimIds, ["function:理赔:案件详情"]);
+  assert.deepEqual(
+    repairQueue.items[0].command.args,
+    [
+      "--systems",
+      "claim",
+      "--nodes",
+      "narrative,fact-check,quality,truth-readiness",
+      "--narrative-part",
+      "function-sections",
+    ],
+  );
+  const allowedRepairQueue = buildBatchRepairQueue(diagnosis, { allowAgentWriting: true });
+  assert.equal(allowedRepairQueue.summary.autoRunnable, 1);
+  assert.equal(allowedRepairQueue.items[0].canAutoRun, true);
+  const repairMarkdown = renderBatchRepairQueueMarkdown(repairQueue);
+  assert.match(repairMarkdown, /Batch Repair Queue/);
+  assert.match(repairMarkdown, /claim/);
+  assert.match(repairMarkdown, /agent-writing/);
+  const writtenRepairQueue = writeBatchRepairQueue(diagDir, diagnosis, { allowAgentWriting: false });
+  assert.equal(fs.existsSync(path.join(diagDir, "_batch", "repair-queue.json")), true);
+  assert.equal(fs.existsSync(path.join(diagDir, "_batch", "repair-queue.md")), true);
+  assert.equal(writtenRepairQueue.artifacts.repairQueueMarkdown, "repair-queue.md");
 });
 
 test("batch runner refreshes aggregate state from per-system pipeline states", () => {
@@ -6873,9 +6920,14 @@ test("batch runner classifies failed children and retries recoverable failures o
   assert.equal(written.systems[0].attempts, 2);
   assert.equal(written.diagnosis.summary.ready, 1);
   assert.equal(written.diagnosis.artifacts.diagnosisJson, "diagnosis.json");
+  assert.equal(written.repairQueue.summary.total, 0);
+  assert.equal(written.repairQueue.artifacts.repairQueueJson, "repair-queue.json");
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "diagnosis.json")), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "diagnosis.md")), true);
+  assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "repair-queue.json")), true);
+  assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "repair-queue.md")), true);
   assert.match(fs.readFileSync(path.join(outputRoot, "_batch", "diagnosis.md"), "utf8"), /Batch Diagnosis/);
+  assert.match(fs.readFileSync(path.join(outputRoot, "_batch", "repair-queue.md"), "utf8"), /Batch Repair Queue/);
 });
 
 test("dashboard supports batch pipeline command and active run snapshot", () => {
@@ -6974,6 +7026,10 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
         summary: { total: 2, ready: 1, blocked: 1, missingWritableClaims: 1 },
         artifacts: { diagnosisMarkdown: "diagnosis.md", diagnosisJson: "diagnosis.json" },
       },
+      repairQueue: {
+        summary: { total: 1, autoRunnable: 0, blocked: 1, requiresAgentWriting: 1 },
+        artifacts: { repairQueueMarkdown: "repair-queue.md", repairQueueJson: "repair-queue.json" },
+      },
     },
   );
   assert.equal(batchActiveRun.mode, "batch");
@@ -6986,6 +7042,8 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(batchActiveRun.failureSummary.recoverable, 1);
   assert.equal(batchActiveRun.failureSummary.quotaSensitive, 1);
   assert.equal(batchActiveRun.diagnosis.summary.ready, 1);
+  assert.equal(batchActiveRun.repairQueue.summary.total, 1);
+  assert.equal(batchActiveRun.repairQueue.summary.requiresAgentWriting, 1);
 
   const fs = require("node:fs");
   const os = require("node:os");
@@ -7036,12 +7094,25 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "outputs", "_batch", "diagnosis.md"), "# Batch Diagnosis", "utf8");
+  fs.writeFileSync(
+    path.join(dir, "outputs", "_batch", "repair-queue.json"),
+    JSON.stringify({
+      artifactType: "batch-repair-queue",
+      summary: { total: 1, autoRunnable: 0, blocked: 1, requiresAgentWriting: 1 },
+      items: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(dir, "outputs", "_batch", "repair-queue.md"), "# Batch Repair Queue", "utf8");
   const snapshot = buildDashboardSnapshot({ configPath });
   assert.equal(snapshot.batch.status, "running");
   assert.equal(snapshot.activeRun.mode, "batch");
   assert.equal(snapshot.activeRun.systems[0].currentNode, "narrative");
   assert.equal(snapshot.batchDiagnosis.summary.blocked, 1);
   assert.equal(snapshot.batchDiagnosisArtifacts.markdown.exists, true);
+  assert.equal(snapshot.batchRepairQueue.summary.total, 1);
+  assert.equal(snapshot.batchRepairQueueArtifacts.markdown.exists, true);
+  assert.equal(snapshot.activeRun.repairQueue.summary.requiresAgentWriting, 1);
 });
 
 test("dashboard rejected wording review records overview rewrite scope", () => {

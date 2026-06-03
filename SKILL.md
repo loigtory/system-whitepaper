@@ -60,8 +60,9 @@ Use the 4-thread model for unattended multi-system development:
 - Run different systems in parallel. Each system must write to its own `outputs/<system-code>/` directory.
 - Do not run the same system twice at the same time. Duplicate system codes or duplicate batch requests are invalid because they can overwrite screenshots, state, prompts, and review artifacts.
 - The batch runner owns `outputs/_batch/run-state.json`. Single-system child pipelines are started with `--no-batch-state` so they cannot overwrite the aggregate batch state.
-- The local dashboard reads the same batch state and shows each running system's status, current phase/node, pid, per-system log path, truth-readiness summary, writable-claim coverage, coverage-repair status, failure category, retry plan, and batch diagnosis summary.
-- Batch completion writes `outputs/_batch/diagnosis.json` and `outputs/_batch/diagnosis.md` to summarize which systems are ready for review, which are blocked, missing writable-claim coverage, failure categories, and next rerun actions.
+- The local dashboard reads the same batch state and shows each running system's status, current phase/node, pid, per-system log path, truth-readiness summary, writable-claim coverage, coverage-repair status, failure category, retry plan, batch diagnosis summary, and repair-queue summary.
+- Batch completion writes `outputs/_batch/diagnosis.json`, `outputs/_batch/diagnosis.md`, `outputs/_batch/repair-queue.json`, and `outputs/_batch/repair-queue.md`. Diagnosis explains readiness and blockers; repair queue converts safe rerun actions into bounded queue items.
+- Repair queue items are restricted: `reset=false`, `review` is excluded, only known pipeline nodes are allowed, and items that include `narrative` are marked Agent-writing quota sensitive. They are not auto-runnable unless `runtime.repairAllowAgentWriting=true` or batch is run with `-- --repair-allow-agent-writing`.
 - Batch retries are opt-in with `-- --batch-retries <n>`. Retried systems resume from the failed node, do not inherit `--reset`, and mark retries that include `narrative` as Agent-writing quota sensitive.
 - Batch execution increases throughput only. It does not multiply Cursor/Codex plan quota and it does not make Agent writing free.
 
@@ -87,7 +88,7 @@ Use the npm scripts as the stable entrypoints:
 
 Run `npm run init` once after installing the skill, then edit `config/systems.local.yaml` and write the Huntian token into `secrets/huntian-token.txt`.
 Run `npm run doctor` before first collection and after changing config or secret paths.
-Prefer `npm run pipeline` for single-system production runs. Use `npm run batch` when multiple independent systems must be processed unattended. Watch `outputs/_batch/run-state.json`, `outputs/_batch/diagnosis.md`, or the dashboard "Batch 4 threads" panel to see all active system threads, truth-readiness scores, coverage-repair outcomes, and blocked next actions at once. Use `npm run phase3b` only for scoped narrative work, review rewrites, or prompt/fragment regeneration after evidence and summary artifacts already exist.
+Prefer `npm run pipeline` for single-system production runs. Use `npm run batch` when multiple independent systems must be processed unattended. Watch `outputs/_batch/run-state.json`, `outputs/_batch/diagnosis.md`, `outputs/_batch/repair-queue.md`, or the dashboard "Batch 4 threads" panel to see all active system threads, truth-readiness scores, coverage-repair outcomes, and blocked next actions at once. Use `npm run phase3b` only for scoped narrative work, review rewrites, or prompt/fragment regeneration after evidence and summary artifacts already exist.
 Run `npm run pack:check` before distributing or installing an updated copy of this skill.
 
 ## Hard Rules

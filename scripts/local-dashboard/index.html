@@ -803,6 +803,9 @@
           const diagnosis = run.diagnosis;
           const diagnosisSummary = diagnosis?.summary || {};
           const diagnosisArtifacts = diagnosis?.artifacts || {};
+          const repairQueue = run.repairQueue;
+          const repairQueueSummary = repairQueue?.summary || {};
+          const repairQueueArtifacts = repairQueue?.artifacts || {};
           const items = systems
             .map(
               (item) => {
@@ -838,6 +841,8 @@
                   <div class="muted">可恢复失败 ${escapeHtml(String(run.failureSummary?.recoverable || 0))} · 写稿额度敏感 ${escapeHtml(String(run.failureSummary?.quotaSensitive || 0))}</div>
                   ${diagnosis ? `<div class="muted">批量诊断 Ready ${escapeHtml(String(diagnosisSummary.ready || 0))}/${escapeHtml(String(diagnosisSummary.total || 0))} · Blocked ${escapeHtml(String(diagnosisSummary.blocked || 0))} · 缺失可写声明 ${escapeHtml(String(diagnosisSummary.missingWritableClaims || 0))}</div>` : ""}
                   ${diagnosisArtifacts.diagnosisMarkdown ? `<div class="muted">诊断文件 ${escapeHtml(diagnosisArtifacts.diagnosisMarkdown)}</div>` : ""}
+                  ${repairQueue ? `<div class="muted">修复队列 自动 ${escapeHtml(String(repairQueueSummary.autoRunnable || 0))}/${escapeHtml(String(repairQueueSummary.total || 0))} · 阻塞 ${escapeHtml(String(repairQueueSummary.blocked || 0))} · 写稿额度 ${escapeHtml(String(repairQueueSummary.requiresAgentWriting || 0))}</div>` : ""}
+                  ${repairQueueArtifacts.repairQueueMarkdown ? `<div class="muted">修复队列文件 ${escapeHtml(repairQueueArtifacts.repairQueueMarkdown)}</div>` : ""}
                   ${run.lastError ? `<div class="status failed">${escapeHtml(run.lastError)}</div>` : ""}
                 </div>
                 <div class="muted">PID ${run.pid || "-"} · ${formatDuration(run.runningMs)}</div>

@@ -874,6 +874,7 @@ function buildBatchActiveRun(run, systems, batch) {
   const repairCount = batchSystems.filter((item) => item.coverageRepair).length;
   const failureSummary = batch?.failureSummary || { counts: {}, recoverable: 0, quotaSensitive: 0 };
   const diagnosis = batch?.diagnosis || null;
+  const repairQueue = batch?.repairQueue || null;
   return {
     mode: "batch",
     systemCode: currentCodes.join(","),
@@ -888,6 +889,7 @@ function buildBatchActiveRun(run, systems, batch) {
     coverageRepairCount: repairCount,
     failureSummary,
     diagnosis,
+    repairQueue,
     startedAt: run.startedAt || batch?.startedAt || "",
     runningMs:
       run.startedAt || batch?.startedAt
@@ -1014,11 +1016,39 @@ function buildDashboardSnapshot(options = {}) {
     json: fileInfo(path.join(outputRoot, "_batch", "diagnosis.json")),
     markdown: fileInfo(path.join(outputRoot, "_batch", "diagnosis.md")),
   };
+  const batchRepairQueue = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-queue.json"));
+  const batchRepairQueueArtifacts = {
+    json: fileInfo(path.join(outputRoot, "_batch", "repair-queue.json")),
+    markdown: fileInfo(path.join(outputRoot, "_batch", "repair-queue.md")),
+  };
+  const batchForActiveRun = batch
+    ? {
+        ...batch,
+        diagnosis:
+          batch.diagnosis ||
+          (batchDiagnosis
+            ? {
+                summary: batchDiagnosis.summary || {},
+                artifacts: { diagnosisJson: "diagnosis.json", diagnosisMarkdown: "diagnosis.md" },
+                generatedAt: batchDiagnosis.generatedAt || "",
+              }
+            : null),
+        repairQueue:
+          batch.repairQueue ||
+          (batchRepairQueue
+            ? {
+                summary: batchRepairQueue.summary || {},
+                artifacts: { repairQueueJson: "repair-queue.json", repairQueueMarkdown: "repair-queue.md" },
+                generatedAt: batchRepairQueue.generatedAt || "",
+              }
+            : null),
+      }
+    : batch;
   const pricingConfig = config.narrative?.pricing || {};
   const systems = (config.systems || []).map((system) =>
     buildSystemDashboardItem(system, outputRoot, { pricingConfig }),
   );
-  let activeRun = buildActiveRun(systems, batch);
+  let activeRun = buildActiveRun(systems, batchForActiveRun);
   if (options.activeRun) {
     const explicit = options.activeRun;
     const system = systems.find(
@@ -1072,9 +1102,11 @@ function buildDashboardSnapshot(options = {}) {
   return {
     configPath,
     outputRoot,
-    batch,
+    batch: batchForActiveRun,
     batchDiagnosis,
     batchDiagnosisArtifacts,
+    batchRepairQueue,
+    batchRepairQueueArtifacts,
     summary: buildSummary(systems),
     activeRun,
     systems,
