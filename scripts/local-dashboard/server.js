@@ -1023,10 +1023,13 @@ function buildDashboardSnapshot(options = {}) {
   };
   const batchRepairRunState = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-run-state.json"));
   const batchRepairRunPlan = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-run-plan.json"));
+  const batchRepairClosure = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-closure.json"));
   const batchRepairRunArtifacts = {
     state: fileInfo(path.join(outputRoot, "_batch", "repair-run-state.json")),
     planJson: fileInfo(path.join(outputRoot, "_batch", "repair-run-plan.json")),
     planMarkdown: fileInfo(path.join(outputRoot, "_batch", "repair-run-plan.md")),
+    closureJson: fileInfo(path.join(outputRoot, "_batch", "repair-closure.json")),
+    closureMarkdown: fileInfo(path.join(outputRoot, "_batch", "repair-closure.md")),
   };
   const batchForActiveRun = batch
     ? {
@@ -1116,6 +1119,7 @@ function buildDashboardSnapshot(options = {}) {
     batchRepairQueueArtifacts,
     batchRepairRunState,
     batchRepairRunPlan,
+    batchRepairClosure,
     batchRepairRunArtifacts,
     summary: buildSummary(systems),
     activeRun,

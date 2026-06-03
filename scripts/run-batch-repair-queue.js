@@ -15,6 +15,7 @@ const { loadBatchConfig, resolveBatchConcurrency } = require("./run-whitepaper-b
 const REPAIR_NODE_ORDER = NODES.map((node) => node.id).filter((nodeId) => nodeId !== "review");
 const REPAIR_NODE_ALLOWLIST = new Set(REPAIR_NODE_ORDER);
 const DEFAULT_MAX_ITEMS = 20;
+const TARGET_TRUTH_SCORE = 95;
 
 function nowIso(value) {
   return value || new Date().toISOString();
@@ -276,6 +277,172 @@ function writeRepairRunState(outputRoot, state) {
   return filePath;
 }
 
+function readBatchArtifact(outputRoot, fileName) {
+  return readOptionalJsonObject(path.join(outputRoot, "_batch", fileName));
+}
+
+function summarizeClosureDiagnosis(diagnosis = null) {
+  const summary = diagnosis?.summary || {};
+  const systems = Array.isArray(diagnosis?.systems) ? diagnosis.systems : [];
+  const total = Number(summary.total || systems.length || 0);
+  const ready = Number(summary.ready || systems.filter((item) => item.ready).length || 0);
+  const blocked = Number(summary.blocked || Math.max(0, total - ready));
+  const belowTarget = systems.filter((item) => {
+    if (item.truthScorePercent === null || item.truthScorePercent === undefined) return true;
+    return Number(item.truthScorePercent || 0) < TARGET_TRUTH_SCORE || !item.canSubmitReview;
+  }).length;
+  const minTruthScore = systems.reduce((min, item) => {
+    if (item.truthScorePercent === null || item.truthScorePercent === undefined) return min;
+    const score = Number(item.truthScorePercent || 0);
+    return min === null ? score : Math.min(min, score);
+  }, null);
+  return {
+    total,
+    ready,
+    blocked,
+    belowTarget,
+    missingWritableClaims: Number(summary.missingWritableClaims || 0),
+    minTruthScore,
+  };
+}
+
+function summarizeClosureRepairQueue(repairQueue = null) {
+  const summary = repairQueue?.summary || {};
+  return {
+    total: Number(summary.total || 0),
+    autoRunnable: Number(summary.autoRunnable || 0),
+    blocked: Number(summary.blocked || 0),
+    requiresAgentWriting: Number(summary.requiresAgentWriting || 0),
+  };
+}
+
+function buildRepairClosureReport(state = {}, options = {}) {
+  const outputRoot = options.outputRoot || "";
+  const diagnosis = options.diagnosis || (outputRoot ? readBatchArtifact(outputRoot, "diagnosis.json") : null);
+  const repairQueue = options.repairQueue || (outputRoot ? readBatchArtifact(outputRoot, "repair-queue.json") : null);
+  const diagnosisSummary = summarizeClosureDiagnosis(diagnosis);
+  const repairQueueSummary = summarizeClosureRepairQueue(repairQueue);
+  const failedGroups = (Array.isArray(state.groups) ? state.groups : []).filter((group) => group.status === "failed");
+  const pendingGroups = (Array.isArray(state.groups) ? state.groups : []).filter((group) => group.status === "pending");
+  const diagnosisAvailable = Boolean(diagnosis);
+  const repairQueueAvailable = Boolean(repairQueue);
+  const canSubmitAll =
+    diagnosisAvailable &&
+    diagnosisSummary.total > 0 &&
+    diagnosisSummary.ready === diagnosisSummary.total &&
+    diagnosisSummary.blocked === 0 &&
+    diagnosisSummary.belowTarget === 0 &&
+    diagnosisSummary.missingWritableClaims === 0;
+  const repairQueueEmpty = repairQueueAvailable && repairQueueSummary.total === 0;
+  const passed = canSubmitAll && repairQueueEmpty && failedGroups.length === 0 && pendingGroups.length === 0;
+  const blockers = [];
+  if (!diagnosisAvailable) blockers.push("batch diagnosis is missing after repair run");
+  if (!repairQueueAvailable) blockers.push("batch repair queue is missing after repair run");
+  if (failedGroups.length) blockers.push(`${failedGroups.length} repair group(s) failed`);
+  if (pendingGroups.length) blockers.push(`${pendingGroups.length} repair group(s) were not executed`);
+  if (diagnosisSummary.blocked > 0) blockers.push(`${diagnosisSummary.blocked} system(s) remain blocked`);
+  if (diagnosisSummary.belowTarget > 0) blockers.push(`${diagnosisSummary.belowTarget} system(s) remain below ${TARGET_TRUTH_SCORE}% truth readiness`);
+  if (diagnosisSummary.missingWritableClaims > 0) {
+    blockers.push(`${diagnosisSummary.missingWritableClaims} writable claim(s) remain uncovered`);
+  }
+  if (repairQueueSummary.total > 0) blockers.push(`${repairQueueSummary.total} repair queue item(s) remain`);
+  return {
+    artifactType: "batch-repair-closure",
+    version: 1,
+    generatedAt: nowIso(options.now),
+    status: passed ? "passed" : "blocked",
+    targetTruthScorePercent: TARGET_TRUTH_SCORE,
+    canSubmitAll,
+    repairQueueEmpty,
+    runStatus: state.status || "",
+    runStartedAt: state.startedAt || "",
+    runFinishedAt: state.finishedAt || "",
+    diagnosisAvailable,
+    repairQueueAvailable,
+    diagnosis: {
+      generatedAt: diagnosis?.generatedAt || "",
+      summary: diagnosisSummary,
+    },
+    repairQueue: {
+      generatedAt: repairQueue?.generatedAt || "",
+      summary: repairQueueSummary,
+    },
+    failedGroups: failedGroups.map((group) => ({
+      id: group.id || "",
+      systems: group.systems || [],
+      nodesCsv: group.nodesCsv || "",
+      exitCode: group.exitCode,
+      signal: group.signal || "",
+      error: group.error || "",
+      logFile: group.logFile || "",
+    })),
+    pendingGroups: pendingGroups.map((group) => ({
+      id: group.id || "",
+      systems: group.systems || [],
+      nodesCsv: group.nodesCsv || "",
+    })),
+    blockers,
+  };
+}
+
+function renderRepairClosureMarkdown(closure = {}) {
+  const diagnosis = closure.diagnosis?.summary || {};
+  const repairQueue = closure.repairQueue?.summary || {};
+  const failedRows = (closure.failedGroups || []).map((group) =>
+    [
+      group.id || "-",
+      (group.systems || []).join(",") || "-",
+      group.nodesCsv || "-",
+      group.exitCode ?? "-",
+      group.signal || "-",
+      group.error || "-",
+      group.logFile || "-",
+    ].join(" | "),
+  );
+  return [
+    "# Batch Repair Closure",
+    "",
+    `- Generated: ${closure.generatedAt || ""}`,
+    `- Status: ${closure.status || ""}`,
+    `- Run status: ${closure.runStatus || ""}`,
+    `- Target truth score: ${closure.targetTruthScorePercent || TARGET_TRUTH_SCORE}%`,
+    `- Can submit all: ${closure.canSubmitAll ? "yes" : "no"}`,
+    `- Repair queue empty: ${closure.repairQueueEmpty ? "yes" : "no"}`,
+    `- Ready systems: ${diagnosis.ready || 0}/${diagnosis.total || 0}`,
+    `- Blocked systems: ${diagnosis.blocked || 0}`,
+    `- Below target: ${diagnosis.belowTarget || 0}`,
+    `- Missing writable claims: ${diagnosis.missingWritableClaims || 0}`,
+    `- Remaining repair items: ${repairQueue.total || 0}`,
+    "",
+    "## Blockers",
+    "",
+    ...(closure.blockers?.length ? closure.blockers.map((item) => `- ${item}`) : ["- none"]),
+    "",
+    "## Failed Groups",
+    "",
+    "| Group | Systems | Nodes | Exit | Signal | Error | Log |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    failedRows.length ? failedRows.join("\n") : "| - | - | - | - | - | - | - |",
+    "",
+  ].join("\n");
+}
+
+function writeRepairClosure(outputRoot, state, options = {}) {
+  const batchDir = path.join(outputRoot, "_batch");
+  const closure = buildRepairClosureReport(state, { ...options, outputRoot });
+  const jsonPath = path.join(batchDir, "repair-closure.json");
+  const markdownPath = path.join(batchDir, "repair-closure.md");
+  writeJson(jsonPath, closure);
+  fs.writeFileSync(markdownPath, renderRepairClosureMarkdown(closure), "utf8");
+  return {
+    closure,
+    artifacts: {
+      closureJson: path.relative(batchDir, jsonPath).replace(/\\/g, "/"),
+      closureMarkdown: path.relative(batchDir, markdownPath).replace(/\\/g, "/"),
+    },
+  };
+}
+
 function appendLog(filePath, chunk) {
   if (!filePath) return;
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -357,6 +524,19 @@ async function runRepairQueue(options = {}) {
       finishedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+    const { closure, artifacts: closureArtifacts } = writeRepairClosure(context.outputRoot, state);
+    state = {
+      ...state,
+      closure: {
+        status: closure.status,
+        canSubmitAll: closure.canSubmitAll,
+        repairQueueEmpty: closure.repairQueueEmpty,
+        blockers: closure.blockers,
+        artifacts: closureArtifacts,
+        generatedAt: closure.generatedAt,
+      },
+      updatedAt: new Date().toISOString(),
+    };
     writeRepairRunState(context.outputRoot, state);
     return state;
   }
@@ -424,6 +604,19 @@ async function runRepairQueue(options = {}) {
     finishedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+  const { closure, artifacts: closureArtifacts } = writeRepairClosure(context.outputRoot, state);
+  state = {
+    ...state,
+    closure: {
+      status: closure.status,
+      canSubmitAll: closure.canSubmitAll,
+      repairQueueEmpty: closure.repairQueueEmpty,
+      blockers: closure.blockers,
+      artifacts: closureArtifacts,
+      generatedAt: closure.generatedAt,
+    },
+    updatedAt: new Date().toISOString(),
+  };
   writeRepairRunState(context.outputRoot, state);
   return state;
 }
@@ -445,13 +638,16 @@ if (require.main === module) {
 
 module.exports = {
   buildRepairBatchArgs,
+  buildRepairClosureReport,
   buildRepairRunPlan,
   normalizeRepairNodes,
   readRepairQueue,
+  renderRepairClosureMarkdown,
   renderRepairRunPlanMarkdown,
   resolveRepairQueuePath,
   runRepairQueue,
   validateRepairItem,
+  writeRepairClosure,
   writeRepairRunPlan,
   writeRepairRunState,
 };

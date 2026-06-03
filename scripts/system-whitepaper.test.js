@@ -6936,6 +6936,7 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   const path = require("node:path");
   const { EventEmitter } = require("node:events");
   const {
+    buildRepairClosureReport,
     buildRepairRunPlan,
     runRepairQueue,
     validateRepairItem,
@@ -7008,6 +7009,71 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   assert.equal(agentPlan.groups[1].command.args.includes("--repair-allow-agent-writing"), true);
   assert.equal(agentPlan.groups[1].command.args.includes("--narrative-part"), true);
 
+  const passedClosure = buildRepairClosureReport(
+    {
+      status: "success",
+      startedAt: "2026-06-03T00:00:00.000Z",
+      finishedAt: "2026-06-03T00:01:00.000Z",
+      groups: [{ id: "repair-group-01", status: "success", systems: ["adp"], nodesCsv: "truth-readiness" }],
+    },
+    {
+      diagnosis: {
+        artifactType: "batch-diagnosis",
+        generatedAt: "2026-06-03T00:01:00.000Z",
+        summary: { total: 1, ready: 1, blocked: 0, missingWritableClaims: 0 },
+        systems: [
+          {
+            code: "adp",
+            ready: true,
+            truthScorePercent: 96,
+            canSubmitReview: true,
+            missingWritableClaimCount: 0,
+          },
+        ],
+      },
+      repairQueue: {
+        artifactType: "batch-repair-queue",
+        generatedAt: "2026-06-03T00:01:00.000Z",
+        summary: { total: 0, autoRunnable: 0, blocked: 0, requiresAgentWriting: 0 },
+        items: [],
+      },
+    },
+  );
+  assert.equal(passedClosure.status, "passed");
+  assert.equal(passedClosure.canSubmitAll, true);
+  assert.equal(passedClosure.repairQueueEmpty, true);
+
+  const blockedClosure = buildRepairClosureReport(
+    {
+      status: "success",
+      groups: [{ id: "repair-group-01", status: "success", systems: ["claim"], nodesCsv: "truth-readiness" }],
+    },
+    {
+      diagnosis: {
+        artifactType: "batch-diagnosis",
+        summary: { total: 1, ready: 0, blocked: 1, missingWritableClaims: 2 },
+        systems: [
+          {
+            code: "claim",
+            ready: false,
+            truthScorePercent: 91,
+            canSubmitReview: false,
+            missingWritableClaimCount: 2,
+          },
+        ],
+      },
+      repairQueue: {
+        artifactType: "batch-repair-queue",
+        summary: { total: 1, autoRunnable: 0, blocked: 1, requiresAgentWriting: 1 },
+        items: [{ systemCode: "claim" }],
+      },
+    },
+  );
+  assert.equal(blockedClosure.status, "blocked");
+  assert.equal(blockedClosure.canSubmitAll, false);
+  assert.ok(blockedClosure.blockers.some((item) => item.includes("below 95%")));
+  assert.ok(blockedClosure.blockers.some((item) => item.includes("repair queue")));
+
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "repair-queue-runner-"));
   const configPath = path.join(dir, "systems.local.yaml");
   fs.writeFileSync(
@@ -7033,6 +7099,9 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-run-plan.json")), true);
   assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-run-plan.md")), true);
   assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-run-state.json")), true);
+  assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-closure.json")), true);
+  assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-closure.md")), true);
+  assert.equal(dryRunState.closure.status, "blocked");
 
   const launched = [];
   const fakeSpawn = (command, args) => {
@@ -7049,6 +7118,7 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
     spawn: fakeSpawn,
   });
   assert.equal(runState.status, "success");
+  assert.equal(runState.closure.status, "blocked");
   assert.equal(launched.length, 1);
   assert.equal(launched[0].command, process.execPath);
   assert.ok(launched[0].args.includes("--systems"));
@@ -7242,6 +7312,18 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   );
   fs.writeFileSync(path.join(dir, "outputs", "_batch", "repair-run-plan.md"), "# Batch Repair Run Plan", "utf8");
   fs.writeFileSync(
+    path.join(dir, "outputs", "_batch", "repair-closure.json"),
+    JSON.stringify({
+      artifactType: "batch-repair-closure",
+      status: "blocked",
+      canSubmitAll: false,
+      repairQueueEmpty: false,
+      blockers: ["1 repair queue item(s) remain"],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(dir, "outputs", "_batch", "repair-closure.md"), "# Batch Repair Closure", "utf8");
+  fs.writeFileSync(
     path.join(dir, "outputs", "_batch", "repair-run-state.json"),
     JSON.stringify({
       artifactType: "batch-repair-run-state",
@@ -7260,7 +7342,9 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(snapshot.batchRepairQueueArtifacts.markdown.exists, true);
   assert.equal(snapshot.batchRepairRunPlan.summary.runnableGroups, 1);
   assert.equal(snapshot.batchRepairRunState.status, "dry-run");
+  assert.equal(snapshot.batchRepairClosure.status, "blocked");
   assert.equal(snapshot.batchRepairRunArtifacts.planMarkdown.exists, true);
+  assert.equal(snapshot.batchRepairRunArtifacts.closureMarkdown.exists, true);
   assert.equal(snapshot.activeRun.repairQueue.summary.requiresAgentWriting, 1);
 });
 
