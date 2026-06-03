@@ -49,6 +49,9 @@ systems:
       - production-push
     databaseProfile:
       enabled: false
+      # Use metadata-file by default. Set mode: connector only for private read-only test DB access.
+      mode: metadata-file
+      readOnly: true
       secretFile: ./secrets/db/contract.json
       metadataFile: ./secrets/db/contract-metadata.json
       includeSchemas:

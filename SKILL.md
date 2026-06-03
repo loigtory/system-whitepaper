@@ -36,7 +36,7 @@ The unattended pipeline is grouped into five business-visible phases:
 1. **准备**: sync the system registry and ensure Huntian login/session is valid.
 2. **取证**: use Playwright to collect pages, popups, forms, tables, screenshots, logs, and safe `AI_AUTO_TEST_` write-operation evidence.
 3. **真相**:
-   - **库表画像**: when enabled, convert private test-database metadata into redacted `database-profile.json`; skip this node when `databaseProfile.enabled=false`.
+   - **库表画像**: when enabled, convert private test-database metadata or a read-only connector scan into redacted `database-profile.json`; skip this node when `databaseProfile.enabled=false`.
    - **功能宇宙**: merge UI evidence and redacted database entities into `function-universe.json` candidates.
    - **可信断言**: convert the universe into `verified-claims.json`; only `writable=true` claims may become body assertions.
 4. **成稿**:
@@ -68,7 +68,7 @@ Use the npm scripts as the stable entrypoints:
 
 - `npm run init`: create `config/systems.local.yaml`, `secrets/`, and `outputs/` from the packaged example if missing.
 - `npm run doctor`: validate local config, secret paths, safe test-data prefix, output directory, and system registry before running the pipeline.
-- `npm run db:profile -- --system <code>`: build a redacted `database-profile.json` from private test-database metadata when `databaseProfile.enabled` is configured.
+- `npm run db:profile -- --system <code>`: build a redacted `database-profile.json` from private test-database metadata or `databaseProfile.mode=connector` / `--connector` read-only schema scan when enabled.
 - `npm run truth:universe -- --input outputs/<code>`: merge UI evidence summary and redacted database profile into `function-universe.json` candidates.
 - `npm run truth:claims -- --input outputs/<code>`: convert the function universe into `verified-claims.json` with confidence and writable/non-writable boundaries.
 - `npm run truth:fact-check -- --input outputs/<code>`: check `whitepaper.pending-review.md` against writable claims and block unsupported or weak body assertions.
@@ -101,7 +101,7 @@ Run `npm run pack:check` before distributing or installing an updated copy of th
 - During **成稿 · 写稿**, keep the Agent working set to the single system output directory. Do not ask it to explore `scripts/`, `node_modules/`, full `evidence.json`, screenshot binaries, or other systems' outputs.
 - During batch execution, each Agent/LLM writing task still receives only one system's reduced evidence and verified claims. Never give an Agent the whole batch output tree as its writing context.
 - Never explore runtime/private directories such as `secrets/`, `.playwright-*`, `node_modules/`, or unrelated `outputs/` when generating or revising narrative content.
-- Database connection details are private script inputs only. Do not put `secrets/db/<system>.json`, database hostnames, users, passwords, DSNs, or raw sample rows into prompts, logs intended for review, or whitepapers. Agent writing may only use redacted database artifacts such as `database-profile.json`, `data-dictionary.json`, `entity-model.json`, and `verified-claims.json`.
+- Database connection details are private script inputs only. Do not put `secrets/db/<system>.json`, database hostnames, users, passwords, DSNs, or raw sample rows into prompts, logs intended for review, or whitepapers. Connector mode requires explicit `readOnly=true`; sample rows are disabled by default and, when enabled, must stay limited and redacted in `database-profile.json`. Agent writing may only use redacted database artifacts such as `database-profile.json`, `data-dictionary.json`, `entity-model.json`, and `verified-claims.json`.
 - Seeing a menu, button, or field proves only that the UI element exists. Business value, process completion, and write-operation validation require supporting evidence.
 - Treat core JSON artifacts as schema-bound products, not loose caches. `evidence.json`, `evidence-summary.json`, `quality-report.json`, `write-validation-plan.json`, `operation-spec.json`, and `pipeline-state.json` must be valid JSON objects when they already exist and are used as inputs.
 - Optional enrichment/cache files may be ignored when missing, malformed, or the wrong top-level shape, but they must not be treated as valid evidence. Examples: `phase3b-usage-history.json` may be an array cache; `review-decision.json`, `write-validation-result.json`, `operation-guide-gate.json`, and `network-index.json` are object-shaped optional artifacts.

@@ -8220,7 +8220,7 @@ test("doctor validates enabled database profile secret under private secrets", (
   assert.ok(warningIds.includes("system.database-sample-data-enabled"));
 });
 
-test("collect database profile writes redacted schema evidence from private metadata", () => {
+test("collect database profile writes redacted schema evidence from private metadata", async () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
@@ -8260,7 +8260,7 @@ test("collect database profile writes redacted schema evidence from private meta
               comment: "任务状态",
               dictionary: ["INIT", "DONE"],
             },
-            { name: "customer_phone", type: "varchar", comment: "客户手机号" },
+            { name: "customer_phone", type: "varchar", comment: "客户手机号", nullable: "NO", primaryKey: "false" },
             { name: "created_time", type: "datetime", comment: "创建时间" },
           ],
           sampleRows: [{ id: 1, customer_phone: "13800138000", status: "DONE" }],
@@ -8290,7 +8290,7 @@ test("collect database profile writes redacted schema evidence from private meta
     "utf8",
   );
 
-  const { outputPath, profile } = collectDatabaseProfile({
+  const { outputPath, profile } = await collectDatabaseProfile({
     config: path.join(projectRoot, "config", "systems.local.yaml"),
     system: "adp",
   });
@@ -8300,8 +8300,268 @@ test("collect database profile writes redacted schema evidence from private meta
   assert.equal(profile.source.secret.host, "[redacted]");
   assert.equal(profile.tables[0].sampleRows[0].customer_phone, "1***0");
   assert.equal(profile.entityCandidates[0].statusColumns[0].name, "status");
+  const customerPhoneColumn = profile.tables[0].columns.find((column) => column.name === "customer_phone");
+  assert.equal(customerPhoneColumn.nullable, false);
+  assert.equal(customerPhoneColumn.primaryKey, false);
   assert.equal(sanitizeSecret({ password: "secret" }).password, "[redacted]");
   assert.equal(sanitizeSampleRow({ customerName: "张三" }).customerName, "***");
+});
+
+test("collect database profile supports private read-only connector adapter", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    collectDatabaseProfile,
+    collectMetadataViaConnector,
+    groupColumnsByTable,
+    resolveIncludeSchemas,
+  } = require("./collect-database-profile");
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "system-whitepaper-db-connector-"));
+  fs.mkdirSync(path.join(projectRoot, "config"), { recursive: true });
+  fs.mkdirSync(path.join(projectRoot, "secrets", "db"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, "secrets", "db", "adp.json"),
+    JSON.stringify({
+      type: "mysql",
+      host: "127.0.0.1",
+      port: 3306,
+      database: "adp_test",
+      user: "readonly",
+      password: "secret",
+      readOnly: true,
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, "config", "systems.local.yaml"),
+    [
+      "runtime:",
+      "  outputDir: ./outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+      "    databaseProfile:",
+      "      enabled: true",
+      "      mode: connector",
+      "      secretFile: ./secrets/db/adp.json",
+      "      includeSchemas:",
+      "        - adp_test",
+      "      sampleRows: 1",
+      "      allowSampleData: true",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const grouped = groupColumnsByTable([
+    {
+      schema: "adp_test",
+      name: "policy_task",
+      tableComment: "保单任务",
+      rowCount: 3,
+      columnName: "status",
+      dataType: "varchar",
+      columnComment: "任务状态",
+      nullable: false,
+      primaryKey: false,
+    },
+  ]);
+  assert.equal(grouped[0].columns[0].name, "status");
+  assert.deepEqual(resolveIncludeSchemas({ database: "fallback_db" }, {}), ["fallback_db"]);
+  assert.throws(() => resolveIncludeSchemas({}, {}), /includeSchemas or secret\.database/);
+
+  const { outputPath, profile } = await collectDatabaseProfile({
+    config: path.join(projectRoot, "config", "systems.local.yaml"),
+    system: "adp",
+    adapter: async ({ secret, profileConfig, type }) => {
+      assert.equal(secret.password, "secret");
+      assert.equal(type, "mysql");
+      assert.deepEqual(profileConfig.includeSchemas, ["adp_test"]);
+      return {
+        databaseType: "mysql",
+        tables: [
+          {
+            schema: "adp_test",
+            name: "policy_task",
+            comment: "保单任务",
+            rowCount: 3,
+            columns: [
+              { name: "id", type: "bigint", comment: "主键", primaryKey: true },
+              { name: "status", type: "varchar", comment: "任务状态" },
+              { name: "customer_phone", type: "varchar", comment: "客户手机号" },
+            ],
+            sampleRows: [{ id: 7, status: "DONE", customer_phone: "13800138000" }],
+          },
+        ],
+      };
+    },
+  });
+
+  assert.equal(fs.existsSync(outputPath), true);
+  assert.equal(profile.source.mode, "connector");
+  assert.equal(profile.source.secret.password, undefined);
+  assert.equal(profile.source.secret.host, "[redacted]");
+  assert.equal(profile.source.secret.readOnly, true);
+  assert.equal(profile.tables[0].sampleRows[0].customer_phone, "1***0");
+  assert.equal(profile.entityCandidates[0].entity, "保单任务");
+
+  await assert.rejects(
+    () => collectMetadataViaConnector({ type: "mysql" }, { includeSchemas: ["adp_test"] }, { adapter: async () => ({}) }),
+    /requires readOnly=true/,
+  );
+});
+
+test("collect database profile connector samples non-sensitive columns only", async () => {
+  const { collectMetadataViaConnector } = require("./collect-database-profile");
+  const executed = [];
+  const connection = {
+    async execute(sql, params) {
+      executed.push({ sql, params });
+      if (sql.includes("information_schema.COLUMNS")) {
+        return [[
+          {
+            schema: "adp_test",
+            name: "policy_task",
+            tableComment: "保单任务",
+            rowCount: 4,
+            columnName: "id",
+            columnType: "bigint",
+            dataType: "bigint",
+            columnComment: "主键",
+            is_nullable: "NO",
+            column_key: "PRI",
+          },
+          {
+            schema: "adp_test",
+            name: "policy_task",
+            tableComment: "保单任务",
+            rowCount: 4,
+            columnName: "status",
+            columnType: "varchar(20)",
+            dataType: "varchar",
+            columnComment: "任务状态",
+            is_nullable: "NO",
+            column_key: "",
+          },
+          {
+            schema: "adp_test",
+            name: "policy_task",
+            tableComment: "保单任务",
+            rowCount: 4,
+            columnName: "customer_phone",
+            columnType: "varchar(20)",
+            dataType: "varchar",
+            columnComment: "客户手机号",
+            is_nullable: "YES",
+            column_key: "",
+          },
+          {
+            schema: "adp_test",
+            name: "policy_task",
+            tableComment: "保单任务",
+            rowCount: 4,
+            columnName: "external_ref",
+            columnType: "varchar(80)",
+            dataType: "varchar",
+            columnComment: "外部编码",
+            is_nullable: "YES",
+            column_key: "",
+          },
+        ]];
+      }
+      return [[
+        { id: 1, status: "DONE", external_ref: "person@example.com" },
+        { id: 2, status: "INIT", external_ref: "plain-ref" },
+        { id: 3, status: "DONE", external_ref: "11010519491231002X" },
+        { id: 4, status: "DONE", external_ref: "overflow" },
+      ]];
+    },
+    async end() {
+      executed.push({ sql: "end", params: [] });
+    },
+  };
+  const metadata = await collectMetadataViaConnector(
+    {
+      type: "mysql",
+      host: "127.0.0.1",
+      database: "adp_test",
+      user: "readonly",
+      password: "secret",
+      readOnly: true,
+    },
+    {
+      includeSchemas: ["adp_test"],
+      allowSampleData: true,
+      sampleRows: 5,
+    },
+    {
+      driver: {
+        async createConnection(config) {
+          assert.equal(config.password, "secret");
+          return connection;
+        },
+      },
+    },
+  );
+
+  const table = metadata.tables[0];
+  const sampleQuery = executed.find((entry) => entry.sql.startsWith("SELECT `id`"));
+  assert.equal(table.columns.find((column) => column.name === "id").nullable, false);
+  assert.equal(table.columns.find((column) => column.name === "id").primaryKey, true);
+  assert.equal(table.columns.find((column) => column.name === "customer_phone").nullable, true);
+  assert.ok(sampleQuery.sql.includes("`status`"));
+  assert.ok(sampleQuery.sql.includes("`external_ref`"));
+  assert.equal(sampleQuery.sql.includes("customer_phone"), false);
+  assert.deepEqual(sampleQuery.params, [3]);
+  assert.equal(table.sampleRows.length, 3);
+  assert.equal(table.sampleRows[0].external_ref, "p***m");
+  assert.equal(table.sampleRows[2].external_ref, "1***X");
+});
+
+test("doctor validates connector database profile read-only contract", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runDoctor } = require("./doctor");
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "system-whitepaper-doctor-db-connector-"));
+  fs.mkdirSync(path.join(projectRoot, "config"), { recursive: true });
+  fs.mkdirSync(path.join(projectRoot, "secrets", "db"), { recursive: true });
+  fs.mkdirSync(path.join(projectRoot, "outputs"), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, "secrets", "huntian-token.txt"), "test-token-value", "utf8");
+  fs.writeFileSync(
+    path.join(projectRoot, "secrets", "db", "adp.json"),
+    JSON.stringify({ type: "mysql", host: "127.0.0.1", user: "readonly", password: "secret", readOnly: true }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, "config", "systems.local.yaml"),
+    [
+      "auth:",
+      "  tokenFile: ./secrets/huntian-token.txt",
+      "runtime:",
+      "  environment: test",
+      "  outputDir: ./outputs",
+      "  testDataPrefix: AI_AUTO_TEST_",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+      "    databaseProfile:",
+      "      enabled: true",
+      "      mode: connector",
+      "      secretFile: ./secrets/db/adp.json",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const report = runDoctor({ projectRoot });
+
+  assert.equal(report.ok, true);
+  assert.equal(report.failures.some((item) => item.id === "system.database-connector-readonly-missing"), false);
+  assert.equal(report.warnings.some((item) => item.id === "system.database-metadata-file-missing"), false);
 });
 
 test("build function universe merges UI functions and redacted database entities", () => {

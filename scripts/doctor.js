@@ -162,6 +162,7 @@ function validateSystem(system, index, seenCodes, failures, warnings, checks, co
 
   if (system.databaseProfile?.enabled) {
     const databaseProfile = resolveDatabaseProfileConfig(system, configDir);
+    let databaseSecret = null;
     if (!databaseProfile.secretFile) {
       pushIssue(
         failures,
@@ -174,13 +175,42 @@ function validateSystem(system, index, seenCodes, failures, warnings, checks, co
         "system.database-secret-file-missing",
         `${label}: database secret file not found: ${databaseProfile.secretFile}`,
       );
+    } else {
+      try {
+        databaseSecret = JSON.parse(fs.readFileSync(databaseProfile.secretFile, "utf8"));
+        if (!databaseSecret || typeof databaseSecret !== "object" || Array.isArray(databaseSecret)) {
+          throw new Error("not object");
+        }
+      } catch {
+        pushIssue(
+          failures,
+          "system.database-secret-file-malformed",
+          `${label}: database secret file must be a valid JSON object: ${databaseProfile.secretFile}`,
+        );
+      }
     }
 
-    if (databaseProfile.metadataFile && !fs.existsSync(databaseProfile.metadataFile)) {
+    if (
+      databaseProfile.mode !== "connector" &&
+      databaseProfile.metadataFile &&
+      !fs.existsSync(databaseProfile.metadataFile)
+    ) {
       pushIssue(
         warnings,
         "system.database-metadata-file-missing",
         `${label}: database metadata file not found: ${databaseProfile.metadataFile}`,
+      );
+    }
+
+    if (
+      databaseProfile.mode === "connector" &&
+      databaseProfile.readOnly !== true &&
+      databaseSecret?.readOnly !== true
+    ) {
+      pushIssue(
+        failures,
+        "system.database-connector-readonly-missing",
+        `${label}: databaseProfile.mode=connector requires databaseProfile.readOnly=true or secret readOnly=true.`,
       );
     }
 
