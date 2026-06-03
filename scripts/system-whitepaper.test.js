@@ -12681,6 +12681,8 @@ test("build verified claims assigns confidence and writable boundaries", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "verified-claims-"));
   const functionUniverse = {
     artifactType: "function-universe",
+    version: 1,
+    generatedAt: "2026-06-03T00:00:00.000Z",
     system: { code: "adp", name: "AI保单数据闭环平台" },
     modules: [
       {
@@ -12741,6 +12743,16 @@ test("build verified claims assigns confidence and writable boundaries", () => {
       },
     ],
     rules: { noConclusion: true },
+    coverage: {
+      moduleCount: 1,
+      functionCount: 2,
+      entityCount: 1,
+      linkedFunctionCount: 1,
+      entityRelationCount: 1,
+    },
+    sourceArtifacts: {
+      evidenceSummary: { file: "evidence-summary.json", fingerprint: { exists: false, size: 0, sha256: "" } },
+    },
   };
   fs.writeFileSync(path.join(dir, "function-universe.json"), JSON.stringify(functionUniverse), "utf8");
 
@@ -12793,9 +12805,24 @@ test("build verified claims rejects invalid function universe contract before wr
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "verified-claims-bad-universe-"));
   const functionUniverse = {
     artifactType: "function-universe",
+    version: 1,
+    generatedAt: "2026-06-03T00:00:00.000Z",
     system: { code: "adp", name: "AI保单数据闭环平台" },
     modules: [{ name: "保单任务" }],
     functions: [{ module: "保单任务", name: "任务列表" }],
+    entities: [],
+    links: [],
+    entityRelations: [],
+    coverage: {
+      moduleCount: 1,
+      functionCount: 1,
+      entityCount: 0,
+      linkedFunctionCount: 0,
+      entityRelationCount: 0,
+    },
+    sourceArtifacts: {
+      evidenceSummary: { file: "evidence-summary.json", fingerprint: { exists: false, size: 0, sha256: "" } },
+    },
     rules: { noConclusion: false },
   };
   fs.writeFileSync(path.join(dir, "function-universe.json"), JSON.stringify(functionUniverse), "utf8");
@@ -12807,6 +12834,50 @@ test("build verified claims rejects invalid function universe contract before wr
   assert.throws(
     () => buildVerifiedClaimsFromDir(dir),
     /rules\.noConclusion=true/,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "verified-claims.json")), false);
+});
+
+test("build verified claims rejects forged function universe coverage", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    buildVerifiedClaimsArtifact,
+    buildVerifiedClaimsFromDir,
+  } = require("./build-verified-claims");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "verified-claims-forged-universe-"));
+  const functionUniverse = {
+    artifactType: "function-universe",
+    version: 1,
+    generatedAt: "2026-06-03T00:00:00.000Z",
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    modules: [{ name: "保单任务" }],
+    functions: [{ module: "保单任务", name: "任务列表" }],
+    entities: [],
+    links: [],
+    entityRelations: [],
+    coverage: {
+      moduleCount: 1,
+      functionCount: 10,
+      entityCount: 0,
+      linkedFunctionCount: 0,
+      entityRelationCount: 0,
+    },
+    sourceArtifacts: {
+      evidenceSummary: { file: "evidence-summary.json", fingerprint: { exists: false, size: 0, sha256: "" } },
+    },
+    rules: { noConclusion: true },
+  };
+  fs.writeFileSync(path.join(dir, "function-universe.json"), JSON.stringify(functionUniverse), "utf8");
+
+  assert.throws(
+    () => buildVerifiedClaimsArtifact({ functionUniverse }),
+    /coverage\.functionCount must match the artifact body count/,
+  );
+  assert.throws(
+    () => buildVerifiedClaimsFromDir(dir),
+    /coverage\.functionCount must match the artifact body count/,
   );
   assert.equal(fs.existsSync(path.join(dir, "verified-claims.json")), false);
 });
