@@ -7690,6 +7690,7 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.equal(ready.configPath, configPath);
   assert.equal(ready.outputRoot, outputRoot);
   assert.equal(ready.summary.ready, 1);
+  assert.equal(ready.summary.staleSystems, 0);
   assert.match(renderDeliveryReadinessMarkdown(ready), /Delivery Readiness Report/);
   const artifacts = writeDeliveryReadinessReport(outputRoot, ready);
   const stateSummary = buildDeliveryReadinessStateSummary(ready, artifacts);
@@ -7698,6 +7699,19 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.equal(stateSummary.artifacts.deliveryReadinessMarkdown, "delivery-readiness-report.md");
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.json")), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.md")), true);
+
+  fs.writeFileSync(
+    path.join(systemOutput, "verified-claims.json"),
+    JSON.stringify({ claims: [{ id: "claim-new", text: "changed after truth readiness" }] }),
+    "utf8",
+  );
+  const stale = buildDeliveryReadinessReport({ acceptanceReport });
+  assert.equal(stale.status, "blocked");
+  assert.equal(stale.canDeliver, false);
+  assert.equal(stale.summary.staleSystems, 1);
+  assert.equal(stale.systems[0].staleSourceCount > 0, true);
+  assert.ok(stale.blockers.some((item) => item.id === "delivery.truth-readiness-stale-sources"));
+  fs.writeFileSync(path.join(systemOutput, "verified-claims.json"), JSON.stringify({ claims: [] }), "utf8");
 
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),

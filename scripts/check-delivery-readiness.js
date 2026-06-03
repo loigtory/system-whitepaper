@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { parseArgs, readOptionalJsonObject, writeJson } = require("./system-whitepaper-lib");
 const { runBatchAcceptance } = require("./check-batch-acceptance");
+const { findStaleReadinessSources } = require("./check-truth-readiness");
 
 const DEFAULT_TARGET_TRUTH_SCORE_PERCENT = 95;
 const REQUIRED_REAL_NODES = [
@@ -156,6 +157,7 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
   );
   const blockers = [];
   const warnings = [];
+  let staleSources = [];
 
   if (!systemReport.accepted) {
     blockers.push(
@@ -199,6 +201,7 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
     );
   } else {
     const scorePercent = percentFromReport(truth);
+    staleSources = findStaleReadinessSources(outputDir, truth);
     if (truthReportLooksLikeSmoke(truth)) {
       blockers.push(
         blocker("delivery.smoke-truth-report", "truth-readiness-report.json is marked as local smoke evidence.", {
@@ -213,6 +216,14 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
           `Truth readiness is not delivery-ready: canSubmitReview=${Boolean(truth.canSubmitReview)}, score=${scorePercent}%.`,
           { systemCode: code, rerunNodes: ["truth-readiness"] },
         ),
+      );
+    }
+    if (staleSources.length) {
+      blockers.push(
+        blocker("delivery.truth-readiness-stale-sources", "truth-readiness source fingerprints are stale.", {
+          systemCode: code,
+          rerunNodes: ["truth-readiness"],
+        }),
       );
     }
   }
@@ -237,6 +248,8 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
     databaseEvidenceAvailable: Boolean(systemReport.databaseEvidenceAvailable),
     pipelineStatus: state?.overallStatus || "",
     nodeStatus: state ? buildNodeStatusSummary(state, Boolean(systemReport.databaseProfileConfigured)) : {},
+    staleSourceCount: staleSources.length,
+    staleSources: staleSources.slice(0, 12),
     smokeEvidence:
       Boolean(truth && truthReportLooksLikeSmoke(truth)) || markdownLooksLikeSmoke(pendingMarkdown),
     blockers,
@@ -251,6 +264,7 @@ function summarizeSystems(systems = []) {
     blocked: systems.filter((item) => !item.ready).length,
     accepted: systems.filter((item) => item.accepted).length,
     smokeEvidence: systems.filter((item) => item.smokeEvidence).length,
+    staleSystems: systems.filter((item) => Number(item.staleSourceCount || 0) > 0).length,
     databaseBacked: systems.filter((item) => item.databaseEvidenceAvailable).length,
     databaseConfigured: systems.filter((item) => item.databaseProfileConfigured).length,
   };
