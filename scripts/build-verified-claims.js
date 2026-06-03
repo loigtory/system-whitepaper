@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const {
   parseArgs,
   readRequiredJsonObject,
@@ -10,6 +11,31 @@ const {
 
 function compactString(value) {
   return String(value || "").trim();
+}
+
+function fingerprintFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { exists: false, size: 0, mtimeMs: null, sha256: "" };
+  }
+  const buffer = fs.readFileSync(filePath);
+  const stat = fs.statSync(filePath);
+  return {
+    exists: true,
+    size: stat.size,
+    mtimeMs: Math.round(stat.mtimeMs),
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+function buildSourceArtifacts(input = {}) {
+  const result = {};
+  if (input.functionUniversePath) {
+    result.functionUniverse = {
+      file: path.basename(input.functionUniversePath),
+      fingerprint: fingerprintFile(input.functionUniversePath),
+    };
+  }
+  return result;
 }
 
 function uniqueBy(items, keyFn) {
@@ -275,6 +301,7 @@ function buildVerifiedClaimsArtifact(input = {}) {
     system: universe.system || null,
     claims: uniqueClaims,
     writableClaimIds: writableClaims.map((claim) => claim.id),
+    sourceArtifacts: input.sourceArtifacts || {},
     metrics: {
       claimCount: uniqueClaims.length,
       writableClaimCount: writableClaims.length,
@@ -302,7 +329,11 @@ function buildVerifiedClaimsFromDir(inputDir, options = {}) {
     options.functionUniversePath || path.join(dir, "function-universe.json"),
     { label: "Function universe" },
   );
-  const artifact = buildVerifiedClaimsArtifact({ functionUniverse });
+  const functionUniversePath = options.functionUniversePath || path.join(dir, "function-universe.json");
+  const artifact = buildVerifiedClaimsArtifact({
+    functionUniverse,
+    sourceArtifacts: buildSourceArtifacts({ functionUniversePath }),
+  });
   const outputPath = options.outputPath || path.join(dir, "verified-claims.json");
   writeJson(outputPath, artifact);
   return { outputPath, artifact };
@@ -332,8 +363,10 @@ if (require.main === module) {
 module.exports = {
   buildVerifiedClaimsArtifact,
   buildVerifiedClaimsFromDir,
+  buildSourceArtifacts,
   claimHasDatabaseEvidence,
   claimHasUiEvidence,
   claimIsWritable,
   classifyClaim,
+  fingerprintFile,
 };

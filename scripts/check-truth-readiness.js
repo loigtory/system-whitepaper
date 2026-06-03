@@ -145,6 +145,44 @@ function sourceFingerprintMatches(expected, actual) {
   );
 }
 
+function lineageMismatch(key, artifact, current, ownerFile) {
+  const recorded = artifact?.value?.sourceArtifacts?.[key];
+  if (!recorded) return `${ownerFile} does not record source ${current?.file || key}.`;
+  if (String(recorded.file || "") !== String(current?.file || "")) {
+    return `${ownerFile} source ${key} file changed from ${recorded.file || "unknown"} to ${current?.file || "unknown"}.`;
+  }
+  if (!sourceFingerprintMatches(recorded, current)) {
+    return `${ownerFile} source ${current?.file || key} fingerprint is stale.`;
+  }
+  return "";
+}
+
+function buildLineageGate(artifacts = {}) {
+  const failures = [];
+  const checks = [
+    ["databaseProfile", artifacts.dataDictionary, artifacts.databaseProfile, "data-dictionary.json"],
+    ["databaseProfile", artifacts.entityModel, artifacts.databaseProfile, "entity-model.json"],
+    ["dataDictionary", artifacts.entityModel, artifacts.dataDictionary, "entity-model.json"],
+    ["databaseProfile", artifacts.functionUniverse, artifacts.databaseProfile, "function-universe.json"],
+    ["entityModel", artifacts.functionUniverse, artifacts.entityModel, "function-universe.json"],
+    ["functionUniverse", artifacts.claims, artifacts.functionUniverse, "verified-claims.json"],
+  ];
+  for (const [key, artifact, current, ownerFile] of checks) {
+    if (artifact?.status !== "ok" || !artifact?.fingerprint?.exists) continue;
+    if (!current?.fingerprint?.exists) continue;
+    const failure = lineageMismatch(key, artifact, current, ownerFile);
+    if (failure) failures.push(failure);
+  }
+  return {
+    id: "lineage",
+    label: "Truth artifact source lineage",
+    pass: failures.length === 0,
+    score: failures.length ? 0 : 1,
+    scorePercent: failures.length ? 0 : 100,
+    failures,
+  };
+}
+
 function findStaleReadinessSources(inputDir, report = {}) {
   const recorded = report.sourceArtifacts;
   if (!recorded || typeof recorded !== "object" || Array.isArray(recorded)) {
@@ -652,6 +690,7 @@ function buildTruthReadinessReport(input = {}) {
   const threshold = normalizeThreshold(input.threshold);
   const artifacts = input.artifacts || {};
   const databaseGate = buildDatabaseRequirementGate(buildDatabaseGate(artifacts, input), input);
+  const lineageGate = buildLineageGate(artifacts);
   const gates = {
     evidence: buildEvidenceGate(artifacts.quality || { status: "missing", file: REQUIRED_ARTIFACTS.quality }),
     claims: buildClaimsGate(artifacts.claims || { status: "missing", file: REQUIRED_ARTIFACTS.claims }),
@@ -665,6 +704,7 @@ function buildTruthReadinessReport(input = {}) {
       artifacts.narrative || { status: "missing", file: REQUIRED_ARTIFACTS.narrative },
     ),
     database: databaseGate,
+    lineage: lineageGate,
   };
   const score =
     gates.evidence.score * 0.35 +
@@ -675,6 +715,16 @@ function buildTruthReadinessReport(input = {}) {
     ...collectBlockers(gates),
     ...collectDatabaseRequirementBlockers(gates, input),
   ];
+  if (!gates.lineage.pass) {
+    blockers.push(
+      blocker(
+        "truth.lineage-stale",
+        "P0",
+        "Truth Pipeline artifacts were not generated from the current upstream evidence/database inputs.",
+        ["db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+      ),
+    );
+  }
   if (score < threshold) {
     blockers.push(
       blocker(
@@ -758,6 +808,7 @@ if (require.main === module) {
 module.exports = {
   DEFAULT_THRESHOLD,
   buildReadinessSourceArtifacts,
+  buildLineageGate,
   buildTruthReadinessReport,
   findStaleFactCheckSources,
   findStaleReadinessSources,

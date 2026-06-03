@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const {
   parseArgs,
   readOptionalJsonObject,
@@ -11,6 +12,32 @@ const {
 
 function compactString(value) {
   return String(value || "").trim();
+}
+
+function fingerprintFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { exists: false, size: 0, mtimeMs: null, sha256: "" };
+  }
+  const buffer = fs.readFileSync(filePath);
+  const stat = fs.statSync(filePath);
+  return {
+    exists: true,
+    size: stat.size,
+    mtimeMs: Math.round(stat.mtimeMs),
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+function buildSourceArtifacts(input = {}) {
+  const result = {};
+  for (const [key, filePath] of Object.entries(input)) {
+    if (!filePath) continue;
+    result[key] = {
+      file: path.basename(filePath),
+      fingerprint: fingerprintFile(filePath),
+    };
+  }
+  return result;
 }
 
 function sourceRef(type, id, label = "") {
@@ -182,6 +209,7 @@ function buildFunctionUniverseArtifact(input = {}) {
       linkedFunctionCount: new Set(links.map((item) => `${item.module}::${item.function}`)).size,
       entityRelationCount: entityRelations.length,
     },
+    sourceArtifacts: input.sourceArtifacts || {},
     rules: {
       noConclusion: true,
       purpose: "Candidate universe for later verified-claims generation; not final business claims.",
@@ -203,10 +231,18 @@ function buildFunctionUniverseFromDir(inputDir, options = {}) {
     options.entityModelPath || path.join(dir, "entity-model.json"),
     {},
   ) || {};
+  const evidenceSummaryPath = options.evidenceSummaryPath || path.join(dir, "evidence-summary.json");
+  const databaseProfilePath = options.databaseProfilePath || path.join(dir, "database-profile.json");
+  const entityModelPath = options.entityModelPath || path.join(dir, "entity-model.json");
   const artifact = buildFunctionUniverseArtifact({
     evidenceSummary,
     databaseProfile,
     entityModel,
+    sourceArtifacts: buildSourceArtifacts({
+      evidenceSummary: evidenceSummaryPath,
+      databaseProfile: databaseProfilePath,
+      entityModel: entityModelPath,
+    }),
   });
   const outputPath = options.outputPath || path.join(dir, "function-universe.json");
   writeJson(outputPath, artifact);
@@ -239,5 +275,7 @@ if (require.main === module) {
 module.exports = {
   buildFunctionUniverseArtifact,
   buildFunctionUniverseFromDir,
+  buildSourceArtifacts,
+  fingerprintFile,
   scoreFunctionEntityMatch,
 };

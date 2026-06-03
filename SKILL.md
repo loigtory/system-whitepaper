@@ -170,6 +170,7 @@ Before finalizing, verify:
 - `run-whitepaper-pipeline.js` automatically performs one bounded coverage repair when `fact-check-report.json` lists `missingWritableClaimIds`: it writes `coverage-repair-plan.json`, reruns scoped narrative work with the inferred module `--narrative-part`, then reruns fact-check. Use `--no-coverage-repair` only for debugging.
 - `fact-check-report.json` must have `canFinalize=true` before producing `whitepaper.final.md`.
 - `truth-readiness-report.json` must have `canSubmitReview=true`, score >= 95%, and matching source-artifact fingerprints before human review or final approval; `run-review-decision.js --status approved` blocks final Markdown/Word generation when this report is missing, malformed, non-passing, stale, smoke/local-e2e, or under an `_e2e` output directory.
+- Database-derived truth artifacts (`data-dictionary.json`, `entity-model.json`, `function-universe.json`, and `verified-claims.json`) must carry current upstream source fingerprints; `truth-readiness` blocks stale DB/claim lineage.
 - If `whitepaper.final.md` exists, delivery readiness requires the `.docx` sidecar manifest to match the current final Markdown fingerprint and current Word file fingerprint.
 - No duplicated function explanations.
 - No source-code, database, or internal implementation claims without browser evidence.
