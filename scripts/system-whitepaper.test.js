@@ -150,7 +150,15 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
       evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
     }),
   });
-  const report = {
+  const baseGates = {
+    evidence: { pass: true, scorePercent: 100 },
+    claims: { pass: true, scorePercent: 100 },
+    factCheck: { pass: true, scorePercent: 100 },
+    narrative: { pass: true, scorePercent: 100 },
+    database: { pass: true, available: false, scorePercent: 0 },
+    lineage: { pass: true, scorePercent: 100 },
+  };
+  const baseReport = {
     artifactType: "truth-readiness-report",
     version: 1,
     threshold: 0.95,
@@ -158,18 +166,24 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
     scorePercent: 98,
     canSubmitReview: true,
     canFinalize: true,
-    gates: {
-      evidence: { pass: true, scorePercent: 100 },
-      claims: { pass: true, scorePercent: 100 },
-      factCheck: { pass: true, scorePercent: 100 },
-      narrative: { pass: true, scorePercent: 100 },
-      database: { pass: true, available: false, scorePercent: 0 },
-    },
+    requirements: { databaseEvidenceRequired: false },
+    gates: baseGates,
     blockers: [],
     improvementActions: [],
     sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(dir)),
     generatedAt: "2026-05-20T00:00:00.000Z",
+  };
+  const report = {
+    ...baseReport,
     ...overrides,
+    requirements: {
+      ...baseReport.requirements,
+      ...(overrides.requirements || {}),
+    },
+    gates: {
+      ...baseGates,
+      ...(overrides.gates || {}),
+    },
   };
   fs.writeFileSync(
     path.join(dir, "truth-readiness-report.json"),
@@ -8021,30 +8035,14 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   );
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
-    JSON.stringify({
-      artifactType: "truth-readiness-report",
-      version: 1,
-      threshold: 0.95,
+    JSON.stringify(truthReadinessReportFixture(systemOutput, {
       score: 0.98,
       scorePercent: 98,
-      canSubmitReview: true,
-      canFinalize: true,
+      requirements: { databaseEvidenceRequired: true },
       gates: {
-        database: { pass: true, available: true },
-        factCheck: {
-          pass: true,
-          metrics: {
-            writableClaimCoverageRatio: 1,
-            minWritableClaimCoverage: 0.8,
-            missingWritableClaimCount: 0,
-          },
-        },
+        database: { pass: true, available: true, required: true, profileAvailable: true, scorePercent: 100 },
       },
-      blockers: [],
-      improvementActions: [],
-      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
-      generatedAt: "2026-06-03T00:01:00.000Z",
-    }),
+    })),
     "utf8",
   );
   fs.writeFileSync(
@@ -8101,6 +8099,31 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   assert.equal(accepted.summary.smokeEvidence, 0);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "acceptance-report.json")), true);
   assert.match(renderBatchAcceptanceMarkdown(accepted), /Batch Acceptance Report/);
+
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      canSubmitReview: true,
+      score: 1,
+      scorePercent: 100,
+      blockers: [],
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
+  const invalidTruthArtifact = buildBatchAcceptanceReport({ args: { config: configPath } });
+  assert.equal(invalidTruthArtifact.status, "blocked");
+  assert.equal(invalidTruthArtifact.systems[0].scorePercent, 0);
+  assert.equal(invalidTruthArtifact.systems[0].canSubmitReview, false);
+  assert.ok(invalidTruthArtifact.blockers.some((item) => item.id === "truth-readiness.invalid-artifact"));
+  writeTruthReadinessReportFixture(systemOutput, {
+    score: 0.98,
+    scorePercent: 98,
+    requirements: { databaseEvidenceRequired: true },
+    gates: {
+      database: { pass: true, available: true, required: true, profileAvailable: true, scorePercent: 100 },
+    },
+  });
 
   fs.writeFileSync(path.join(systemOutput, "database-profile.json"), JSON.stringify({ artifactType: "entity-model" }), "utf8");
   fs.writeFileSync(
@@ -8245,31 +8268,15 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   writeQualityReportFixture(systemOutput);
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
-    JSON.stringify({
-      artifactType: "truth-readiness-report",
-      version: 1,
-      threshold: 0.95,
+    JSON.stringify(truthReadinessReportFixture(systemOutput, {
       score: 0.99,
       scorePercent: 99,
-      canSubmitReview: true,
-      canFinalize: true,
-      gates: {
-        database: { pass: true, available: true, required: true, profileAvailable: true },
-        factCheck: {
-          pass: true,
-          metrics: {
-            writableClaimCoverageRatio: 1,
-            minWritableClaimCoverage: 0.8,
-            missingWritableClaimCount: 0,
-          },
-        },
-      },
       requirements: { databaseEvidenceRequired: true },
-      blockers: [],
-      improvementActions: [],
-      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+      gates: {
+        database: { pass: true, available: true, required: true, profileAvailable: true, scorePercent: 100 },
+      },
       generatedAt: "2026-06-03T00:03:00.000Z",
-    }),
+    })),
     "utf8",
   );
   const currentGateFailed = buildBatchAcceptanceReport({ args: { config: configPath } });
@@ -8301,41 +8308,23 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   );
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
-    JSON.stringify({
-      artifactType: "truth-readiness-report",
-      version: 1,
-      threshold: 0.95,
-      score: 0.94,
+    JSON.stringify(truthReadinessReportFixture(systemOutput, {
       scorePercent: 94,
+      score: 0.94,
       canSubmitReview: true,
       canFinalize: true,
-      gates: {
-        database: { available: true },
-        factCheck: { metrics: { writableClaimCoverageRatio: 1, minWritableClaimCoverage: 0.8, missingWritableClaimCount: 0 } },
-      },
       requirements: { databaseEvidenceRequired: true },
-      blockers: [],
-      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
-    }),
-    "utf8",
-  );
-
-  fs.writeFileSync(
-    path.join(systemOutput, "truth-readiness-report.json"),
-    JSON.stringify({
-      ...accepted.systems[0],
-      artifactType: "truth-readiness-report",
-      scorePercent: 94,
-      score: 0.94,
-      canSubmitReview: true,
-      canFinalize: true,
       gates: {
-        database: { available: true },
-        factCheck: { metrics: { writableClaimCoverageRatio: 1, minWritableClaimCoverage: 0.8, missingWritableClaimCount: 0 } },
+        database: { pass: true, available: true, required: true, profileAvailable: true, scorePercent: 100 },
+        factCheck: {
+          pass: true,
+          scorePercent: 100,
+          metrics: { writableClaimCoverageRatio: 1, minWritableClaimCoverage: 0.8, missingWritableClaimCount: 0 },
+        },
       },
       blockers: [],
       sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
-    }),
+    })),
     "utf8",
   );
   const belowTarget = buildBatchAcceptanceReport({ args: { config: configPath } });
@@ -8421,6 +8410,24 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.equal(ready.systems[0].finalExists, false);
   assert.equal(ready.systems[0].docxCurrent, false);
   assert.match(renderDeliveryReadinessMarkdown(ready), /Delivery Readiness Report/);
+
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      canSubmitReview: true,
+      score: 1,
+      scorePercent: 100,
+      blockers: [],
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
+  const invalidTruthArtifact = buildDeliveryReadinessReport({ acceptanceReport });
+  assert.equal(invalidTruthArtifact.status, "blocked");
+  assert.equal(invalidTruthArtifact.systems[0].scorePercent, 0);
+  assert.equal(invalidTruthArtifact.systems[0].canSubmitReview, false);
+  assert.ok(invalidTruthArtifact.blockers.some((item) => item.id === "delivery.truth-invalid-artifact"));
+  writePassingTruthArtifacts(systemOutput, { requireDatabaseEvidence: true });
 
   fs.writeFileSync(
     path.join(systemOutput, "database-profile.json"),
@@ -8539,22 +8546,21 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   );
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
-    JSON.stringify({
-      artifactType: "truth-readiness-report",
-      version: 1,
-      threshold: 0.95,
+    JSON.stringify(truthReadinessReportFixture(systemOutput, {
       score: 0.99,
       scorePercent: 99,
-      canSubmitReview: true,
-      canFinalize: true,
       requirements: { databaseEvidenceRequired: true },
       gates: {
-        database: { pass: true, available: true, required: true, profileAvailable: true },
-        factCheck: { pass: true, metrics: { writableClaimCoverageRatio: 1, minWritableClaimCoverage: 0.8, missingWritableClaimCount: 0 } },
+        database: { pass: true, available: true, required: true, profileAvailable: true, scorePercent: 100 },
+        factCheck: {
+          pass: true,
+          scorePercent: 100,
+          metrics: { writableClaimCoverageRatio: 1, minWritableClaimCoverage: 0.8, missingWritableClaimCount: 0 },
+        },
       },
       blockers: [],
       sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
-    }),
+    })),
     "utf8",
   );
   const currentGateFailed = buildDeliveryReadinessReport({ acceptanceReport });
@@ -8881,14 +8887,15 @@ test("real run readiness unifies preflight and final delivery state", () => {
 
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
-    JSON.stringify({
-      artifactType: "truth-readiness-report",
+    JSON.stringify(truthReadinessReportFixture(systemOutput, {
       scorePercent: 98,
+      score: 0.98,
       canSubmitReview: true,
+      canFinalize: true,
       mode: "local-e2e-smoke",
       blockers: [],
       sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
-    }),
+    })),
     "utf8",
   );
   const staleSmokeTruth = buildRealRunReadinessReport({
@@ -8930,14 +8937,14 @@ test("real run readiness unifies preflight and final delivery state", () => {
   );
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
-    JSON.stringify({
-      artifactType: "truth-readiness-report",
+    JSON.stringify(truthReadinessReportFixture(systemOutput, {
       scorePercent: 98,
+      score: 0.98,
       canSubmitReview: true,
       canFinalize: true,
       blockers: [],
       sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
-    }),
+    })),
     "utf8",
   );
   const currentGateInvalidReady = buildRealRunReadinessReport({
@@ -10504,6 +10511,37 @@ test("approved review rejects stale truth readiness fingerprints", () => {
   assert.throws(
     () => runReviewDecision({ inputDir: dir, status: "approved" }),
     /Truth readiness report is stale/,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "whitepaper.final.md")), false);
+});
+
+test("approved review rejects invalid truth readiness artifact contract", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runReviewDecision } = require("./run-review-decision");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "review-invalid-truth-artifact-"));
+  fs.writeFileSync(
+    path.join(dir, "whitepaper.pending-review.md"),
+    "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\n支撑保单数据闭环管理。",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "truth-readiness-report.json"),
+    JSON.stringify({
+      canSubmitReview: true,
+      score: 1,
+      scorePercent: 100,
+      blockers: [],
+      sourceArtifacts: {},
+    }),
+    "utf8",
+  );
+
+  assert.throws(
+    () => runReviewDecision({ inputDir: dir, status: "approved" }),
+    /not a valid truth readiness artifact.*artifactType/,
   );
   assert.equal(fs.existsSync(path.join(dir, "whitepaper.final.md")), false);
 });
@@ -12829,6 +12867,61 @@ function writeQualityReportFixture(dir, overrides = {}) {
     })),
     "utf8",
   );
+}
+
+function truthReadinessReportFixture(dir, overrides = {}) {
+  const { buildReadinessSourceArtifacts, loadReadinessInputs } = require("./check-truth-readiness");
+  const baseGates = {
+    evidence: { pass: true, scorePercent: 100 },
+    claims: { pass: true, scorePercent: 100 },
+    factCheck: {
+      pass: true,
+      scorePercent: 100,
+      metrics: {
+        writableClaimCoverageRatio: 1,
+        minWritableClaimCoverage: 0.8,
+        missingWritableClaimCount: 0,
+      },
+    },
+    narrative: { pass: true, scorePercent: 100 },
+    database: { pass: true, available: false, required: false, profileAvailable: false, scorePercent: 0 },
+    lineage: { pass: true, scorePercent: 100 },
+  };
+  const baseReport = {
+    artifactType: "truth-readiness-report",
+    version: 1,
+    threshold: 0.95,
+    score: 0.99,
+    scorePercent: 99,
+    canSubmitReview: true,
+    canFinalize: true,
+    requirements: { databaseEvidenceRequired: false },
+    gates: baseGates,
+    blockers: [],
+    improvementActions: [],
+    sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(dir)),
+    generatedAt: "2026-06-03T00:01:00.000Z",
+  };
+  return {
+    ...baseReport,
+    ...overrides,
+    requirements: {
+      ...baseReport.requirements,
+      ...(overrides.requirements || {}),
+    },
+    gates: {
+      ...baseGates,
+      ...(overrides.gates || {}),
+    },
+  };
+}
+
+function writeTruthReadinessReportFixture(dir, overrides = {}) {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const report = truthReadinessReportFixture(dir, overrides);
+  fs.writeFileSync(path.join(dir, "truth-readiness-report.json"), JSON.stringify(report), "utf8");
+  return report;
 }
 
 test("fact check passes writable claims and allows weak claims only in pending section", () => {

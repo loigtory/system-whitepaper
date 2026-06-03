@@ -17,6 +17,7 @@ const {
 const { exportWhitepaperWord } = require("./export-whitepaper-word");
 const {
   DEFAULT_THRESHOLD,
+  assertValidTruthReadinessReportArtifact,
   buildTruthReadinessReport,
   findStaleReadinessSources,
   loadReadinessInputs,
@@ -266,6 +267,11 @@ function readApprovalTruthReadiness(inputDir) {
   }
   if (!report || typeof report !== "object" || Array.isArray(report)) {
     throw new Error(`truth-readiness-report.json must be a JSON object: ${reportPath}`);
+  }
+  try {
+    assertValidTruthReadinessReportArtifact(report);
+  } catch (error) {
+    throw new Error(`truth-readiness-report.json is not a valid truth readiness artifact: ${error.message}`);
   }
   return { reportPath, report };
 }

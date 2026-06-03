@@ -12,6 +12,7 @@ const {
 const { resolveDatabaseProfileConfig } = require("./collect-database-profile");
 const { runDoctor } = require("./doctor");
 const {
+  assertValidTruthReadinessReportArtifact,
   buildTruthReadinessReport,
   findStaleReadinessSources,
   loadReadinessInputs,
@@ -534,6 +535,12 @@ function bindDeliveryReportToCurrentSources(deliveryReport, context = {}) {
     const truthReport = readJsonObjectIfExists(truthReportPath);
     if (!truthReport) {
       invalidSystems.push({ code, reason: "missing-truth-readiness" });
+      continue;
+    }
+    try {
+      assertValidTruthReadinessReportArtifact(truthReport);
+    } catch {
+      invalidSystems.push({ code, reason: "truth-invalid-artifact" });
       continue;
     }
     if (

@@ -8,6 +8,7 @@ const {
   writeJson,
 } = require("./system-whitepaper-lib");
 const {
+  assertValidTruthReadinessReportArtifact,
   buildTruthReadinessReport,
   findStaleReadinessSources,
   isValidDatabaseProfile,
@@ -178,15 +179,32 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
       }),
     );
   } else {
-    scorePercent = percentFromReport(truth);
-    canSubmitReview = Boolean(truth.canSubmitReview);
-    canFinalize = Boolean(truth.canFinalize);
-    staleSources = findStaleReadinessSources(outputDir, truth);
+    const truthContractFailures = [];
+    try {
+      assertValidTruthReadinessReportArtifact(truth);
+    } catch (error) {
+      truthContractFailures.push(error.message);
+    }
+    if (truthContractFailures.length) {
+      blockers.push(
+        blocker("truth-readiness.invalid-artifact", "truth-readiness-report.json is not a valid truth readiness artifact.", {
+          systemCode: code,
+          rerunNodes: ["truth-readiness"],
+        }),
+      );
+    }
+    scorePercent = truthContractFailures.length ? 0 : percentFromReport(truth);
+    canSubmitReview = truthContractFailures.length ? false : Boolean(truth.canSubmitReview);
+    canFinalize = truthContractFailures.length ? false : Boolean(truth.canFinalize);
+    staleSources = truthContractFailures.length ? [] : findStaleReadinessSources(outputDir, truth);
     smokeTruth = truthReportLooksLikeSmoke(truth);
+    const requireDatabaseEvidence = truthContractFailures.length
+      ? databaseProfileConfigured
+      : truthRequiresDatabaseEvidence(truth, databaseProfileConfigured);
     const currentTruth = buildTruthReadinessReport({
       artifacts: loadReadinessInputs(outputDir),
       threshold: targetTruthScorePercent,
-      requireDatabaseEvidence: truthRequiresDatabaseEvidence(truth, databaseProfileConfigured),
+      requireDatabaseEvidence,
       expectedSystem: { code, name: system.name || "" },
     });
     const currentScorePercent = percentFromReport(currentTruth);
@@ -223,7 +241,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
         }),
       );
     }
-    if (truth.canSubmitReview !== true) {
+    if (!truthContractFailures.length && truth.canSubmitReview !== true) {
       blockers.push(
         blocker("truth-readiness.not-submittable", "truth-readiness-report.json does not allow review submission.", {
           systemCode: code,

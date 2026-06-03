@@ -5,6 +5,7 @@ const path = require("node:path");
 const { parseArgs, readOptionalJsonObject, writeJson } = require("./system-whitepaper-lib");
 const { runBatchAcceptance } = require("./check-batch-acceptance");
 const {
+  assertValidTruthReadinessReportArtifact,
   buildTruthReadinessReport,
   findStaleReadinessSources,
   loadReadinessInputs,
@@ -359,17 +360,34 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
       }),
     );
   } else {
-    const recordedScorePercent = percentFromReport(truth);
+    const truthContractFailures = [];
+    try {
+      assertValidTruthReadinessReportArtifact(truth);
+    } catch (error) {
+      truthContractFailures.push(error.message);
+    }
+    if (truthContractFailures.length) {
+      blockers.push(
+        blocker("delivery.truth-invalid-artifact", "truth-readiness-report.json is not a valid truth readiness artifact.", {
+          systemCode: code,
+          rerunNodes: ["truth-readiness"],
+        }),
+      );
+    }
+    const recordedScorePercent = truthContractFailures.length ? 0 : percentFromReport(truth);
     scorePercent = recordedScorePercent;
-    canSubmitReview = Boolean(truth.canSubmitReview);
-    staleSources = findStaleReadinessSources(outputDir, truth);
+    canSubmitReview = truthContractFailures.length ? false : Boolean(truth.canSubmitReview);
+    staleSources = truthContractFailures.length ? [] : findStaleReadinessSources(outputDir, truth);
+    const requireDatabaseEvidence = truthContractFailures.length
+      ? Boolean(systemReport.databaseProfileConfigured)
+      : truthRequiresDatabaseEvidence(
+          truth,
+          Boolean(systemReport.databaseProfileConfigured),
+        );
     const currentTruth = buildTruthReadinessReport({
       artifacts: loadReadinessInputs(outputDir),
       threshold: targetTruthScorePercent,
-      requireDatabaseEvidence: truthRequiresDatabaseEvidence(
-        truth,
-        Boolean(systemReport.databaseProfileConfigured),
-      ),
+      requireDatabaseEvidence,
       expectedSystem: { code, name: systemReport.name || "" },
     });
     const currentScorePercent = percentFromReport(currentTruth);
@@ -388,7 +406,7 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
         }),
       );
     }
-    if (truth.canSubmitReview !== true || recordedScorePercent < targetTruthScorePercent) {
+    if (!truthContractFailures.length && (truth.canSubmitReview !== true || recordedScorePercent < targetTruthScorePercent)) {
       blockers.push(
         blocker(
           "delivery.truth-not-ready",

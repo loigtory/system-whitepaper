@@ -84,12 +84,14 @@ function prepareSmokeOutput(options = {}) {
     scorePercent: 99,
     canSubmitReview: true,
     canFinalize: true,
+    requirements: { databaseEvidenceRequired: false },
     gates: {
       evidence: { pass: true, scorePercent: 100 },
       claims: { pass: true, scorePercent: 100 },
       factCheck: { pass: true, scorePercent: 100 },
       narrative: { pass: true, scorePercent: 100 },
       database: { pass: true, available: false, scorePercent: 0 },
+      lineage: { pass: true, scorePercent: 100 },
     },
     blockers: [],
     improvementActions: [

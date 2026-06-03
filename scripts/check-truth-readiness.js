@@ -59,6 +59,60 @@ function percent(value) {
   return Math.round(clamp01(value) * 1000) / 10;
 }
 
+function assertJsonObject(value, message) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(message);
+  }
+}
+
+function assertFiniteNumber(value, message) {
+  if (!Number.isFinite(Number(value))) {
+    throw new Error(message);
+  }
+}
+
+function assertBoolean(value, message) {
+  if (typeof value !== "boolean") {
+    throw new Error(message);
+  }
+}
+
+function assertValidTruthReadinessReportArtifact(report = {}) {
+  assertJsonObject(report, "truth-readiness-report.json must be a JSON object.");
+  if (report.artifactType !== "truth-readiness-report") {
+    throw new Error("truth-readiness-report.json artifactType must be truth-readiness-report.");
+  }
+  assertFiniteNumber(report.version, "truth-readiness-report.json version must be numeric.");
+  assertFiniteNumber(report.threshold, "truth-readiness-report.json threshold must be numeric.");
+  assertFiniteNumber(report.score, "truth-readiness-report.json score must be numeric.");
+  assertFiniteNumber(report.scorePercent, "truth-readiness-report.json scorePercent must be numeric.");
+  assertBoolean(report.canSubmitReview, "truth-readiness-report.json canSubmitReview must be a boolean.");
+  assertBoolean(report.canFinalize, "truth-readiness-report.json canFinalize must be a boolean.");
+  assertJsonObject(report.requirements, "truth-readiness-report.json requirements must be a JSON object.");
+  assertBoolean(
+    report.requirements.databaseEvidenceRequired,
+    "truth-readiness-report.json requirements.databaseEvidenceRequired must be a boolean.",
+  );
+  assertJsonObject(report.gates, "truth-readiness-report.json gates must be a JSON object.");
+  for (const gateId of ["evidence", "claims", "factCheck", "narrative", "database", "lineage"]) {
+    assertJsonObject(report.gates[gateId], `truth-readiness-report.json gates.${gateId} must be a JSON object.`);
+    assertBoolean(
+      report.gates[gateId].pass,
+      `truth-readiness-report.json gates.${gateId}.pass must be a boolean.`,
+    );
+  }
+  if (!Array.isArray(report.blockers)) {
+    throw new Error("truth-readiness-report.json blockers must be an array.");
+  }
+  if (!Array.isArray(report.improvementActions)) {
+    throw new Error("truth-readiness-report.json improvementActions must be an array.");
+  }
+  assertJsonObject(report.sourceArtifacts, "truth-readiness-report.json sourceArtifacts must be a JSON object.");
+  if (!String(report.generatedAt || "").trim()) {
+    throw new Error("truth-readiness-report.json generatedAt must be present.");
+  }
+}
+
 function readJsonArtifact(filePath) {
   if (!fs.existsSync(filePath)) {
     return { status: "missing", value: null, error: "" };
@@ -1149,6 +1203,7 @@ if (require.main === module) {
 
 module.exports = {
   DEFAULT_THRESHOLD,
+  assertValidTruthReadinessReportArtifact,
   buildReadinessSourceArtifacts,
   buildLineageGate,
   buildTruthReadinessReport,
