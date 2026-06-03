@@ -276,8 +276,62 @@ function approvalTruthScore(report = {}) {
   return 0;
 }
 
+function outputPathHasE2eSegment(inputDir) {
+  return path
+    .resolve(String(inputDir || ""))
+    .split(/[\\/]+/)
+    .some((part) => part.toLowerCase() === "_e2e");
+}
+
+function truthReadinessLooksLikeSmoke(report = {}) {
+  const mode = String(report.mode || "").toLowerCase();
+  if (mode.includes("smoke") || mode.includes("local-e2e")) return true;
+  return (Array.isArray(report.improvementActions) ? report.improvementActions : []).some((item) =>
+    /smoke|local-e2e|本地冒烟/i.test(`${item.id || ""} ${item.message || ""}`),
+  );
+}
+
+function markdownLooksLikeSmoke(markdown = "") {
+  return /local-e2e-smoke|smoke gate|本地冒烟|冒烟|不代表最终业务白皮书|不代表最终业务白皮书内容/i.test(
+    String(markdown || ""),
+  );
+}
+
+function readTextIfExists(filePath) {
+  try {
+    return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+  } catch {
+    return "";
+  }
+}
+
+function assertNotSmokeApproval(inputDir, reportPath, report = {}, options = {}) {
+  if (options.allowSmokeTruthReadiness) return;
+  const reasons = [];
+  if (truthReadinessLooksLikeSmoke(report)) {
+    reasons.push("truth-readiness-report.json is marked as smoke/local-e2e evidence");
+  }
+  if (outputPathHasE2eSegment(inputDir)) {
+    reasons.push("input directory is under an _e2e smoke output");
+  }
+  const pendingMarkdown = readTextIfExists(path.join(inputDir, "whitepaper.pending-review.md"));
+  if (markdownLooksLikeSmoke(pendingMarkdown)) {
+    reasons.push("pending-review markdown contains smoke wording");
+  }
+  if (reasons.length) {
+    throw new Error(
+      [
+        `Smoke truth readiness report cannot approve real delivery: ${reportPath}`,
+        ...reasons,
+        "run the real pipeline and truth-readiness before approval",
+      ].join("; "),
+    );
+  }
+}
+
 function assertApprovalTruthReadiness(inputDir, options = {}) {
   const { reportPath, report } = readApprovalTruthReadiness(inputDir);
+  assertNotSmokeApproval(inputDir, reportPath, report, options);
   const threshold = normalizeThreshold(options.threshold ?? report.threshold ?? DEFAULT_THRESHOLD);
   const score = approvalTruthScore(report);
   const blockers = Array.isArray(report.blockers)
@@ -418,6 +472,7 @@ module.exports = {
   inferTargetModules,
   inferRewriteScope,
   inferRerunNodes,
+  truthReadinessLooksLikeSmoke,
   resolveReviewNarrativePart,
   runReviewDecision,
 };

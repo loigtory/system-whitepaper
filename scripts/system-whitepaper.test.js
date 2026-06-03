@@ -8992,6 +8992,49 @@ test("approved review rejects stale truth readiness fingerprints", () => {
   assert.equal(fs.existsSync(path.join(dir, "whitepaper.final.md")), false);
 });
 
+test("approved review rejects smoke truth readiness by default", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runReviewDecision } = require("./run-review-decision");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "review-smoke-truth-"));
+  fs.writeFileSync(
+    path.join(dir, "whitepaper.pending-review.md"),
+    "# AI保单数据闭环平台功能白皮书（待审核）\n\n本地冒烟，不代表最终业务白皮书内容。",
+    "utf8",
+  );
+  writePassingTruthReadinessReport(dir, {
+    mode: "local-e2e-smoke",
+    improvementActions: [
+      {
+        id: "smoke-only",
+        message: "Smoke gate validates approval/export plumbing only.",
+      },
+    ],
+  });
+
+  assert.throws(
+    () => runReviewDecision({ inputDir: dir, status: "approved" }),
+    /Smoke truth readiness report cannot approve real delivery/,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "whitepaper.final.md")), false);
+
+  const e2eDir = path.join(dir, "outputs", "_e2e", "adp-smoke");
+  fs.mkdirSync(e2eDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(e2eDir, "whitepaper.pending-review.md"),
+    "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\n支撑保单数据闭环管理。",
+    "utf8",
+  );
+  writePassingTruthReadinessReport(e2eDir);
+  assert.throws(
+    () => runReviewDecision({ inputDir: e2eDir, status: "approved" }),
+    /Smoke truth readiness report cannot approve real delivery/,
+  );
+  assert.equal(fs.existsSync(path.join(e2eDir, "whitepaper.final.md")), false);
+});
+
 test("approved review tolerates malformed optional pipeline state", () => {
   const fs = require("node:fs");
   const os = require("node:os");

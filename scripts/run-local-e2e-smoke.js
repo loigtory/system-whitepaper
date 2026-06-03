@@ -143,6 +143,7 @@ function runLocalE2ESmoke(options = {}) {
     status: "approved",
     systemName,
     date: options.date,
+    allowSmokeTruthReadiness: true,
   });
 
   const checks = {
