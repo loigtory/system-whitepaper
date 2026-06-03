@@ -51,6 +51,7 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
   const fs = require("node:fs");
   const path = require("node:path");
   const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
+  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
   const {
     buildReadinessSourceArtifacts,
     loadReadinessInputs,
@@ -129,6 +130,10 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
     canSubmitReview: true,
     failures: [],
     counts: { chars: 2000, evidencePages: 1 },
+    sourceArtifacts: buildNarrativeSourceArtifacts({
+      markdownPath: path.join(dir, "whitepaper.pending-review.md"),
+      evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
+    }),
   });
   const report = {
     artifactType: "truth-readiness-report",
@@ -163,6 +168,7 @@ function writePassingTruthArtifacts(dir, options = {}) {
   const fs = require("node:fs");
   const path = require("node:path");
   const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
+  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
   const {
     buildTruthReadinessReport,
     buildReadinessSourceArtifacts,
@@ -313,7 +319,15 @@ function writePassingTruthArtifacts(dir, options = {}) {
   );
   fs.writeFileSync(
     path.join(dir, "narrative-quality-report.json"),
-    JSON.stringify({ canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } }),
+    JSON.stringify({
+      canSubmitReview: true,
+      failures: [],
+      counts: { chars: 2000, evidencePages: 1 },
+      sourceArtifacts: buildNarrativeSourceArtifacts({
+        markdownPath: path.join(dir, "whitepaper.pending-review.md"),
+        evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
+      }),
+    }),
     "utf8",
   );
   const report = buildTruthReadinessReport({
@@ -7725,6 +7739,7 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
     runBatchAcceptanceCheck,
   } = require("./check-batch-acceptance");
   const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
+  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
   const { buildReadinessSourceArtifacts, loadReadinessInputs } = require("./check-truth-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "batch-acceptance-"));
   const outputRoot = path.join(dir, "outputs");
@@ -7805,7 +7820,15 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   );
   fs.writeFileSync(
     path.join(systemOutput, "narrative-quality-report.json"),
-    JSON.stringify({ canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } }),
+    JSON.stringify({
+      canSubmitReview: true,
+      failures: [],
+      counts: { chars: 2000, evidencePages: 1 },
+      sourceArtifacts: buildNarrativeSourceArtifacts({
+        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
+        evidenceSummaryPath: path.join(systemOutput, "evidence-summary.json"),
+      }),
+    }),
     "utf8",
   );
   fs.writeFileSync(
@@ -9777,6 +9800,7 @@ test("pipeline truth nodes build claims and fact-check artifacts", async () => {
   const os = require("node:os");
   const path = require("node:path");
   const { runPipelineNode } = require("./run-whitepaper-pipeline");
+  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-truth-"));
   const projectRoot = path.resolve(__dirname, "..");
   fs.mkdirSync(path.join(tempRoot, "config"), { recursive: true });
@@ -9891,7 +9915,15 @@ test("pipeline truth nodes build claims and fact-check artifacts", async () => {
   );
   fs.writeFileSync(
     path.join(systemOutput, "narrative-quality-report.json"),
-    JSON.stringify({ canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } }),
+    JSON.stringify({
+      canSubmitReview: true,
+      failures: [],
+      counts: { chars: 2000, evidencePages: 1 },
+      sourceArtifacts: buildNarrativeSourceArtifacts({
+        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
+        evidenceSummaryPath: path.join(systemOutput, "evidence-summary.json"),
+      }),
+    }),
     "utf8",
   );
   await runPipelineNode("truth-readiness", context);
@@ -12631,6 +12663,7 @@ test("truth readiness rejects stale fact check source fingerprints", () => {
   const os = require("node:os");
   const path = require("node:path");
   const { runFactCheck } = require("./fact-check-whitepaper");
+  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-stale-fact-check-"));
   fs.writeFileSync(
@@ -12677,7 +12710,15 @@ test("truth readiness rejects stale fact check source fingerprints", () => {
   runFactCheck({ inputDir: dir });
   fs.writeFileSync(
     path.join(dir, "narrative-quality-report.json"),
-    JSON.stringify({ canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } }),
+    JSON.stringify({
+      canSubmitReview: true,
+      failures: [],
+      counts: { chars: 2000, evidencePages: 1 },
+      sourceArtifacts: buildNarrativeSourceArtifacts({
+        markdownPath: path.join(dir, "whitepaper.pending-review.md"),
+        evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
+      }),
+    }),
     "utf8",
   );
 
@@ -12692,6 +12733,40 @@ test("truth readiness rejects stale fact check source fingerprints", () => {
   assert.ok(stale.blockers.some((item) => item.id === "fact-check.unsupported-assertions"));
 });
 
+test("truth readiness rejects stale narrative source fingerprints", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-stale-narrative-"));
+  writePassingTruthArtifacts(dir, { databaseProfile: false });
+
+  const markdownPath = path.join(dir, "whitepaper.pending-review.md");
+  fs.appendFileSync(markdownPath, "\n\n补充新的业务描述。", "utf8");
+  const factCheckPath = path.join(dir, "fact-check-report.json");
+  const factCheck = JSON.parse(fs.readFileSync(factCheckPath, "utf8"));
+  fs.writeFileSync(
+    factCheckPath,
+    JSON.stringify({
+      ...factCheck,
+      sourceArtifacts: buildFactCheckSourceArtifacts({
+        markdownPath,
+        claimsPath: path.join(dir, "verified-claims.json"),
+      }),
+    }),
+    "utf8",
+  );
+
+  const stale = runTruthReadinessCheck({ inputDir: dir });
+
+  assert.equal(stale.canSubmitReview, false);
+  assert.equal(stale.gates.factCheck.pass, true);
+  assert.equal(stale.gates.narrative.pass, false);
+  assert.ok(stale.gates.narrative.staleSources.some((item) => item.key === "pendingReview"));
+  assert.ok(stale.blockers.some((item) => item.id === "narrative.quality"));
+});
+
 test("truth readiness rejects stale database truth lineage", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -12700,6 +12775,7 @@ test("truth readiness rejects stale database truth lineage", () => {
   const { buildFunctionUniverseFromDir } = require("./build-function-universe");
   const { buildVerifiedClaimsFromDir } = require("./build-verified-claims");
   const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
+  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-lineage-db-"));
@@ -12715,11 +12791,6 @@ test("truth readiness rejects stale database truth lineage", () => {
       coreConclusionTraceability: 1,
       failures: [],
     }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(dir, "narrative-quality-report.json"),
-    JSON.stringify({ canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } }),
     "utf8",
   );
   fs.writeFileSync(
@@ -12766,6 +12837,19 @@ test("truth readiness rejects stale database truth lineage", () => {
   fs.writeFileSync(
     path.join(dir, "whitepaper.pending-review.md"),
     "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "narrative-quality-report.json"),
+    JSON.stringify({
+      canSubmitReview: true,
+      failures: [],
+      counts: { chars: 2000, evidencePages: 1 },
+      sourceArtifacts: buildNarrativeSourceArtifacts({
+        markdownPath: path.join(dir, "whitepaper.pending-review.md"),
+        evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
+      }),
+    }),
     "utf8",
   );
   fs.writeFileSync(

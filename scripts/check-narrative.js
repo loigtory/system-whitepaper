@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { parseArgs, readRequiredJsonObject, writeJson } = require("./system-whitepaper-lib");
 
 function hasAny(markdown, patterns) {
@@ -45,6 +46,37 @@ function buildNarrativeQualityReport(input = {}) {
   };
 }
 
+function fingerprintFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { exists: false, size: 0, mtimeMs: null, sha256: "" };
+  }
+  const buffer = fs.readFileSync(filePath);
+  const stat = fs.statSync(filePath);
+  return {
+    exists: true,
+    size: stat.size,
+    mtimeMs: Math.round(stat.mtimeMs),
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+function buildNarrativeSourceArtifacts(input = {}) {
+  const result = {};
+  if (input.markdownPath) {
+    result.pendingReview = {
+      file: path.basename(input.markdownPath),
+      fingerprint: fingerprintFile(input.markdownPath),
+    };
+  }
+  if (input.evidenceSummaryPath) {
+    result.evidenceSummary = {
+      file: path.basename(input.evidenceSummaryPath),
+      fingerprint: fingerprintFile(input.evidenceSummaryPath),
+    };
+  }
+  return result;
+}
+
 function runNarrativeCheck(options = {}) {
   const inputDir = path.resolve(String(options.inputDir || options.input || "."));
   const markdownPath =
@@ -58,6 +90,7 @@ function runNarrativeCheck(options = {}) {
       failures: [`Pending review markdown not found: ${markdownPath}`],
       warnings: [],
       counts: { chars: 0, evidencePages: 0 },
+      sourceArtifacts: buildNarrativeSourceArtifacts({ markdownPath, evidenceSummaryPath: summaryPath }),
     };
     writeJson(outputPath, report);
     return report;
@@ -67,7 +100,10 @@ function runNarrativeCheck(options = {}) {
   const evidenceSummary = fs.existsSync(summaryPath)
     ? readRequiredJsonObject(summaryPath, { label: "Evidence summary" })
     : {};
-  const report = buildNarrativeQualityReport({ markdown, evidenceSummary });
+  const report = {
+    ...buildNarrativeQualityReport({ markdown, evidenceSummary }),
+    sourceArtifacts: buildNarrativeSourceArtifacts({ markdownPath, evidenceSummaryPath: summaryPath }),
+  };
   writeJson(outputPath, report);
   return report;
 }
@@ -96,5 +132,7 @@ if (require.main === module) {
 
 module.exports = {
   buildNarrativeQualityReport,
+  buildNarrativeSourceArtifacts,
+  fingerprintFile,
   runNarrativeCheck,
 };

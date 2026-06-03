@@ -293,6 +293,56 @@ function findStaleFactCheckSources(artifacts = {}) {
   return stale;
 }
 
+function findStaleNarrativeSources(artifacts = {}) {
+  const narrative = artifacts.narrative || {};
+  if (!narrative?.fingerprint?.exists) return [];
+  const value = narrative.value || {};
+  const recorded = value.sourceArtifacts;
+  const required = {
+    pendingReview: artifacts.pendingReview,
+    evidenceSummary: artifacts.evidenceSummary,
+  };
+  const presentRequired = Object.entries(required).filter(([, artifact]) => artifact?.fingerprint?.exists);
+  if (!presentRequired.length) return [];
+  if (!recorded || typeof recorded !== "object" || Array.isArray(recorded)) {
+    return [
+      {
+        key: "sourceArtifacts",
+        file: narrative.file || REQUIRED_ARTIFACTS.narrative,
+        reason: "missing narrative source fingerprints",
+      },
+    ];
+  }
+  const stale = [];
+  for (const [key, current] of presentRequired) {
+    const expected = recorded[key];
+    if (!expected) {
+      stale.push({ key, file: current.file || "", reason: "not recorded in narrative report" });
+      continue;
+    }
+    if (String(expected.file || "") !== String(current.file || "")) {
+      stale.push({ key, file: current.file || expected.file || "", reason: "file mapping changed" });
+      continue;
+    }
+    if (String(expected.status || "ok") !== String(current.status || "ok")) {
+      stale.push({
+        key,
+        file: current.file || expected.file || "",
+        reason: `status changed from ${expected.status || "ok"} to ${current.status || "ok"}`,
+      });
+      continue;
+    }
+    if (!normalizeSourceFingerprint(expected).sha256 && current.fingerprint?.exists) {
+      stale.push({ key, file: current.file || expected.file || "", reason: "missing recorded sha256" });
+      continue;
+    }
+    if (!sourceFingerprintMatches(expected, current)) {
+      stale.push({ key, file: current.file || expected.file || "", reason: "content fingerprint changed" });
+    }
+  }
+  return stale;
+}
+
 function blocker(id, severity, message, rerunNodes = [], extra = {}) {
   return { id, severity, message, rerunNodes, ...extra };
 }
@@ -465,6 +515,22 @@ function buildNarrativeGate(artifact) {
     counts: { chars, evidencePages },
     failures,
     warnings,
+  };
+}
+
+function buildNarrativeFreshnessGate(gate, artifacts = {}) {
+  const staleSources = findStaleNarrativeSources(artifacts);
+  if (!staleSources.length) return gate;
+  return {
+    ...gate,
+    pass: false,
+    score: 0,
+    scorePercent: 0,
+    staleSources,
+    failures: [
+      ...(Array.isArray(gate.failures) ? gate.failures : []),
+      "narrative-quality-report.json was not generated from the current whitepaper or evidence summary.",
+    ],
   };
 }
 
@@ -713,8 +779,11 @@ function buildTruthReadinessReport(input = {}) {
       ),
       artifacts,
     ),
-    narrative: buildNarrativeGate(
-      artifacts.narrative || { status: "missing", file: REQUIRED_ARTIFACTS.narrative },
+    narrative: buildNarrativeFreshnessGate(
+      buildNarrativeGate(
+        artifacts.narrative || { status: "missing", file: REQUIRED_ARTIFACTS.narrative },
+      ),
+      artifacts,
     ),
     database: databaseGate,
     lineage: lineageGate,
@@ -824,6 +893,7 @@ module.exports = {
   buildLineageGate,
   buildTruthReadinessReport,
   findStaleFactCheckSources,
+  findStaleNarrativeSources,
   findStaleReadinessSources,
   isValidDatabaseProfile,
   loadReadinessInputs,
