@@ -9,6 +9,7 @@ const {
   readRequiredJsonObject,
   writeJson,
 } = require("./system-whitepaper-lib");
+const { scanDatabaseProfileSafety } = require("./check-truth-readiness");
 
 function compactString(value) {
   return String(value || "").trim();
@@ -183,10 +184,25 @@ function buildEntityRelations(entityModel = {}) {
   );
 }
 
+function assertSafeDatabaseProfile(databaseProfile = {}) {
+  if (!databaseProfile || typeof databaseProfile !== "object" || Array.isArray(databaseProfile)) return;
+  if (databaseProfile.artifactType !== "database-profile") return;
+  const safety = scanDatabaseProfileSafety(databaseProfile);
+  if (!safety.pass) {
+    throw new Error(
+      [
+        "database-profile.json is not safely redacted; refusing to build function universe artifacts.",
+        ...safety.failures,
+      ].join(" "),
+    );
+  }
+}
+
 function buildFunctionUniverseArtifact(input = {}) {
   const evidenceSummary = input.evidenceSummary || {};
   const databaseProfile = input.databaseProfile || {};
   const entityModel = input.entityModel || {};
+  assertSafeDatabaseProfile(databaseProfile);
   const modules = buildModuleUniverse(evidenceSummary);
   const functions = buildFunctionUniverse(evidenceSummary);
   const entities = buildEntityUniverse({ databaseProfile, entityModel });

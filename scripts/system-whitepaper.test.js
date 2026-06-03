@@ -12371,6 +12371,7 @@ test("build function universe merges UI functions and redacted database entities
   const databaseProfile = {
     artifactType: "database-profile",
     system: { code: "adp", name: "AI保单数据闭环平台" },
+    safety: { secretRedacted: true },
     entityCandidates: [
       {
         entity: "保单任务",
@@ -12459,6 +12460,52 @@ test("build function universe tolerates malformed optional database profile", ()
 
   assert.equal(artifact.functions.length, 1);
   assert.equal(artifact.entities.length, 0);
+});
+
+test("build function universe rejects unsafe optional database profile before writing artifact", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    buildFunctionUniverseArtifact,
+    buildFunctionUniverseFromDir,
+  } = require("./build-function-universe");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "function-universe-unsafe-db-"));
+  const evidenceSummary = {
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    modules: [{ name: "AI任务" }],
+    functions: [{ module: "AI任务", name: "任务列表", menuPath: "AI任务 > 任务列表" }],
+  };
+  const databaseProfile = {
+    artifactType: "database-profile",
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    source: {
+      mode: "connector",
+      databaseType: "mysql",
+      secret: { type: "mysql", username: "adp_user", password: "[redacted]" },
+    },
+    safety: { secretRedacted: true },
+    entityCandidates: [{ entity: "AI任务", table: "adp_test.ai_task" }],
+    tables: [
+      {
+        schema: "adp_test",
+        name: "ai_task",
+        sampleRows: [{ user_email: "agent@example.com" }],
+      },
+    ],
+  };
+  fs.writeFileSync(path.join(dir, "evidence-summary.json"), JSON.stringify(evidenceSummary), "utf8");
+  fs.writeFileSync(path.join(dir, "database-profile.json"), JSON.stringify(databaseProfile), "utf8");
+
+  assert.throws(
+    () => buildFunctionUniverseArtifact({ evidenceSummary, databaseProfile }),
+    /not safely redacted.*source\.secret\.username.*user_email/s,
+  );
+  assert.throws(
+    () => buildFunctionUniverseFromDir(dir),
+    /not safely redacted.*source\.secret\.username.*user_email/s,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "function-universe.json")), false);
 });
 
 test("build verified claims assigns confidence and writable boundaries", () => {
