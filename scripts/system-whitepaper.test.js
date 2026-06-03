@@ -7015,6 +7015,59 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
   assert.equal(writtenRepairQueue.artifacts.repairQueueMarkdown, "repair-queue.md");
 });
 
+test("batch repair queue prefers low-quota stale refresh over narrative rewrite", () => {
+  const {
+    buildBatchDiagnosis,
+    buildBatchRepairQueue,
+  } = require("./run-whitepaper-batch");
+
+  const diagnosis = buildBatchDiagnosis({
+    batchId: "batch-stale",
+    status: "failed",
+    systems: [
+      {
+        code: "adp",
+        name: "AI保单数据闭环平台",
+        status: "failed",
+        runStatus: "failed",
+        currentNode: "truth-readiness",
+        truthReadiness: {
+          scorePercent: 70,
+          canSubmitReview: false,
+          canFinalize: false,
+          blockers: [
+            {
+              id: "narrative.stale-sources",
+              severity: "P1",
+              message: "narrative-quality-report.json is stale.",
+              rerunNodes: ["quality", "truth-readiness"],
+              quotaImpact: "low",
+            },
+            {
+              id: "truth.score-below-threshold",
+              severity: "P0",
+              message: "Truth readiness score is below threshold.",
+              rerunNodes: ["truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+            },
+          ],
+          improvementActions: [],
+        },
+        writableClaimCoverage: { missingWritableClaimCount: 0 },
+      },
+    ],
+  });
+
+  const repairQueue = buildBatchRepairQueue(diagnosis, { allowAgentWriting: false });
+
+  assert.equal(diagnosis.summary.quotaSensitive, 1);
+  assert.equal(repairQueue.summary.autoRunnable, 1);
+  assert.equal(repairQueue.summary.requiresAgentWriting, 0);
+  assert.equal(repairQueue.items[0].actionId, "narrative.stale-sources");
+  assert.deepEqual(repairQueue.items[0].nodes, ["quality", "truth-readiness"]);
+  assert.equal(repairQueue.items[0].quotaImpact, "low");
+  assert.equal(repairQueue.items[0].canAutoRun, true);
+});
+
 test("batch runner refreshes aggregate state from per-system pipeline states", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -12730,7 +12783,10 @@ test("truth readiness rejects stale fact check source fingerprints", () => {
   assert.equal(stale.canSubmitReview, false);
   assert.equal(stale.gates.factCheck.pass, false);
   assert.ok(stale.gates.factCheck.staleSources.some((item) => item.key === "pendingReview"));
-  assert.ok(stale.blockers.some((item) => item.id === "fact-check.unsupported-assertions"));
+  const blocker = stale.blockers.find((item) => item.id === "fact-check.stale-sources");
+  assert.ok(blocker);
+  assert.deepEqual(blocker.rerunNodes, ["fact-check", "quality", "truth-readiness"]);
+  assert.equal(blocker.quotaImpact, "low");
 });
 
 test("truth readiness rejects stale narrative source fingerprints", () => {
@@ -12764,7 +12820,10 @@ test("truth readiness rejects stale narrative source fingerprints", () => {
   assert.equal(stale.gates.factCheck.pass, true);
   assert.equal(stale.gates.narrative.pass, false);
   assert.ok(stale.gates.narrative.staleSources.some((item) => item.key === "pendingReview"));
-  assert.ok(stale.blockers.some((item) => item.id === "narrative.quality"));
+  const blocker = stale.blockers.find((item) => item.id === "narrative.stale-sources");
+  assert.ok(blocker);
+  assert.deepEqual(blocker.rerunNodes, ["quality", "truth-readiness"]);
+  assert.equal(blocker.quotaImpact, "low");
 });
 
 test("truth readiness rejects stale database truth lineage", () => {

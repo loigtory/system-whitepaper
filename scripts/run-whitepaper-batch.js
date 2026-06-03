@@ -883,16 +883,21 @@ function hasWritableClaimGap(system = {}) {
   );
 }
 
+function isStaleRefreshAction(action = {}) {
+  return /stale-sources|stale-refresh|truth\.lineage-stale/i.test(String(action.id || ""));
+}
+
 function scoreRepairAction(action = {}, system = {}) {
   const nodes = normalizeRepairQueueNodes(action.rerunNodes);
   if (!nodes.length) return -100;
   const writableGap = hasWritableClaimGap(system);
   let score = action.canRetry ? 50 : 0;
+  if (isStaleRefreshAction(action) && !nodes.includes("narrative")) score += 80;
   if (writableGap && nodes.includes("narrative")) score += 40;
   if (writableGap && compactItems(action.missingWritableClaimIds, 12).length) score += 35;
   if (/writable|coverage/i.test(action.id || "")) score += 15;
   if (action.rewriteScope || action.narrativePart) score += 10;
-  if (nodes.includes("narrative")) score += 5;
+  if (nodes.includes("narrative")) score += writableGap ? 5 : -10;
   return score;
 }
 

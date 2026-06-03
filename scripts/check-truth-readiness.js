@@ -534,6 +534,10 @@ function buildNarrativeFreshnessGate(gate, artifacts = {}) {
   };
 }
 
+function hasStaleSources(gate = {}) {
+  return Array.isArray(gate.staleSources) && gate.staleSources.length > 0;
+}
+
 function normalizeSystemCode(value) {
   return String(value || "").trim();
 }
@@ -640,7 +644,17 @@ function collectBlockers(gates) {
     );
   }
   if (!gates.factCheck.pass) {
-    if (gates.factCheck.metrics?.writableClaimCoverageRatio < gates.factCheck.metrics?.minWritableClaimCoverage) {
+    if (hasStaleSources(gates.factCheck)) {
+      blockers.push(
+        blocker(
+          "fact-check.stale-sources",
+          "P0",
+          "fact-check-report.json is stale; refresh fact-check and downstream gates before rewriting narrative.",
+          ["fact-check", "quality", "truth-readiness"],
+          { staleSources: gates.factCheck.staleSources, quotaImpact: "low" },
+        ),
+      );
+    } else if (gates.factCheck.metrics?.writableClaimCoverageRatio < gates.factCheck.metrics?.minWritableClaimCoverage) {
       blockers.push(
         blocker(
           "fact-check.writable-coverage",
@@ -666,14 +680,26 @@ function collectBlockers(gates) {
     }
   }
   if (!gates.narrative.pass) {
-    blockers.push(
-      blocker(
-        "narrative.quality",
-        "P1",
-        "Narrative quality gate did not pass for business readability or required sections.",
-        ["narrative", "fact-check", "quality", "truth-readiness"],
-      ),
-    );
+    if (hasStaleSources(gates.narrative)) {
+      blockers.push(
+        blocker(
+          "narrative.stale-sources",
+          "P1",
+          "narrative-quality-report.json is stale; refresh quality and truth readiness before rewriting narrative.",
+          ["quality", "truth-readiness"],
+          { staleSources: gates.narrative.staleSources, quotaImpact: "low" },
+        ),
+      );
+    } else {
+      blockers.push(
+        blocker(
+          "narrative.quality",
+          "P1",
+          "Narrative quality gate did not pass for business readability or required sections.",
+          ["narrative", "fact-check", "quality", "truth-readiness"],
+        ),
+      );
+    }
   }
   return blockers;
 }
