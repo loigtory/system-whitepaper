@@ -7738,6 +7738,7 @@ test("real run readiness unifies preflight and final delivery state", () => {
   const os = require("node:os");
   const path = require("node:path");
   const { buildReadinessSourceArtifacts, loadReadinessInputs } = require("./check-truth-readiness");
+  const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
   const {
     buildRealRunReadinessReport,
     renderRealRunReadinessMarkdown,
@@ -7760,6 +7761,28 @@ test("real run readiness unifies preflight and final delivery state", () => {
   fs.writeFileSync(path.join(systemOutput, "quality-report.json"), JSON.stringify({ canFinalize: true }), "utf8");
   fs.writeFileSync(path.join(systemOutput, "narrative-quality-report.json"), JSON.stringify({ canSubmitReview: true }), "utf8");
   fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
+  let state = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
+  for (const nodeId of [
+    "sync",
+    "session",
+    "collect",
+    "inspect",
+    "validate-write",
+    "truth-universe",
+    "truth-claims",
+    "build-spec",
+    "compose-guide",
+    "draft",
+    "summary",
+    "narrative",
+    "fact-check",
+    "quality",
+    "truth-readiness",
+  ]) {
+    state = updateNodeStatus(state, nodeId, nodeId === "validate-write" ? "skipped" : "success");
+  }
+  state = { ...state, overallStatus: "review-pending" };
+  writePipelineState(path.join(systemOutput, "pipeline-state.json"), state);
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
     JSON.stringify({
@@ -7847,7 +7870,31 @@ test("real run readiness unifies preflight and final delivery state", () => {
       summary: { total: 1, accepted: 1, blocked: 0, blockers: 0 },
     },
     summary: { total: 1, ready: 1, blocked: 0, blockers: 0 },
-    systems: [{ code: "adp", status: "ready" }],
+    systems: [
+      {
+        code: "adp",
+        status: "ready",
+        nodeStatus: Object.fromEntries(
+          [
+            "sync",
+            "session",
+            "collect",
+            "inspect",
+            "validate-write",
+            "truth-universe",
+            "truth-claims",
+            "build-spec",
+            "compose-guide",
+            "draft",
+            "summary",
+            "narrative",
+            "fact-check",
+            "quality",
+            "truth-readiness",
+          ].map((nodeId) => [nodeId, nodeId === "validate-write" ? "skipped" : "success"]),
+        ),
+      },
+    ],
   };
   const ready = buildRealRunReadinessReport({
     args: { systems: "adp" },
@@ -7928,6 +7975,43 @@ test("real run readiness unifies preflight and final delivery state", () => {
     }),
     "utf8",
   );
+
+  writePipelineState(path.join(systemOutput, "pipeline-state.json"), { ...state, overallStatus: "failed" });
+  const stalePipelineState = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport,
+    deliveryReport,
+  });
+  assert.equal(stalePipelineState.status, "in-progress");
+  assert.equal(stalePipelineState.canDeliver, false);
+  assert.ok(stalePipelineState.warnings.some((item) => item.id === "delivery.current-truth-invalid"));
+  writePipelineState(path.join(systemOutput, "pipeline-state.json"), state);
+
+  const missingNodeStatusReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport,
+    deliveryReport: {
+      ...deliveryReport,
+      systems: [{ code: "adp", status: "ready" }],
+    },
+  });
+  assert.equal(missingNodeStatusReady.status, "in-progress");
+  assert.equal(missingNodeStatusReady.canDeliver, false);
+  assert.ok(missingNodeStatusReady.warnings.some((item) => item.id === "delivery.current-truth-invalid"));
 
   const dbSecretPath = path.join(dir, "secrets", "db", "adp.json");
   fs.mkdirSync(path.dirname(dbSecretPath), { recursive: true });

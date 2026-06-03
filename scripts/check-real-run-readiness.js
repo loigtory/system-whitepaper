@@ -269,6 +269,16 @@ function truthReportLooksLikeSmoke(report = {}) {
   return generatedBy.includes("smoke") || generatedBy.includes("local-e2e");
 }
 
+function pipelineNodeStatus(state = {}, nodeId) {
+  return state.nodes?.[nodeId]?.status || "missing";
+}
+
+function pipelineNodeStillComplete(currentStatus, recordedStatus) {
+  if (recordedStatus === "success") return currentStatus === "success";
+  if (recordedStatus === "skipped") return currentStatus === "skipped";
+  return true;
+}
+
 function bindDeliveryReportToAcceptance(deliveryReport, acceptanceReport) {
   if (!deliveryReport) return { report: null, warnings: [] };
   if (!acceptanceReport) {
@@ -323,6 +333,28 @@ function bindDeliveryReportToCurrentSources(deliveryReport, context = {}) {
   for (const system of Array.isArray(deliveryReport.systems) ? deliveryReport.systems : []) {
     const code = String(system?.code || system?.systemCode || "").trim();
     if (!code) continue;
+    const pipelineState = readJsonObjectIfExists(path.join(context.outputRoot || "", code, "pipeline-state.json"));
+    if (!pipelineState) {
+      invalidSystems.push({ code, reason: "missing-pipeline-state" });
+      continue;
+    }
+    if (!["review-pending", "finalized"].includes(String(pipelineState.overallStatus || ""))) {
+      invalidSystems.push({ code, reason: "pipeline-not-delivery-state" });
+      continue;
+    }
+    const recordedNodeStatus = system.nodeStatus || {};
+    if (!recordedNodeStatus || !Object.keys(recordedNodeStatus).length) {
+      invalidSystems.push({ code, reason: "missing-delivery-node-status" });
+      continue;
+    }
+    for (const [nodeId, recordedStatus] of Object.entries(recordedNodeStatus)) {
+      const currentStatus = pipelineNodeStatus(pipelineState, nodeId);
+      if (!pipelineNodeStillComplete(currentStatus, recordedStatus)) {
+        invalidSystems.push({ code, reason: `pipeline-node-${nodeId}-${currentStatus}` });
+        break;
+      }
+    }
+    if (invalidSystems.some((item) => item.code === code)) continue;
     const truthReportPath = path.join(context.outputRoot || "", code, "truth-readiness-report.json");
     const truthReport = readJsonObjectIfExists(truthReportPath);
     if (!truthReport) {
@@ -349,7 +381,7 @@ function bindDeliveryReportToCurrentSources(deliveryReport, context = {}) {
         reportScopeWarning(
           "delivery",
           "current-truth-invalid",
-          `Ignored delivery report because current truth-readiness evidence is not delivery-ready for systems: ${invalidSystems.map((item) => `${item.code}:${item.reason}`).join(",")}.`,
+          `Ignored delivery report because current pipeline/truth evidence is not delivery-ready for systems: ${invalidSystems.map((item) => `${item.code}:${item.reason}`).join(",")}.`,
         ),
       ],
     };
