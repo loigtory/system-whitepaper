@@ -11084,6 +11084,16 @@ test("collect database profile writes redacted schema evidence from private meta
   assert.deepEqual(sanitizeSampleRow({ customerProfile: { phone: "13900139000", keep: "ok" } }), {
     customerProfile: "[redacted]",
   });
+  assert.deepEqual(
+    sanitizeSampleRow(
+      { value: "13800138000", payload: { 手机: "13900139000", keep: "ok" } },
+      [{ name: "value", comment: "客户手机号" }],
+    ),
+    {
+      value: "1***0",
+      payload: { 手机: "1***0", keep: "ok" },
+    },
+  );
 });
 
 test("collect database profile supports private read-only connector adapter", async () => {

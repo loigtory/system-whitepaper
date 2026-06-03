@@ -24,9 +24,10 @@ const MAX_CONNECTOR_SAMPLE_TABLES = 50;
 const MAX_CONNECTOR_SAMPLE_COLUMNS = 20;
 const SENSITIVE_VALUE_PATTERN = /\b1[3-9]\d{9}\b|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\b(?:\d{15}|\d{17}[0-9X])\b/i;
 const SENSITIVE_CONTEXT_PATTERN = /(customer|client|user|username)/i;
+const SENSITIVE_LOCALE_PATTERN = /(\u59d3\u540d|\u624b\u673a|\u7535\u8bdd|\u90ae\u7bb1|\u8bc1\u4ef6|\u8eab\u4efd\u8bc1|\u94f6\u884c\u5361|\u5730\u5740|\u5ba2\u6237|\u7528\u6237|\u8d26\u53f7|\u8d26\u6237)/u;
 
 function isSensitiveDataText(text) {
-  return SENSITIVE_DATA_PATTERN.test(text) || SENSITIVE_CONTEXT_PATTERN.test(text);
+  return SENSITIVE_DATA_PATTERN.test(text) || SENSITIVE_CONTEXT_PATTERN.test(text) || SENSITIVE_LOCALE_PATTERN.test(text);
 }
 
 function maskValue(value) {
