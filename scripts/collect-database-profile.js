@@ -23,6 +23,11 @@ const MAX_CONNECTOR_SAMPLE_ROWS = 3;
 const MAX_CONNECTOR_SAMPLE_TABLES = 50;
 const MAX_CONNECTOR_SAMPLE_COLUMNS = 20;
 const SENSITIVE_VALUE_PATTERN = /\b1[3-9]\d{9}\b|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\b(?:\d{15}|\d{17}[0-9X])\b/i;
+const SENSITIVE_CONTEXT_PATTERN = /(customer|client|user|username)/i;
+
+function isSensitiveDataText(text) {
+  return SENSITIVE_DATA_PATTERN.test(text) || SENSITIVE_CONTEXT_PATTERN.test(text);
+}
 
 function maskValue(value) {
   if (value === null || value === undefined || value === "") return value;
@@ -32,19 +37,38 @@ function maskValue(value) {
   return `${text.slice(0, 1)}***${text.slice(-1)}`;
 }
 
+function maskSensitiveSampleValue(value) {
+  if (Array.isArray(value) || (value && typeof value === "object")) return "[redacted]";
+  return maskValue(value);
+}
+
+function sanitizeSampleValue(value) {
+  if (Array.isArray(value)) return value.map((item) => sanitizeSampleValue(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        isSensitiveDataText(key) ? maskSensitiveSampleValue(item) : sanitizeSampleValue(item),
+      ]),
+    );
+  }
+  if (typeof value === "string" && SENSITIVE_VALUE_PATTERN.test(value)) return maskValue(value);
+  return value;
+}
+
 function sanitizeSampleRow(row = {}, columns = []) {
   const sanitized = {};
   const sensitiveKeys = new Set(
     (columns || [])
-      .filter((column) => SENSITIVE_DATA_PATTERN.test(`${column.name || ""} ${column.comment || ""}`))
+      .filter((column) => isSensitiveDataText(`${column.name || ""} ${column.comment || ""}`))
       .map((column) => String(column.name || "")),
   );
   for (const [key, value] of Object.entries(row || {})) {
     const sensitive =
-      SENSITIVE_DATA_PATTERN.test(key) ||
+      isSensitiveDataText(key) ||
       sensitiveKeys.has(key) ||
       (typeof value === "string" && SENSITIVE_VALUE_PATTERN.test(value));
-    sanitized[key] = sensitive ? maskValue(value) : value;
+    sanitized[key] = sensitive ? maskSensitiveSampleValue(value) : sanitizeSampleValue(value);
   }
   return sanitized;
 }
@@ -197,7 +221,7 @@ function resolveConnectorSampleTableLimit(profileConfig = {}) {
 }
 
 function isSensitiveSampleColumn(column = {}) {
-  return SENSITIVE_DATA_PATTERN.test(`${column.name || ""} ${column.comment || ""}`);
+  return isSensitiveDataText(`${column.name || ""} ${column.comment || ""}`);
 }
 
 function selectSampleColumns(table = {}) {

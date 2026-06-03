@@ -11011,9 +11011,20 @@ test("collect database profile writes redacted schema evidence from private meta
               dictionary: ["INIT", "DONE"],
             },
             { name: "customer_phone", type: "varchar", comment: "客户手机号", nullable: "NO", primaryKey: "false" },
+            { name: "payload", type: "json", comment: "扩展信息" },
             { name: "created_time", type: "datetime", comment: "创建时间" },
           ],
-          sampleRows: [{ id: 1, customer_phone: "13800138000", status: "DONE" }],
+          sampleRows: [
+            {
+              id: 1,
+              customer_phone: "13800138000",
+              status: "DONE",
+              payload: {
+                contact: { mobile: "13900139000", email: "owner@example.com" },
+                tags: ["normal", "11010519491231002X"],
+              },
+            },
+          ],
         },
       ],
     }),
@@ -11049,6 +11060,10 @@ test("collect database profile writes redacted schema evidence from private meta
   assert.equal(profile.source.secret.password, "[redacted]");
   assert.equal(profile.source.secret.host, "[redacted]");
   assert.equal(profile.tables[0].sampleRows[0].customer_phone, "1***0");
+  assert.equal(profile.tables[0].sampleRows[0].payload.contact.mobile, "1***0");
+  assert.equal(profile.tables[0].sampleRows[0].payload.contact.email, "o***m");
+  assert.equal(profile.tables[0].sampleRows[0].payload.tags[0], "normal");
+  assert.equal(profile.tables[0].sampleRows[0].payload.tags[1], "1***X");
   assert.equal(profile.entityCandidates[0].statusColumns[0].name, "status");
   const customerPhoneColumn = profile.tables[0].columns.find((column) => column.name === "customer_phone");
   assert.equal(customerPhoneColumn.nullable, false);
@@ -11062,7 +11077,13 @@ test("collect database profile writes redacted schema evidence from private meta
     password: "[redacted]",
     nested: { token: "[redacted]", keep: "ok" },
   });
-  assert.equal(sanitizeSampleRow({ customerName: "张三" }).customerName, "***");
+  assert.deepEqual(sanitizeSampleRow({ customerName: "张三", payload: { phone: "13900139000", keep: "ok" } }), {
+    customerName: "***",
+    payload: { phone: "1***0", keep: "ok" },
+  });
+  assert.deepEqual(sanitizeSampleRow({ customerProfile: { phone: "13900139000", keep: "ok" } }), {
+    customerProfile: "[redacted]",
+  });
 });
 
 test("collect database profile supports private read-only connector adapter", async () => {
