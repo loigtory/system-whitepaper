@@ -7690,7 +7690,11 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.equal(ready.configPath, configPath);
   assert.equal(ready.outputRoot, outputRoot);
   assert.equal(ready.summary.ready, 1);
+  assert.equal(ready.summary.whitepapers, 1);
   assert.equal(ready.summary.staleSystems, 0);
+  assert.equal(ready.systems[0].whitepaperExists, true);
+  assert.equal(ready.systems[0].pendingReviewExists, true);
+  assert.equal(ready.systems[0].finalExists, false);
   assert.match(renderDeliveryReadinessMarkdown(ready), /Delivery Readiness Report/);
   const artifacts = writeDeliveryReadinessReport(outputRoot, ready);
   const stateSummary = buildDeliveryReadinessStateSummary(ready, artifacts);
@@ -7699,6 +7703,25 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.equal(stateSummary.artifacts.deliveryReadinessMarkdown, "delivery-readiness-report.md");
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.json")), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.md")), true);
+
+  fs.unlinkSync(path.join(systemOutput, "whitepaper.pending-review.md"));
+  const missingWhitepaper = buildDeliveryReadinessReport({ acceptanceReport });
+  assert.equal(missingWhitepaper.status, "blocked");
+  assert.equal(missingWhitepaper.canDeliver, false);
+  assert.equal(missingWhitepaper.summary.whitepapers, 0);
+  assert.ok(missingWhitepaper.blockers.some((item) => item.id === "delivery.whitepaper-missing"));
+  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
+
+  fs.writeFileSync(
+    path.join(systemOutput, "whitepaper.final.md"),
+    "# AI保单数据闭环平台功能白皮书\n\n本地冒烟，不代表最终业务白皮书内容。",
+    "utf8",
+  );
+  const smokeFinal = buildDeliveryReadinessReport({ acceptanceReport });
+  assert.equal(smokeFinal.status, "blocked");
+  assert.equal(smokeFinal.canDeliver, false);
+  assert.ok(smokeFinal.blockers.some((item) => item.id === "delivery.smoke-whitepaper"));
+  fs.unlinkSync(path.join(systemOutput, "whitepaper.final.md"));
 
   fs.writeFileSync(
     path.join(systemOutput, "verified-claims.json"),
@@ -7913,6 +7936,54 @@ test("real run readiness unifies preflight and final delivery state", () => {
   const artifacts = writeRealRunReadinessReport(outputRoot, ready);
   assert.equal(fs.existsSync(artifacts.jsonPath), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "real-run-readiness-report.md")), true);
+
+  fs.writeFileSync(
+    path.join(systemOutput, "whitepaper.pending-review.md"),
+    "# AI保单数据闭环平台功能白皮书\n\n本地冒烟，不代表最终业务白皮书内容。",
+    "utf8",
+  );
+  const staleWhitepaper = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport,
+    deliveryReport,
+  });
+  assert.equal(staleWhitepaper.status, "in-progress");
+  assert.equal(staleWhitepaper.canDeliver, false);
+  assert.ok(staleWhitepaper.warnings.some((item) => item.id === "delivery.current-truth-invalid"));
+  assert.match(
+    staleWhitepaper.warnings.find((item) => item.id === "delivery.current-truth-invalid")?.message || "",
+    /whitepaper.*adp:smoke-whitepaper/,
+  );
+  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
+
+  fs.unlinkSync(path.join(systemOutput, "whitepaper.pending-review.md"));
+  const missingWhitepaperReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport,
+    deliveryReport,
+  });
+  assert.equal(missingWhitepaperReady.status, "in-progress");
+  assert.equal(missingWhitepaperReady.canDeliver, false);
+  assert.ok(missingWhitepaperReady.warnings.some((item) => item.id === "delivery.current-truth-invalid"));
+  assert.match(
+    missingWhitepaperReady.warnings.find((item) => item.id === "delivery.current-truth-invalid")?.message || "",
+    /whitepaper.*adp:missing-whitepaper/,
+  );
+  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
 
   fs.writeFileSync(
     path.join(systemOutput, "verified-claims.json"),

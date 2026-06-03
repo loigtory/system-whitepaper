@@ -269,6 +269,32 @@ function truthReportLooksLikeSmoke(report = {}) {
   return generatedBy.includes("smoke") || generatedBy.includes("local-e2e");
 }
 
+function readTextIfExists(filePath) {
+  try {
+    return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+  } catch {
+    return "";
+  }
+}
+
+function fileExists(filePath) {
+  try {
+    return fs.existsSync(filePath);
+  } catch {
+    return false;
+  }
+}
+
+function markdownLooksLikeSmoke(markdown = "") {
+  const text = String(markdown || "");
+  if (/local-e2e-smoke|smoke gate|smoke artifact/i.test(text)) return true;
+  if (text.includes("\u672c\u5730\u5192\u70df") || text.includes("\u5192\u70df")) return true;
+  if (text.includes("\u4e0d\u4ee3\u8868\u6700\u7ec8\u4e1a\u52a1\u767d\u76ae\u4e66")) return true;
+  return /local-e2e-smoke|smoke gate|本地冒烟|冒烟|不代表最终业务白皮书|不代表最终业务白皮书内容/i.test(
+    String(markdown || ""),
+  );
+}
+
 function pipelineNodeStatus(state = {}, nodeId) {
   return state.nodes?.[nodeId]?.status || "missing";
 }
@@ -355,6 +381,19 @@ function bindDeliveryReportToCurrentSources(deliveryReport, context = {}) {
       }
     }
     if (invalidSystems.some((item) => item.code === code)) continue;
+    const systemOutputDir = path.join(context.outputRoot || "", code);
+    const pendingPath = path.join(systemOutputDir, "whitepaper.pending-review.md");
+    const finalPath = path.join(systemOutputDir, "whitepaper.final.md");
+    const pendingMarkdown = readTextIfExists(pendingPath);
+    const finalMarkdown = readTextIfExists(finalPath);
+    if (!fileExists(pendingPath) && !fileExists(finalPath)) {
+      invalidSystems.push({ code, reason: "missing-whitepaper" });
+      continue;
+    }
+    if (markdownLooksLikeSmoke(pendingMarkdown) || markdownLooksLikeSmoke(finalMarkdown)) {
+      invalidSystems.push({ code, reason: "smoke-whitepaper" });
+      continue;
+    }
     const truthReportPath = path.join(context.outputRoot || "", code, "truth-readiness-report.json");
     const truthReport = readJsonObjectIfExists(truthReportPath);
     if (!truthReport) {
@@ -369,7 +408,7 @@ function bindDeliveryReportToCurrentSources(deliveryReport, context = {}) {
       invalidSystems.push({ code, reason: "truth-not-currently-ready" });
       continue;
     }
-    const staleSources = findStaleReadinessSources(path.join(context.outputRoot || "", code), truthReport);
+    const staleSources = findStaleReadinessSources(systemOutputDir, truthReport);
     if (staleSources.length) {
       invalidSystems.push({ code, reason: "stale-truth-sources" });
     }
@@ -381,7 +420,7 @@ function bindDeliveryReportToCurrentSources(deliveryReport, context = {}) {
         reportScopeWarning(
           "delivery",
           "current-truth-invalid",
-          `Ignored delivery report because current pipeline/truth evidence is not delivery-ready for systems: ${invalidSystems.map((item) => `${item.code}:${item.reason}`).join(",")}.`,
+          `Ignored delivery report because current pipeline/truth/whitepaper evidence is not delivery-ready for systems: ${invalidSystems.map((item) => `${item.code}:${item.reason}`).join(",")}.`,
         ),
       ],
     };

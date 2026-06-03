@@ -73,6 +73,10 @@ function truthReportLooksLikeSmoke(report = {}) {
 }
 
 function markdownLooksLikeSmoke(markdown = "") {
+  const text = String(markdown || "");
+  if (/local-e2e-smoke|smoke gate|smoke artifact/i.test(text)) return true;
+  if (text.includes("\u672c\u5730\u5192\u70df") || text.includes("\u5192\u70df")) return true;
+  if (text.includes("\u4e0d\u4ee3\u8868\u6700\u7ec8\u4e1a\u52a1\u767d\u76ae\u4e66")) return true;
   return /local-e2e-smoke|smoke gate|本地冒烟|不代表最终业务白皮书|不代表最终业务白皮书内容/i.test(
     String(markdown || ""),
   );
@@ -83,6 +87,14 @@ function readTextIfExists(filePath) {
     return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
   } catch {
     return "";
+  }
+}
+
+function fileExists(filePath) {
+  try {
+    return fs.existsSync(filePath);
+  } catch {
+    return false;
   }
 }
 
@@ -151,7 +163,13 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
   const outputDir = path.join(context.outputRoot || "", code);
   const state = readOptionalJsonObject(path.join(outputDir, "pipeline-state.json"));
   const truth = readOptionalJsonObject(path.join(outputDir, "truth-readiness-report.json"));
-  const pendingMarkdown = readTextIfExists(path.join(outputDir, "whitepaper.pending-review.md"));
+  const pendingPath = path.join(outputDir, "whitepaper.pending-review.md");
+  const finalPath = path.join(outputDir, "whitepaper.final.md");
+  const pendingReviewExists = fileExists(pendingPath);
+  const finalExists = fileExists(finalPath);
+  const whitepaperExists = pendingReviewExists || finalExists;
+  const pendingMarkdown = readTextIfExists(pendingPath);
+  const finalMarkdown = readTextIfExists(finalPath);
   const targetTruthScorePercent = Number(
     options.targetTruthScorePercent || DEFAULT_TARGET_TRUTH_SCORE_PERCENT,
   );
@@ -235,6 +253,22 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
       }),
     );
   }
+  if (markdownLooksLikeSmoke(finalMarkdown)) {
+    blockers.push(
+      blocker("delivery.smoke-whitepaper", "Final whitepaper contains local smoke wording.", {
+        systemCode: code,
+        rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+      }),
+    );
+  }
+  if (!whitepaperExists) {
+    blockers.push(
+      blocker("delivery.whitepaper-missing", "No pending-review or final whitepaper Markdown exists.", {
+        systemCode: code,
+        rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+      }),
+    );
+  }
 
   return {
     code,
@@ -244,6 +278,9 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
     accepted: Boolean(systemReport.accepted),
     scorePercent: truth ? percentFromReport(truth) : 0,
     canSubmitReview: Boolean(truth?.canSubmitReview),
+    whitepaperExists,
+    pendingReviewExists,
+    finalExists,
     databaseProfileConfigured: Boolean(systemReport.databaseProfileConfigured),
     databaseEvidenceAvailable: Boolean(systemReport.databaseEvidenceAvailable),
     pipelineStatus: state?.overallStatus || "",
@@ -251,7 +288,9 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
     staleSourceCount: staleSources.length,
     staleSources: staleSources.slice(0, 12),
     smokeEvidence:
-      Boolean(truth && truthReportLooksLikeSmoke(truth)) || markdownLooksLikeSmoke(pendingMarkdown),
+      Boolean(truth && truthReportLooksLikeSmoke(truth)) ||
+      markdownLooksLikeSmoke(pendingMarkdown) ||
+      markdownLooksLikeSmoke(finalMarkdown),
     blockers,
     warnings,
   };
@@ -264,6 +303,7 @@ function summarizeSystems(systems = []) {
     blocked: systems.filter((item) => !item.ready).length,
     accepted: systems.filter((item) => item.accepted).length,
     smokeEvidence: systems.filter((item) => item.smokeEvidence).length,
+    whitepapers: systems.filter((item) => item.whitepaperExists).length,
     staleSystems: systems.filter((item) => Number(item.staleSourceCount || 0) > 0).length,
     databaseBacked: systems.filter((item) => item.databaseEvidenceAvailable).length,
     databaseConfigured: systems.filter((item) => item.databaseProfileConfigured).length,
