@@ -62,22 +62,59 @@ function claimTerms(claim = {}) {
   return Array.from(new Set(terms.map(normalizeTerm).filter(shouldTrackTerm)));
 }
 
-function claimCoverageTerms(claim = {}) {
-  const terms = [
-    claim.subject,
+function flattenEvidenceTerms(value) {
+  if (Array.isArray(value)) return value.flatMap((item) => flattenEvidenceTerms(item));
+  if (!value || typeof value !== "object") return [value];
+  return Object.values(value).flatMap((item) => flattenEvidenceTerms(item));
+}
+
+function uniqueTerms(items = []) {
+  return Array.from(new Set(items.map(normalizeTerm).filter(shouldTrackTerm)));
+}
+
+function claimPrimaryCoverageTerms(claim = {}) {
+  return uniqueTerms([
     claim.function,
+    claim.subject,
     claim.entity,
     claim.table,
-    claim.evidence?.comment,
-  ];
-  return Array.from(new Set(terms.map(normalizeTerm).filter(shouldTrackTerm)));
+  ]);
+}
+
+function claimContextCoverageTerms(claim = {}) {
+  const primary = new Set(claimPrimaryCoverageTerms(claim));
+  return uniqueTerms([
+    claim.module,
+    claim.entity,
+    claim.table,
+    ...flattenEvidenceTerms(claim.evidence || {}),
+  ]).filter((term) => !primary.has(term));
+}
+
+function lineCoverageForWritableClaim(line, claim = {}) {
+  const primaryTerms = claimPrimaryCoverageTerms(claim);
+  if (!primaryTerms.length) return null;
+  const contextTerms = claimContextCoverageTerms(claim);
+  const matchedPrimaryTerms = primaryTerms.filter((term) => lineContainsTerm(line, term));
+  if (!matchedPrimaryTerms.length) return null;
+  const matchedContextTerms = contextTerms.filter((term) => lineContainsTerm(line, term));
+  const enoughContext =
+    matchedContextTerms.length > 0 ||
+    matchedPrimaryTerms.length >= 2 ||
+    contextTerms.length === 0;
+  if (!enoughContext) return null;
+  return {
+    claimId: claim.id || "",
+    matchedPrimaryTerms,
+    matchedContextTerms,
+    requiredContextTerms: contextTerms,
+  };
 }
 
 function buildTermIndex(claims = []) {
   const allTerms = new Map();
   const writableTerms = new Map();
   const nonWritableTerms = new Map();
-  const writableCoverageTerms = new Map();
 
   for (const claim of claims || []) {
     for (const term of claimTerms(claim)) {
@@ -92,26 +129,13 @@ function buildTermIndex(claims = []) {
         nonWritableTerms.get(term).push(claim);
       }
     }
-    if (claim.writable) {
-      for (const term of claimCoverageTerms(claim)) {
-        if (!writableCoverageTerms.has(term)) writableCoverageTerms.set(term, []);
-        writableCoverageTerms.get(term).push(claim);
-      }
-    }
   }
 
-  return { allTerms, writableTerms, nonWritableTerms, writableCoverageTerms };
+  return { allTerms, writableTerms, nonWritableTerms };
 }
 
 function lineContainsTerm(line, term) {
   return stripMarkdownSyntax(line).includes(term);
-}
-
-function lineCoversWritableClaim(line, term, claim, candidates = []) {
-  if (!lineContainsTerm(line, term)) return false;
-  if ((candidates || []).length <= 1) return true;
-  const module = normalizeTerm(claim.module);
-  return Boolean(module && lineContainsTerm(line, module));
 }
 
 function extractClaimReferences(markdown) {
@@ -161,7 +185,8 @@ function buildFactCheckReport(input = {}) {
   const writableClaimIds = claims
     .filter((claim) => claim.writable && compactString(claim.id))
     .map((claim) => claim.id);
-  const { allTerms, writableTerms, nonWritableTerms, writableCoverageTerms } = buildTermIndex(claims);
+  const writableClaims = claims.filter((claim) => claim.writable);
+  const { allTerms, writableTerms, nonWritableTerms } = buildTermIndex(claims);
   const failures = [];
   const warnings = [];
   const supported = [];
@@ -221,14 +246,17 @@ function buildFactCheckReport(input = {}) {
       }
     }
 
-    for (const [term, writableClaims] of writableCoverageTerms.entries()) {
-      for (const claim of writableClaims) {
-        if (!lineCoversWritableClaim(line, term, claim, writableClaims)) continue;
-        const key = `${claim.id}:${term}:${lineNumber}`;
-        if (seenWritableCoverage.has(key)) continue;
-        writableCoverageMatches.push({ line: lineNumber, term, claimId: claim.id });
-        seenWritableCoverage.add(key);
-      }
+    for (const claim of writableClaims) {
+      const coverage = lineCoverageForWritableClaim(line, claim);
+      if (!coverage) continue;
+      const key = `${claim.id}:${lineNumber}`;
+      if (seenWritableCoverage.has(key)) continue;
+      writableCoverageMatches.push({
+        line: lineNumber,
+        term: coverage.matchedPrimaryTerms[0] || "",
+        ...coverage,
+      });
+      seenWritableCoverage.add(key);
     }
   }
 

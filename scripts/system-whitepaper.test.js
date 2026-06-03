@@ -12448,6 +12448,59 @@ test("fact check blocks low writable claim coverage", () => {
   assert.deepEqual(report.missingWritableClaimIds, ["function:保单任务:任务详情"]);
 });
 
+test("fact check requires contextual support for writable claim coverage", () => {
+  const { buildFactCheckReport } = require("./fact-check-whitepaper");
+  const claimsArtifact = {
+    claims: [
+      {
+        id: "function:保单任务:任务列表",
+        type: "function-presence",
+        subject: "任务列表",
+        module: "保单任务",
+        writable: true,
+        status: "confirmed",
+        evidence: {
+          queryFields: ["保单号"],
+          tableColumns: ["任务状态"],
+        },
+      },
+    ],
+  };
+  const weakMarkdown = [
+    "# AI保单数据闭环平台功能白皮书",
+    "### 任务列表",
+    "任务列表用于查看信息。",
+    "",
+  ].join("\n");
+
+  const weakReport = buildFactCheckReport({
+    markdown: weakMarkdown,
+    claimsArtifact,
+    minWritableClaimCoverage: 1,
+  });
+
+  assert.equal(weakReport.canFinalize, false);
+  assert.deepEqual(weakReport.coveredWritableClaimIds, []);
+  assert.deepEqual(weakReport.missingWritableClaimIds, ["function:保单任务:任务列表"]);
+
+  const contextualMarkdown = [
+    "# AI保单数据闭环平台功能白皮书",
+    "### 任务列表",
+    "保单任务模块提供任务列表，可结合保单号和任务状态查看保单任务。",
+    "",
+  ].join("\n");
+  const contextualReport = buildFactCheckReport({
+    markdown: contextualMarkdown,
+    claimsArtifact,
+    minWritableClaimCoverage: 1,
+  });
+
+  assert.equal(contextualReport.canFinalize, true);
+  assert.deepEqual(contextualReport.coveredWritableClaimIds, ["function:保单任务:任务列表"]);
+  assert.equal(contextualReport.writableCoverageMatches[0].claimId, "function:保单任务:任务列表");
+  assert.ok(contextualReport.writableCoverageMatches[0].matchedContextTerms.includes("保单任务"));
+});
+
 test("fact check blocks unknown headings and weak body assertions", () => {
   const { buildFactCheckReport } = require("./fact-check-whitepaper");
   const claimsArtifact = {
