@@ -9648,6 +9648,27 @@ test("approved review rejects smoke truth readiness by default", () => {
   assert.equal(fs.existsSync(path.join(e2eDir, "whitepaper.final.md")), false);
 });
 
+test("approved review rejects smoke wording in pending markdown even with passing truth readiness", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runReviewDecision } = require("./run-review-decision");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "review-smoke-markdown-"));
+  fs.writeFileSync(
+    path.join(dir, "whitepaper.pending-review.md"),
+    "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\nlocal-e2e-smoke artifact, not final business whitepaper.",
+    "utf8",
+  );
+  writePassingTruthReadinessReport(dir);
+
+  assert.throws(
+    () => runReviewDecision({ inputDir: dir, status: "approved" }),
+    /pending-review markdown contains smoke wording/,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "whitepaper.final.md")), false);
+});
+
 test("approved review tolerates malformed optional pipeline state", () => {
   const fs = require("node:fs");
   const os = require("node:os");

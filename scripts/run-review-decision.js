@@ -292,8 +292,12 @@ function truthReadinessLooksLikeSmoke(report = {}) {
 }
 
 function markdownLooksLikeSmoke(markdown = "") {
+  const text = String(markdown || "");
+  if (/local-e2e-smoke|smoke gate|smoke artifact/i.test(text)) return true;
+  if (text.includes("\u672c\u5730\u5192\u70df") || text.includes("\u5192\u70df")) return true;
+  if (text.includes("\u4e0d\u4ee3\u8868\u6700\u7ec8\u4e1a\u52a1\u767d\u76ae\u4e66")) return true;
   return /local-e2e-smoke|smoke gate|本地冒烟|冒烟|不代表最终业务白皮书|不代表最终业务白皮书内容/i.test(
-    String(markdown || ""),
+    text,
   );
 }
 
