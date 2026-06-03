@@ -188,31 +188,48 @@ function writePassingTruthArtifacts(dir, options = {}) {
     );
   }
   const functionUniversePath = path.join(dir, "function-universe.json");
-  if (!fs.existsSync(functionUniversePath)) {
-    fs.writeFileSync(
-      functionUniversePath,
-      JSON.stringify({
-        artifactType: "function-universe",
-        system: { code: options.systemCode || "adp", name: options.systemName || "AI保单数据闭环平台" },
-        modules: [{ name: "保单任务", sources: [{ type: "ui-module", id: "保单任务", label: "保单任务" }] }],
-        functions: [
-          {
-            id: "function:保单任务:任务列表",
-            name: "任务列表",
-            module: "保单任务",
-            confidence: "high",
-            sources: [{ type: "ui-function", id: "function:保单任务:任务列表", label: "任务列表" }],
-          },
-        ],
-        sourceArtifacts: buildUniverseSourceArtifacts({
-          evidenceSummary: path.join(dir, "evidence-summary.json"),
-          databaseProfile: databaseProfilePath,
-          entityModel: path.join(dir, "entity-model.json"),
-        }),
-      }),
-      "utf8",
-    );
+  const defaultFunctionUniverse = {
+    artifactType: "function-universe",
+    system: { code: options.systemCode || "adp", name: options.systemName || "AI保单数据闭环平台" },
+    modules: [{ name: "保单任务", sources: [{ type: "ui-module", id: "保单任务", label: "保单任务" }] }],
+    functions: [
+      {
+        id: "function:保单任务:任务列表",
+        name: "任务列表",
+        module: "保单任务",
+        confidence: "high",
+        sources: [{ type: "ui-function", id: "function:保单任务:任务列表", label: "任务列表" }],
+      },
+    ],
+  };
+  let functionUniverse = defaultFunctionUniverse;
+  try {
+    const existing = fs.existsSync(functionUniversePath)
+      ? JSON.parse(fs.readFileSync(functionUniversePath, "utf8"))
+      : null;
+    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+      functionUniverse = {
+        ...defaultFunctionUniverse,
+        ...existing,
+        modules: Array.isArray(existing.modules) && existing.modules.length ? existing.modules : defaultFunctionUniverse.modules,
+        functions: Array.isArray(existing.functions) && existing.functions.length ? existing.functions : defaultFunctionUniverse.functions,
+      };
+    }
+  } catch {
+    functionUniverse = defaultFunctionUniverse;
   }
+  fs.writeFileSync(
+    functionUniversePath,
+    JSON.stringify({
+      ...functionUniverse,
+      sourceArtifacts: buildUniverseSourceArtifacts({
+        evidenceSummary: path.join(dir, "evidence-summary.json"),
+        databaseProfile: databaseProfilePath,
+        entityModel: path.join(dir, "entity-model.json"),
+      }),
+    }),
+    "utf8",
+  );
   fs.writeFileSync(
     path.join(dir, "verified-claims.json"),
     JSON.stringify({
@@ -12705,6 +12722,52 @@ test("truth readiness rejects stale database truth lineage", () => {
   });
   assert.equal(passing.canSubmitReview, true);
   assert.equal(passing.gates.lineage.pass, true);
+
+  fs.writeFileSync(
+    path.join(dir, "evidence-summary.json"),
+    JSON.stringify({
+      system: { code: "adp", name: "AI保单数据闭环平台" },
+      modules: [{ name: "批改任务", entry: "批改任务 > 任务列表" }],
+      functions: [
+        {
+          module: "批改任务",
+          name: "批改任务列表",
+          menuPath: "批改任务 > 任务列表",
+          queryFields: ["批改号"],
+          tableColumns: ["批改号", "状态"],
+        },
+      ],
+    }),
+    "utf8",
+  );
+  const staleEvidenceSummary = runTruthReadinessCheck({
+    inputDir: dir,
+    requireDatabaseEvidence: true,
+    systemCode: "adp",
+  });
+  assert.equal(staleEvidenceSummary.canSubmitReview, false);
+  assert.equal(staleEvidenceSummary.gates.lineage.pass, false);
+  assert.ok(staleEvidenceSummary.gates.lineage.failures.some((item) => /evidence-summary\.json/.test(item)));
+  assert.ok(staleEvidenceSummary.blockers.some((item) => item.id === "truth.lineage-stale"));
+
+  fs.writeFileSync(
+    path.join(dir, "evidence-summary.json"),
+    JSON.stringify({
+      system: { code: "adp", name: "AI保单数据闭环平台" },
+      modules: [{ name: "保单任务", entry: "保单任务 > 任务列表" }],
+      functions: [
+        {
+          module: "保单任务",
+          name: "任务列表",
+          menuPath: "保单任务 > 任务列表",
+          queryFields: ["保单号", "任务状态"],
+          tableColumns: ["保单号", "状态"],
+          screenshots: [{ id: "shot-1", file: "screenshots/task.png" }],
+        },
+      ],
+    }),
+    "utf8",
+  );
 
   fs.unlinkSync(path.join(dir, "database-profile.json"));
   const missingSource = runTruthReadinessCheck({

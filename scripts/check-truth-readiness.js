@@ -168,6 +168,7 @@ function buildLineageGate(artifacts = {}) {
     ["databaseProfile", artifacts.dataDictionary, artifacts.databaseProfile, "data-dictionary.json"],
     ["databaseProfile", artifacts.entityModel, artifacts.databaseProfile, "entity-model.json"],
     ["dataDictionary", artifacts.entityModel, artifacts.dataDictionary, "entity-model.json"],
+    ["evidenceSummary", artifacts.functionUniverse, artifacts.evidenceSummary, "function-universe.json"],
     ["databaseProfile", artifacts.functionUniverse, artifacts.databaseProfile, "function-universe.json"],
     ["entityModel", artifacts.functionUniverse, artifacts.entityModel, "function-universe.json"],
     ["functionUniverse", artifacts.claims, artifacts.functionUniverse, "verified-claims.json"],
