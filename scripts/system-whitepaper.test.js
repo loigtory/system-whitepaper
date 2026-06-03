@@ -12574,7 +12574,10 @@ test("build function universe merges UI functions and redacted database entities
     path.join(dir, "entity-model.json"),
     JSON.stringify({
       artifactType: "entity-model",
+      version: 1,
+      generatedAt: "2026-06-03T00:00:00.000Z",
       system: { code: "adp", name: "AI保单数据闭环平台" },
+      source: { artifact: "data-dictionary.json" },
       entities: [
         {
           entity: "保单任务",
@@ -12596,6 +12599,21 @@ test("build function universe merges UI functions and redacted database entities
           sources: [{ type: "db-foreign-key", id: "adp_test.policy_task.policy_id", label: "policy" }],
         },
       ],
+      metrics: {
+        entityCount: 1,
+        relationCount: 1,
+        statusAwareEntityCount: 1,
+        sampleBackedEntityCount: 1,
+      },
+      safety: {
+        rawSecretsIncluded: false,
+        rawSampleRowsIncluded: false,
+        databaseOnlyClaimsRequireUiConfirmation: true,
+      },
+      sourceArtifacts: {
+        databaseProfile: { file: "database-profile.json", fingerprint: { exists: true, size: 1, sha256: "fixture" } },
+        dataDictionary: { file: "data-dictionary.json", fingerprint: { exists: true, size: 1, sha256: "fixture" } },
+      },
     }),
     "utf8",
   );
@@ -12708,6 +12726,66 @@ test("build function universe rejects unsafe optional database profile before wr
   assert.throws(
     () => buildFunctionUniverseFromDir(dir),
     /not safely redacted.*source\.secret\.username.*user_email/s,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "function-universe.json")), false);
+});
+
+test("build function universe rejects invalid optional entity model before writing artifact", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    buildFunctionUniverseArtifact,
+    buildFunctionUniverseFromDir,
+  } = require("./build-function-universe");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "function-universe-bad-entity-model-"));
+  const evidenceSummary = {
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    modules: [{ name: "AI任务" }],
+    functions: [{ module: "AI任务", name: "任务列表", menuPath: "AI任务 > 任务列表" }],
+  };
+  const databaseProfile = {
+    artifactType: "database-profile",
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    safety: { secretRedacted: true },
+    entityCandidates: [{ entity: "AI任务", table: "adp_test.ai_task" }],
+  };
+  fs.writeFileSync(path.join(dir, "evidence-summary.json"), JSON.stringify(evidenceSummary), "utf8");
+  fs.writeFileSync(path.join(dir, "database-profile.json"), JSON.stringify(databaseProfile), "utf8");
+  fs.writeFileSync(path.join(dir, "entity-model.json"), "{bad json", "utf8");
+
+  assert.throws(
+    () => buildFunctionUniverseFromDir(dir),
+    /Entity model is malformed/,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "function-universe.json")), false);
+
+  const invalidEntityModel = {
+    artifactType: "entity-model",
+    version: 1,
+    generatedAt: "2026-06-03T00:00:00.000Z",
+    source: { artifact: "data-dictionary.json" },
+    entities: [{ entity: "AI任务", table: "adp_test.ai_task" }],
+    relations: [],
+    metrics: { entityCount: 2, relationCount: 0 },
+    safety: {
+      rawSecretsIncluded: false,
+      rawSampleRowsIncluded: false,
+      databaseOnlyClaimsRequireUiConfirmation: true,
+    },
+    sourceArtifacts: {
+      databaseProfile: { file: "database-profile.json", fingerprint: { exists: true, size: 1, sha256: "fixture" } },
+      dataDictionary: { file: "data-dictionary.json", fingerprint: { exists: true, size: 1, sha256: "fixture" } },
+    },
+  };
+  fs.writeFileSync(path.join(dir, "entity-model.json"), JSON.stringify(invalidEntityModel), "utf8");
+  assert.throws(
+    () => buildFunctionUniverseArtifact({ evidenceSummary, databaseProfile, entityModel: invalidEntityModel }),
+    /not a valid entity model artifact.*entity-model\.json metrics\.entityCount must match/s,
+  );
+  assert.throws(
+    () => buildFunctionUniverseFromDir(dir),
+    /not a valid entity model artifact.*entity-model\.json metrics\.entityCount must match/s,
   );
   assert.equal(fs.existsSync(path.join(dir, "function-universe.json")), false);
 });

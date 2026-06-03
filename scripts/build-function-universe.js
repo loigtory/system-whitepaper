@@ -10,6 +10,7 @@ const {
 } = require("./system-whitepaper-lib");
 const {
   assertValidDatabaseProfileArtifact,
+  assertValidEntityModelArtifact,
   scanDatabaseProfileSafety,
 } = require("./check-truth-readiness");
 
@@ -213,11 +214,26 @@ function assertSafeDatabaseProfile(databaseProfile = {}) {
   }
 }
 
+function assertValidEntityModelInput(entityModel = {}) {
+  if (!hasObjectContent(entityModel)) return;
+  try {
+    assertValidEntityModelArtifact(entityModel);
+  } catch (error) {
+    throw new Error(
+      [
+        "entity-model.json is not a valid entity model artifact; refusing to build function universe artifacts.",
+        error.message,
+      ].join(" "),
+    );
+  }
+}
+
 function buildFunctionUniverseArtifact(input = {}) {
   const evidenceSummary = input.evidenceSummary || {};
   const databaseProfile = input.databaseProfile || {};
   const entityModel = input.entityModel || {};
   assertSafeDatabaseProfile(databaseProfile);
+  assertValidEntityModelInput(entityModel);
   const modules = buildModuleUniverse(evidenceSummary);
   const functions = buildFunctionUniverse(evidenceSummary);
   const entities = buildEntityUniverse({ databaseProfile, entityModel });
