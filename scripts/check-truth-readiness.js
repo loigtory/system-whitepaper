@@ -9,6 +9,7 @@ const {
   assertValidVerifiedClaimsArtifact,
 } = require("./fact-check-whitepaper");
 const { assertValidNarrativeQualityReportArtifact } = require("./check-narrative");
+const { assertValidQualityReportArtifact } = require("./check-quality");
 
 const DEFAULT_THRESHOLD = 0.95;
 const REDACTED_VALUE = "[redacted]";
@@ -366,6 +367,15 @@ function action(id, message, rerunNodes = [], extra = {}) {
 
 function buildEvidenceGate(artifact) {
   const value = artifact.value || {};
+  const contractFailures = [];
+  if (artifact.status === "ok") {
+    try {
+      assertValidQualityReportArtifact(value);
+    } catch (error) {
+      contractFailures.push(error.message);
+    }
+  }
+  const artifactContractValid = artifact.status === "ok" && contractFailures.length === 0;
   const metricKeys = [
     "menuCoverage",
     "corePageScreenshotCoverage",
@@ -382,16 +392,21 @@ function buildEvidenceGate(artifact) {
   if (artifact.status !== "ok") {
     failures.push(`${artifact.file} is ${artifact.status}.`);
   }
+  failures.push(...contractFailures);
   for (const failure of Array.isArray(value.failures) ? value.failures : []) {
     failures.push(String(failure));
   }
-  const pass = artifact.status === "ok" && value.canFinalize === true && failures.length === 0;
+  const pass = artifactContractValid && value.canFinalize === true && failures.length === 0;
+  const normalizedScore = artifactContractValid ? score : 0;
   return {
     id: "evidence",
     label: "Evidence coverage and safety",
     pass,
-    score,
-    scorePercent: percent(score),
+    artifactStatus: artifact.status,
+    artifactContractValid,
+    contractFailures,
+    score: normalizedScore,
+    scorePercent: percent(normalizedScore),
     metrics,
     counts: value.counts || {},
     failures,
@@ -798,11 +813,16 @@ function buildDatabaseGate(artifacts, options = {}) {
 function collectBlockers(gates) {
   const blockers = [];
   if (!gates.evidence.pass) {
+    const invalidArtifact =
+      gates.evidence.artifactStatus === "invalid" ||
+      (Array.isArray(gates.evidence.contractFailures) && gates.evidence.contractFailures.length > 0);
     blockers.push(
       blocker(
-        "evidence.coverage-or-safety",
+        invalidArtifact ? "evidence.invalid-artifact" : "evidence.coverage-or-safety",
         "P0",
-        "Evidence coverage, traceability, or write-operation safety gate did not pass.",
+        invalidArtifact
+          ? "quality-report.json is not a valid quality report artifact."
+          : "Evidence coverage, traceability, or write-operation safety gate did not pass.",
         ["collect", "inspect", "validate-write", "quality", "truth-readiness"],
       ),
     );

@@ -47,6 +47,33 @@ function readOperationGuideGate(gatePath) {
   return readRequiredJsonObject(gatePath, { label: "Operation guide gate" });
 }
 
+function assertValidQualityReportArtifact(report = {}) {
+  if (!report || typeof report !== "object" || Array.isArray(report)) {
+    throw new Error("quality-report.json must be a JSON object.");
+  }
+  if (report.artifactType !== "quality-report") {
+    throw new Error("quality-report.json artifactType must be quality-report.");
+  }
+  if (typeof report.canFinalize !== "boolean") {
+    throw new Error("quality-report.json canFinalize must be a boolean.");
+  }
+  for (const key of [
+    "menuCoverage",
+    "corePageScreenshotCoverage",
+    "coreFunctionClassificationCoverage",
+    "writeOperationSafetyCompliance",
+    "unverifiedContentLabeling",
+    "coreConclusionTraceability",
+  ]) {
+    if (!Number.isFinite(Number(report[key]))) {
+      throw new Error(`quality-report.json ${key} must be numeric.`);
+    }
+  }
+  if (!Array.isArray(report.failures)) {
+    throw new Error("quality-report.json failures must be an array.");
+  }
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const inputDir = args.input;
@@ -103,6 +130,7 @@ function main() {
 }
 
 module.exports = {
+  assertValidQualityReportArtifact,
   buildQualitySourceArtifacts,
   fingerprintFile,
   readOperationGuideGate,

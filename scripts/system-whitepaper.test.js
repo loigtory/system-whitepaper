@@ -75,6 +75,8 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
     actionInventory: [{ function: "任务列表", type: "query" }],
   });
   writeJsonIfMissing("quality-report.json", {
+    artifactType: "quality-report",
+    version: 1,
     canFinalize: true,
     menuCoverage: 1,
     corePageScreenshotCoverage: 1,
@@ -204,6 +206,8 @@ function writePassingTruthArtifacts(dir, options = {}) {
   fs.writeFileSync(
     path.join(dir, "quality-report.json"),
     JSON.stringify({
+      artifactType: "quality-report",
+      version: 1,
       canFinalize: true,
       menuCoverage: 1,
       corePageScreenshotCoverage: 1,
@@ -7958,20 +7962,7 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
     ].join("\n"),
     "utf8",
   );
-  fs.writeFileSync(
-    path.join(systemOutput, "quality-report.json"),
-    JSON.stringify({
-      canFinalize: true,
-      menuCoverage: 1,
-      corePageScreenshotCoverage: 1,
-      coreFunctionClassificationCoverage: 1,
-      writeOperationSafetyCompliance: 1,
-      unverifiedContentLabeling: 1,
-      coreConclusionTraceability: 1,
-      failures: [],
-    }),
-    "utf8",
-  );
+  writeQualityReportFixture(systemOutput);
   fs.writeFileSync(
     path.join(systemOutput, "verified-claims.json"),
     JSON.stringify(
@@ -8251,20 +8242,7 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
     }),
     "utf8",
   );
-  fs.writeFileSync(
-    path.join(systemOutput, "quality-report.json"),
-    JSON.stringify({
-      canFinalize: true,
-      menuCoverage: 1,
-      corePageScreenshotCoverage: 1,
-      coreFunctionClassificationCoverage: 1,
-      writeOperationSafetyCompliance: 1,
-      unverifiedContentLabeling: 1,
-      coreConclusionTraceability: 1,
-      failures: [],
-    }),
-    "utf8",
-  );
+  writeQualityReportFixture(systemOutput);
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
     JSON.stringify({
@@ -10043,8 +10021,9 @@ test("pipeline truth nodes build claims and fact-check artifacts", async () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { runPipelineNode } = require("./run-whitepaper-pipeline");
+  const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
   const { buildNarrativeSourceArtifacts } = require("./check-narrative");
+  const { runPipelineNode } = require("./run-whitepaper-pipeline");
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-truth-"));
   const projectRoot = path.resolve(__dirname, "..");
   fs.mkdirSync(path.join(tempRoot, "config"), { recursive: true });
@@ -10143,20 +10122,7 @@ test("pipeline truth nodes build claims and fact-check artifacts", async () => {
   await runPipelineNode("truth-universe", context);
   await runPipelineNode("truth-claims", context);
   await runPipelineNode("fact-check", context);
-  fs.writeFileSync(
-    path.join(systemOutput, "quality-report.json"),
-    JSON.stringify({
-      canFinalize: true,
-      menuCoverage: 1,
-      corePageScreenshotCoverage: 1,
-      coreFunctionClassificationCoverage: 1,
-      writeOperationSafetyCompliance: 1,
-      unverifiedContentLabeling: 1,
-      coreConclusionTraceability: 1,
-      failures: [],
-    }),
-    "utf8",
-  );
+  writeQualityReportFixture(systemOutput);
   fs.writeFileSync(
     path.join(systemOutput, "narrative-quality-report.json"),
     JSON.stringify(narrativeQualityReportFixture({
@@ -10185,6 +10151,8 @@ test("pipeline truth-readiness requires database evidence when databaseProfile i
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
+  const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
+  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
   const { runPipelineNode } = require("./run-whitepaper-pipeline");
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-truth-db-required-"));
   const projectRoot = path.resolve(__dirname, "..");
@@ -10198,58 +10166,41 @@ test("pipeline truth-readiness requires database evidence when databaseProfile i
     systemOutput,
     projectRoot,
   };
-  fs.writeFileSync(
-    path.join(systemOutput, "quality-report.json"),
-    JSON.stringify({
-      canFinalize: true,
-      menuCoverage: 1,
-      corePageScreenshotCoverage: 1,
-      coreFunctionClassificationCoverage: 1,
-      writeOperationSafetyCompliance: 1,
-      unverifiedContentLabeling: 1,
-      coreConclusionTraceability: 1,
-      failures: [],
-    }),
-    "utf8",
-  );
+  writeQualityReportFixture(systemOutput);
+  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
   fs.writeFileSync(
     path.join(systemOutput, "verified-claims.json"),
-    JSON.stringify({
-      rules: {
-        lowConfidenceNotWritable: true,
-        databaseOnlyNotConfirmed: true,
-        databaseOnlyNotWritable: true,
+    JSON.stringify(verifiedClaimsFixture([
+      {
+        id: "function:保单任务:任务列表",
+        subject: "任务列表",
+        module: "保单任务",
+        status: "confirmed",
+        writable: true,
       },
-      metrics: { claimCount: 1, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0 },
-      writableClaimIds: ["function:保单任务:任务列表"],
-    }),
+    ])),
     "utf8",
   );
   fs.writeFileSync(
     path.join(systemOutput, "fact-check-report.json"),
-    JSON.stringify({
-      canFinalize: true,
-      failures: [],
-      metrics: {
-        claimCount: 1,
-        writableClaimCount: 1,
-        checkedAssertions: 1,
-        supportedAssertions: 1,
-        supportedRatio: 1,
-        coveredWritableClaimCount: 1,
-        missingWritableClaimCount: 0,
-        writableClaimCoverageRatio: 1,
-        minWritableClaimCoverage: 0.8,
-      },
-    }),
+    JSON.stringify(factCheckReportFixture({
+      sourceArtifacts: buildFactCheckSourceArtifacts({
+        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
+        claimsPath: path.join(systemOutput, "verified-claims.json"),
+      }),
+    })),
     "utf8",
   );
   fs.writeFileSync(
     path.join(systemOutput, "narrative-quality-report.json"),
-    JSON.stringify({ canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } }),
+    JSON.stringify(narrativeQualityReportFixture({
+      sourceArtifacts: buildNarrativeSourceArtifacts({
+        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
+        evidenceSummaryPath: path.join(systemOutput, "evidence-summary.json"),
+      }),
+    })),
     "utf8",
   );
-  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
 
   await assert.rejects(
     () => runPipelineNode("truth-readiness", context),
@@ -12847,6 +12798,39 @@ function narrativeQualityReportFixture(overrides = {}) {
   };
 }
 
+function qualityReportFixture(overrides = {}) {
+  return {
+    artifactType: "quality-report",
+    version: 1,
+    canFinalize: true,
+    menuCoverage: 1,
+    corePageScreenshotCoverage: 1,
+    coreFunctionClassificationCoverage: 1,
+    writeOperationSafetyCompliance: 1,
+    unverifiedContentLabeling: 1,
+    coreConclusionTraceability: 1,
+    failures: [],
+    ...overrides,
+  };
+}
+
+function writeQualityReportFixture(dir, overrides = {}) {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const { buildQualitySourceArtifacts } = require("./check-quality");
+  fs.writeFileSync(
+    path.join(dir, "quality-report.json"),
+    JSON.stringify(qualityReportFixture({
+      sourceArtifacts: buildQualitySourceArtifacts({
+        evidencePath: path.join(dir, "evidence.json"),
+        operationGuideGatePath: path.join(dir, "operation-guide-gate.json"),
+      }),
+      ...overrides,
+    })),
+    "utf8",
+  );
+}
+
 test("fact check passes writable claims and allows weak claims only in pending section", () => {
   const {
     buildFactCheckReport,
@@ -13116,20 +13100,7 @@ test("truth readiness rejects stale fact check source fingerprints", () => {
   const { buildNarrativeSourceArtifacts } = require("./check-narrative");
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-stale-fact-check-"));
-  fs.writeFileSync(
-    path.join(dir, "quality-report.json"),
-    JSON.stringify({
-      canFinalize: true,
-      menuCoverage: 1,
-      corePageScreenshotCoverage: 1,
-      coreFunctionClassificationCoverage: 1,
-      writeOperationSafetyCompliance: 1,
-      unverifiedContentLabeling: 1,
-      coreConclusionTraceability: 1,
-      failures: [],
-    }),
-    "utf8",
-  );
+  writeQualityReportFixture(dir);
   fs.writeFileSync(
     path.join(dir, "verified-claims.json"),
     JSON.stringify(
@@ -13225,20 +13196,7 @@ test("truth readiness rejects stale database truth lineage", () => {
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-lineage-db-"));
-  fs.writeFileSync(
-    path.join(dir, "quality-report.json"),
-    JSON.stringify({
-      canFinalize: true,
-      menuCoverage: 1,
-      corePageScreenshotCoverage: 1,
-      coreFunctionClassificationCoverage: 1,
-      writeOperationSafetyCompliance: 1,
-      unverifiedContentLabeling: 1,
-      coreConclusionTraceability: 1,
-      failures: [],
-    }),
-    "utf8",
-  );
+  writeQualityReportFixture(dir);
   fs.writeFileSync(
     path.join(dir, "evidence-summary.json"),
     JSON.stringify({
@@ -13454,16 +13412,7 @@ test("truth readiness passes only when evidence claims fact-check and narrative 
     quality: {
       file: "quality-report.json",
       status: "ok",
-      value: {
-        canFinalize: true,
-        menuCoverage: 1,
-        corePageScreenshotCoverage: 1,
-        coreFunctionClassificationCoverage: 1,
-        writeOperationSafetyCompliance: 1,
-        unverifiedContentLabeling: 1,
-        coreConclusionTraceability: 1,
-        failures: [],
-      },
+      value: qualityReportFixture(),
     },
     claims: {
       file: "verified-claims.json",
@@ -13515,16 +13464,7 @@ test("truth readiness requires real database profile when database evidence is m
     quality: {
       file: "quality-report.json",
       status: "ok",
-      value: {
-        canFinalize: true,
-        menuCoverage: 1,
-        corePageScreenshotCoverage: 1,
-        coreFunctionClassificationCoverage: 1,
-        writeOperationSafetyCompliance: 1,
-        unverifiedContentLabeling: 1,
-        coreConclusionTraceability: 1,
-        failures: [],
-      },
+      value: qualityReportFixture(),
     },
     claims: {
       file: "verified-claims.json",
@@ -13632,16 +13572,7 @@ test("truth readiness rejects unsafe database profile evidence", () => {
     quality: {
       file: "quality-report.json",
       status: "ok",
-      value: {
-        canFinalize: true,
-        menuCoverage: 1,
-        corePageScreenshotCoverage: 1,
-        coreFunctionClassificationCoverage: 1,
-        writeOperationSafetyCompliance: 1,
-        unverifiedContentLabeling: 1,
-        coreConclusionTraceability: 1,
-        failures: [],
-      },
+      value: qualityReportFixture(),
     },
     claims: {
       file: "verified-claims.json",
@@ -13721,20 +13652,7 @@ test("truth readiness blocks missing writable claims and writes report", () => {
   const path = require("node:path");
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-readiness-"));
-  fs.writeFileSync(
-    path.join(dir, "quality-report.json"),
-    JSON.stringify({
-      canFinalize: true,
-      menuCoverage: 1,
-      corePageScreenshotCoverage: 1,
-      coreFunctionClassificationCoverage: 1,
-      writeOperationSafetyCompliance: 1,
-      unverifiedContentLabeling: 1,
-      coreConclusionTraceability: 1,
-      failures: [],
-    }),
-    "utf8",
-  );
+  writeQualityReportFixture(dir);
   fs.writeFileSync(
     path.join(dir, "verified-claims.json"),
     JSON.stringify(
@@ -13787,16 +13705,7 @@ test("truth readiness rejects invalid verified claims artifact contract", () => 
     quality: {
       file: "quality-report.json",
       status: "ok",
-      value: {
-        canFinalize: true,
-        menuCoverage: 1,
-        corePageScreenshotCoverage: 1,
-        coreFunctionClassificationCoverage: 1,
-        writeOperationSafetyCompliance: 1,
-        unverifiedContentLabeling: 1,
-        coreConclusionTraceability: 1,
-        failures: [],
-      },
+      value: qualityReportFixture(),
     },
     claims: {
       file: "verified-claims.json",
@@ -13833,7 +13742,7 @@ test("truth readiness rejects invalid verified claims artifact contract", () => 
   assert.ok(report.blockers.some((item) => item.id === "claims.invalid-artifact"));
 });
 
-test("truth readiness rejects invalid fact-check report artifact contract", () => {
+test("truth readiness rejects invalid quality report artifact contract", () => {
   const { buildTruthReadinessReport } = require("./check-truth-readiness");
   const artifacts = {
     quality: {
@@ -13849,6 +13758,49 @@ test("truth readiness rejects invalid fact-check report artifact contract", () =
         coreConclusionTraceability: 1,
         failures: [],
       },
+    },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: verifiedClaimsFixture([
+        {
+          id: "function:保单任务:任务列表",
+          subject: "任务列表",
+          module: "保单任务",
+          status: "confirmed",
+          writable: true,
+        },
+      ]),
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: factCheckReportFixture(),
+    },
+    narrative: {
+      file: "narrative-quality-report.json",
+      status: "ok",
+      value: narrativeQualityReportFixture(),
+    },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.gates.evidence.pass, false);
+  assert.equal(report.gates.evidence.artifactContractValid, false);
+  assert.equal(report.gates.evidence.scorePercent, 0);
+  assert.equal(report.canSubmitReview, false);
+  assert.ok(report.gates.evidence.failures.some((item) => /artifactType/.test(item)));
+  assert.ok(report.blockers.some((item) => item.id === "evidence.invalid-artifact"));
+});
+
+test("truth readiness rejects invalid fact-check report artifact contract", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const artifacts = {
+    quality: {
+      file: "quality-report.json",
+      status: "ok",
+      value: qualityReportFixture(),
     },
     claims: {
       file: "verified-claims.json",
@@ -13905,16 +13857,7 @@ test("truth readiness rejects invalid narrative quality report artifact contract
     quality: {
       file: "quality-report.json",
       status: "ok",
-      value: {
-        canFinalize: true,
-        menuCoverage: 1,
-        corePageScreenshotCoverage: 1,
-        coreFunctionClassificationCoverage: 1,
-        writeOperationSafetyCompliance: 1,
-        unverifiedContentLabeling: 1,
-        coreConclusionTraceability: 1,
-        failures: [],
-      },
+      value: qualityReportFixture(),
     },
     claims: {
       file: "verified-claims.json",
@@ -13957,16 +13900,7 @@ test("truth readiness blocks incomplete verified claim boundary rules", () => {
     quality: {
       file: "quality-report.json",
       status: "ok",
-      value: {
-        canFinalize: true,
-        menuCoverage: 1,
-        corePageScreenshotCoverage: 1,
-        coreFunctionClassificationCoverage: 1,
-        writeOperationSafetyCompliance: 1,
-        unverifiedContentLabeling: 1,
-        coreConclusionTraceability: 1,
-        failures: [],
-      },
+      value: qualityReportFixture(),
     },
     claims: {
       file: "verified-claims.json",
@@ -13980,26 +13914,12 @@ test("truth readiness blocks incomplete verified claim boundary rules", () => {
     factCheck: {
       file: "fact-check-report.json",
       status: "ok",
-      value: {
-        canFinalize: true,
-        failures: [],
-        metrics: {
-          claimCount: 1,
-          writableClaimCount: 1,
-          checkedAssertions: 1,
-          supportedAssertions: 1,
-          supportedRatio: 1,
-          coveredWritableClaimCount: 1,
-          missingWritableClaimCount: 0,
-          writableClaimCoverageRatio: 1,
-          minWritableClaimCoverage: 0.8,
-        },
-      },
+      value: factCheckReportFixture(),
     },
     narrative: {
       file: "narrative-quality-report.json",
       status: "ok",
-      value: { canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } },
+      value: narrativeQualityReportFixture(),
     },
   };
 
@@ -14016,16 +13936,7 @@ test("truth readiness blocks low writable claim coverage", () => {
     quality: {
       file: "quality-report.json",
       status: "ok",
-      value: {
-        canFinalize: true,
-        menuCoverage: 1,
-        corePageScreenshotCoverage: 1,
-        coreFunctionClassificationCoverage: 1,
-        writeOperationSafetyCompliance: 1,
-        unverifiedContentLabeling: 1,
-        coreConclusionTraceability: 1,
-        failures: [],
-      },
+      value: qualityReportFixture(),
     },
     claims: {
       file: "verified-claims.json",

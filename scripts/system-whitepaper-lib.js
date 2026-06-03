@@ -1014,6 +1014,8 @@ function buildQualityReport(input) {
   }
 
   return {
+    artifactType: "quality-report",
+    version: 1,
     ...metrics,
     failures,
     blockingIssues: p0Items,
