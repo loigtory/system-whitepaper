@@ -33,6 +33,7 @@ const {
   listProjectPipelinePids,
 } = require("./process-control");
 const { runReviewDecision } = require("../run-review-decision");
+const { findStaleReadinessSources } = require("../check-truth-readiness");
 const { isCursorSdkConfigured, resolveNarrativeProvider } = require("../narrative/resolve-provider");
 const { formatCny, formatUsd } = require("../narrative/usage-cost");
 
@@ -192,12 +193,16 @@ function buildOperationGuideGateSnapshot(systemOutput) {
 function buildTruthReadinessSnapshot(systemOutput) {
   const report = readOptionalJsonObject(path.join(systemOutput, "truth-readiness-report.json"));
   if (!report) return null;
+  const staleSources = findStaleReadinessSources(systemOutput, report);
+  const stale = staleSources.length > 0;
   return {
     scorePercent: Number(report.scorePercent || 0),
     threshold: Number(report.threshold || 0),
     thresholdPercent: Number(report.thresholdPercent || Math.round(Number(report.threshold || 0) * 1000) / 10),
-    canSubmitReview: Boolean(report.canSubmitReview),
-    canFinalize: Boolean(report.canFinalize),
+    canSubmitReview: Boolean(report.canSubmitReview) && !stale,
+    canFinalize: Boolean(report.canFinalize) && !stale,
+    stale,
+    staleSources,
     blockers: Array.isArray(report.blockers) ? report.blockers : [],
     improvementActions: Array.isArray(report.improvementActions) ? report.improvementActions : [],
     gates: report.gates && typeof report.gates === "object" && !Array.isArray(report.gates) ? report.gates : {},

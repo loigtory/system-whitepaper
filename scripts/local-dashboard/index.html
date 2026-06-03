@@ -1142,6 +1142,7 @@
         const gates = Object.entries(readiness.gates || {});
         const blockers = readiness.blockers || [];
         const actions = (readiness.improvementActions || []).slice(0, 8);
+        const staleSources = readiness.staleSources || [];
         return `
           <section class="card">
             <h2>真实度门禁</h2>
@@ -1172,6 +1173,14 @@
                       const score = gate.scorePercent === undefined ? "" : ` ${gate.scorePercent}%`;
                       return `<span class="status ${status}">${escapeHtml(label)}${escapeHtml(score)}</span>`;
                     })
+                    .join("")}</div>`
+                : ""
+            }
+            ${
+              readiness.stale
+                ? `<div class="usage-history">${staleSources
+                    .slice(0, 6)
+                    .map((item) => `<span class="usage-history-item">报告已过期：${escapeHtml(`${item.key || ""}${item.file ? `(${item.file})` : ""}: ${item.reason || ""}`)}</span>`)
                     .join("")}</div>`
                 : ""
             }

@@ -15,7 +15,11 @@ const {
   writePipelineState,
 } = require("./pipeline-state");
 const { exportWhitepaperWord } = require("./export-whitepaper-word");
-const { DEFAULT_THRESHOLD, normalizeThreshold } = require("./check-truth-readiness");
+const {
+  DEFAULT_THRESHOLD,
+  findStaleReadinessSources,
+  normalizeThreshold,
+} = require("./check-truth-readiness");
 
 function unique(items) {
   return [...new Set(items.filter(Boolean))];
@@ -270,12 +274,27 @@ function assertApprovalTruthReadiness(inputDir, options = {}) {
   const { reportPath, report } = readApprovalTruthReadiness(inputDir);
   const threshold = normalizeThreshold(options.threshold ?? report.threshold ?? DEFAULT_THRESHOLD);
   const score = approvalTruthScore(report);
-  if (report.canSubmitReview === true && score >= threshold) {
-    return report;
-  }
   const blockers = Array.isArray(report.blockers)
     ? report.blockers.map((item) => item.id || item.message || "").filter(Boolean).join(", ")
     : "";
+  if (report.canSubmitReview === true && score >= threshold) {
+    const staleSources = findStaleReadinessSources(inputDir, report);
+    if (!staleSources.length) {
+      return report;
+    }
+    throw new Error(
+      [
+        `Truth readiness report is stale: ${reportPath}`,
+        ...staleSources
+          .slice(0, 6)
+          .map((item) => `${item.key}${item.file ? `(${item.file})` : ""}: ${item.reason}`),
+        staleSources.length > 6 ? `and ${staleSources.length - 6} more` : "",
+        "rerun truth-readiness before approval",
+      ]
+        .filter(Boolean)
+        .join("; "),
+    );
+  }
   throw new Error(
     [
       `Truth readiness gate has not passed: ${reportPath}`,

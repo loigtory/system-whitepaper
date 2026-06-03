@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const path = require("node:path");
 const { parseArgs, writeJson } = require("./system-whitepaper-lib");
 
@@ -17,6 +18,10 @@ const OPTIONAL_ARTIFACTS = {
   evidenceSummary: "evidence-summary.json",
   functionUniverse: "function-universe.json",
   databaseProfile: "database-profile.json",
+};
+
+const CONTENT_ARTIFACTS = {
+  pendingReview: "whitepaper.pending-review.md",
 };
 
 function clamp01(value) {
@@ -51,18 +56,129 @@ function readJsonArtifact(filePath) {
   }
 }
 
+function fingerprintFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { exists: false, size: 0, mtimeMs: null, sha256: "" };
+  }
+  const buffer = fs.readFileSync(filePath);
+  const stat = fs.statSync(filePath);
+  return {
+    exists: true,
+    size: stat.size,
+    mtimeMs: Math.round(stat.mtimeMs),
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+function readContentArtifact(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { status: "missing", value: null, error: "" };
+  }
+  return { status: "ok", value: null, error: "" };
+}
+
 function loadReadinessInputs(inputDir) {
   const dir = path.resolve(String(inputDir || "."));
   const result = {};
   for (const [key, fileName] of Object.entries(REQUIRED_ARTIFACTS)) {
     const filePath = path.join(dir, fileName);
-    result[key] = { file: fileName, path: filePath, ...readJsonArtifact(filePath) };
+    result[key] = {
+      file: fileName,
+      path: filePath,
+      fingerprint: fingerprintFile(filePath),
+      ...readJsonArtifact(filePath),
+    };
   }
   for (const [key, fileName] of Object.entries(OPTIONAL_ARTIFACTS)) {
     const filePath = path.join(dir, fileName);
-    result[key] = { file: fileName, path: filePath, ...readJsonArtifact(filePath) };
+    result[key] = {
+      file: fileName,
+      path: filePath,
+      fingerprint: fingerprintFile(filePath),
+      ...readJsonArtifact(filePath),
+    };
+  }
+  for (const [key, fileName] of Object.entries(CONTENT_ARTIFACTS)) {
+    const filePath = path.join(dir, fileName);
+    result[key] = {
+      file: fileName,
+      path: filePath,
+      fingerprint: fingerprintFile(filePath),
+      ...readContentArtifact(filePath),
+    };
   }
   return result;
+}
+
+function buildReadinessSourceArtifacts(artifacts = {}) {
+  return Object.fromEntries(
+    Object.entries(artifacts).map(([key, artifact]) => [
+      key,
+      {
+        file: artifact.file,
+        status: artifact.status,
+        error: artifact.error || "",
+        fingerprint: artifact.fingerprint || { exists: false, size: 0, mtimeMs: null, sha256: "" },
+      },
+    ]),
+  );
+}
+
+function normalizeSourceFingerprint(record = {}) {
+  const fingerprint = record.fingerprint || {};
+  return {
+    exists: Boolean(fingerprint.exists),
+    size: Number.isFinite(Number(fingerprint.size)) ? Number(fingerprint.size) : 0,
+    sha256: String(fingerprint.sha256 || ""),
+  };
+}
+
+function findStaleReadinessSources(inputDir, report = {}) {
+  const recorded = report.sourceArtifacts;
+  if (!recorded || typeof recorded !== "object" || Array.isArray(recorded)) {
+    return [{ key: "sourceArtifacts", reason: "missing source artifact fingerprints" }];
+  }
+  const current = buildReadinessSourceArtifacts(loadReadinessInputs(inputDir));
+  const keys = [...new Set([...Object.keys(current), ...Object.keys(recorded)])].sort();
+  const stale = [];
+  for (const key of keys) {
+    const expected = recorded[key];
+    const actual = current[key];
+    if (!expected) {
+      stale.push({ key, file: actual?.file || "", reason: "not recorded in report" });
+      continue;
+    }
+    if (!actual) {
+      stale.push({ key, file: expected.file || "", reason: "no longer part of readiness inputs" });
+      continue;
+    }
+    if (String(expected.file || "") !== String(actual.file || "")) {
+      stale.push({ key, file: actual.file || expected.file || "", reason: "file mapping changed" });
+      continue;
+    }
+    if (String(expected.status || "") !== String(actual.status || "")) {
+      stale.push({
+        key,
+        file: actual.file || expected.file || "",
+        reason: `status changed from ${expected.status || "unknown"} to ${actual.status || "unknown"}`,
+      });
+      continue;
+    }
+    const expectedFingerprint = normalizeSourceFingerprint(expected);
+    const actualFingerprint = normalizeSourceFingerprint(actual);
+    if (!expectedFingerprint.sha256 && actualFingerprint.exists) {
+      stale.push({ key, file: actual.file || expected.file || "", reason: "missing recorded sha256" });
+      continue;
+    }
+    if (
+      expectedFingerprint.exists !== actualFingerprint.exists ||
+      expectedFingerprint.size !== actualFingerprint.size ||
+      expectedFingerprint.sha256 !== actualFingerprint.sha256
+    ) {
+      stale.push({ key, file: actual.file || expected.file || "", reason: "content fingerprint changed" });
+    }
+  }
+  return stale;
 }
 
 function blocker(id, severity, message, rerunNodes = []) {
@@ -342,16 +458,7 @@ function buildTruthReadinessReport(input = {}) {
     gates,
     blockers,
     improvementActions: buildImprovementActions(gates, blockers),
-    sourceArtifacts: Object.fromEntries(
-      Object.entries(artifacts).map(([key, artifact]) => [
-        key,
-        {
-          file: artifact.file,
-          status: artifact.status,
-          error: artifact.error || "",
-        },
-      ]),
-    ),
+    sourceArtifacts: buildReadinessSourceArtifacts(artifacts),
   };
 }
 
@@ -397,7 +504,9 @@ if (require.main === module) {
 
 module.exports = {
   DEFAULT_THRESHOLD,
+  buildReadinessSourceArtifacts,
   buildTruthReadinessReport,
+  findStaleReadinessSources,
   loadReadinessInputs,
   normalizeThreshold,
   runTruthReadinessCheck,

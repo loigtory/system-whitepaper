@@ -48,6 +48,10 @@ const {
 } = require("./system-whitepaper-lib");
 
 function writePassingTruthReadinessReport(dir, overrides = {}) {
+  const {
+    buildReadinessSourceArtifacts,
+    loadReadinessInputs,
+  } = require("./check-truth-readiness");
   const report = {
     artifactType: "truth-readiness-report",
     version: 1,
@@ -65,6 +69,7 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
     },
     blockers: [],
     improvementActions: [],
+    sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(dir)),
     generatedAt: "2026-05-20T00:00:00.000Z",
     ...overrides,
   };
@@ -4512,11 +4517,7 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
   fs.writeFileSync(path.join(adpOutput, "function-universe.json"), "{}", "utf8");
   fs.writeFileSync(path.join(adpOutput, "verified-claims.json"), "{}", "utf8");
   fs.writeFileSync(path.join(adpOutput, "fact-check-report.json"), "{}", "utf8");
-  fs.writeFileSync(
-    path.join(adpOutput, "truth-readiness-report.json"),
-    JSON.stringify({ scorePercent: 96, canSubmitReview: true, canFinalize: true, gates: {} }),
-    "utf8",
-  );
+  writePassingTruthReadinessReport(adpOutput, { score: 0.96, scorePercent: 96, gates: {} });
 
   const snapshot = buildDashboardSnapshot({ configPath });
 
@@ -4540,6 +4541,43 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
   assert.equal(snapshot.systems[0].currentPhase, "completed");
   assert.equal(snapshot.systems[0].currentNode, "end");
   assert.equal(snapshot.systems[1].overallStatus, "pending");
+});
+
+test("dashboard snapshot marks stale truth readiness report as not submittable", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
+  const { buildDashboardSnapshot } = require("./local-dashboard/server");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-stale-truth-"));
+  const configPath = path.join(dir, "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://adp.example.test/",
+    ].join("\n"),
+    "utf8",
+  );
+  const output = path.join(dir, "outputs", "adp");
+  fs.mkdirSync(output, { recursive: true });
+  let state = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
+  state = updateNodeStatus(state, "truth-readiness", "success");
+  writePipelineState(path.join(output, "pipeline-state.json"), state);
+  fs.writeFileSync(path.join(output, "whitepaper.pending-review.md"), "# 待审\n\n原内容", "utf8");
+  writePassingTruthReadinessReport(output);
+  fs.appendFileSync(path.join(output, "whitepaper.pending-review.md"), "\n\n未经复核的新内容", "utf8");
+
+  const snapshot = buildDashboardSnapshot({ configPath });
+
+  assert.equal(snapshot.systems[0].truthReadiness.canSubmitReview, false);
+  assert.equal(snapshot.systems[0].truthReadiness.stale, true);
+  assert.ok(snapshot.systems[0].truthReadiness.staleSources.length > 0);
 });
 
 test("dashboard snapshot regenerates missing docx for finalized system", () => {
@@ -6907,6 +6945,29 @@ test("approved review requires passing truth readiness gate", () => {
   assert.throws(
     () => runReviewDecision({ inputDir: dir, status: "approved" }),
     /Truth readiness gate has not passed/,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "whitepaper.final.md")), false);
+});
+
+test("approved review rejects stale truth readiness fingerprints", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runReviewDecision } = require("./run-review-decision");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "review-stale-truth-"));
+  const pendingPath = path.join(dir, "whitepaper.pending-review.md");
+  fs.writeFileSync(
+    pendingPath,
+    "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\n支撑保单数据闭环管理。",
+    "utf8",
+  );
+  writePassingTruthReadinessReport(dir);
+  fs.appendFileSync(pendingPath, "\n\n## 2. 未经门禁复核的新内容\n这里新增了未经事实核验的业务结论。", "utf8");
+
+  assert.throws(
+    () => runReviewDecision({ inputDir: dir, status: "approved" }),
+    /Truth readiness report is stale/,
   );
   assert.equal(fs.existsSync(path.join(dir, "whitepaper.final.md")), false);
 });

@@ -49,7 +49,7 @@ The unattended pipeline is grouped into five business-visible phases:
    - Review rerun usage must remain auditable: `phase3b-usage.json` should explain whether the run was full, partial, or review-driven, which review scope triggered it, and whether split prompts were actually sent to the SDK.
    - Classify rejection comments narrowly: wording, description, and business-flow gaps are narrative rewrites; only missing screenshots, evidence, or collection failures trigger evidence refresh.
    - **质检**: run coverage and narrative checks; unresolved failures become re-run tasks or pending confirmations.
-   - **真实度门禁**: run `check-truth-readiness.js` to aggregate coverage, verified claims, fact-check, and narrative gates into `truth-readiness-report.json`; review submission requires `canSubmitReview=true` and score >= 95%.
+   - **真实度门禁**: run `check-truth-readiness.js` to aggregate coverage, verified claims, fact-check, narrative gates, and source-artifact fingerprints into `truth-readiness-report.json`; review submission requires `canSubmitReview=true`, score >= 95%, and non-stale fingerprints.
 5. **审定**: the reviewer approves or rejects in the local dashboard. Approval creates `whitepaper.final.md` and Word output only after `run-review-decision.js` verifies `truth-readiness-report.json` has passed. Rejection must include comments; `run-review-decision.js` classifies the comment and writes `review-decision.json`; the Agent/LLM only executes the scoped narrative rewrite when required.
 
 ## Parallel Batch Model
@@ -146,7 +146,7 @@ Before finalizing, verify:
 - Core conclusion traceability = 100%.
 - Deterministic business claims should come from `verified-claims.json`; weak claims must not be written as confirmed conclusions.
 - `fact-check-report.json` must have `canFinalize=true` before producing `whitepaper.final.md`.
-- `truth-readiness-report.json` must have `canSubmitReview=true` and score >= 95% before human review or final approval; `run-review-decision.js --status approved` blocks final Markdown/Word generation when this report is missing, malformed, or non-passing.
+- `truth-readiness-report.json` must have `canSubmitReview=true`, score >= 95%, and matching source-artifact fingerprints before human review or final approval; `run-review-decision.js --status approved` blocks final Markdown/Word generation when this report is missing, malformed, non-passing, or stale.
 - No duplicated function explanations.
 - No source-code, database, or internal implementation claims without browser evidence.
 

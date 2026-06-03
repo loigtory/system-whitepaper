@@ -14,6 +14,10 @@ const {
   writePipelineState,
 } = require("./pipeline-state");
 const { runReviewDecision } = require("./run-review-decision");
+const {
+  buildReadinessSourceArtifacts,
+  loadReadinessInputs,
+} = require("./check-truth-readiness");
 
 function copyIfExists(source, target) {
   if (!fs.existsSync(source)) return false;
@@ -95,6 +99,7 @@ function prepareSmokeOutput(options = {}) {
         rerunNodes: [],
       },
     ],
+    sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(smokeOutput)),
     generatedAt: new Date().toISOString(),
   });
 
