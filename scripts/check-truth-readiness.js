@@ -183,12 +183,12 @@ function findStaleReadinessSources(inputDir, report = {}) {
   return stale;
 }
 
-function blocker(id, severity, message, rerunNodes = []) {
-  return { id, severity, message, rerunNodes };
+function blocker(id, severity, message, rerunNodes = [], extra = {}) {
+  return { id, severity, message, rerunNodes, ...extra };
 }
 
-function action(id, message, rerunNodes = []) {
-  return { id, message, rerunNodes };
+function action(id, message, rerunNodes = [], extra = {}) {
+  return { id, message, rerunNodes, ...extra };
 }
 
 function buildEvidenceGate(artifact) {
@@ -419,14 +419,30 @@ function collectBlockers(gates) {
     );
   }
   if (!gates.factCheck.pass) {
-    blockers.push(
-      blocker(
-        "fact-check.unsupported-assertions",
-        "P0",
-        "Pending-review whitepaper contains unsupported, weak, or unknown assertions.",
-        ["narrative", "fact-check", "quality", "truth-readiness"],
-      ),
-    );
+    if (gates.factCheck.metrics?.writableClaimCoverageRatio < gates.factCheck.metrics?.minWritableClaimCoverage) {
+      blockers.push(
+        blocker(
+          "fact-check.writable-coverage",
+          "P0",
+          "Pending-review whitepaper omits verified writable claims that should be covered before review.",
+          ["narrative", "fact-check", "quality", "truth-readiness"],
+          {
+            rewriteScope: "function-sections",
+            narrativePart: "function-sections",
+            missingWritableClaimIds: gates.factCheck.missingWritableClaimIds || [],
+          },
+        ),
+      );
+    } else {
+      blockers.push(
+        blocker(
+          "fact-check.unsupported-assertions",
+          "P0",
+          "Pending-review whitepaper contains unsupported, weak, or unknown assertions.",
+          ["narrative", "fact-check", "quality", "truth-readiness"],
+        ),
+      );
+    }
   }
   if (!gates.narrative.pass) {
     blockers.push(
@@ -443,6 +459,20 @@ function collectBlockers(gates) {
 
 function buildImprovementActions(gates, blockers) {
   const actions = blockers.map((item) => action(item.id, item.message, item.rerunNodes));
+  if (gates.factCheck.missingWritableClaimIds?.length) {
+    actions.push(
+      action(
+        "narrative.cover-missing-writable-claims",
+        "Rerun the function-section narrative with the missing writable claim list from fact-check-report.json.",
+        ["narrative", "fact-check", "quality", "truth-readiness"],
+        {
+          rewriteScope: "function-sections",
+          narrativePart: "function-sections",
+          missingWritableClaimIds: gates.factCheck.missingWritableClaimIds,
+        },
+      ),
+    );
+  }
   if (!gates.database.available) {
     actions.push(
       action(

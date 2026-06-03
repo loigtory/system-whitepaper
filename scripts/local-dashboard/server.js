@@ -201,6 +201,8 @@ function buildTruthReadinessSnapshot(systemOutput) {
   if (!report) return null;
   const staleSources = findStaleReadinessSources(systemOutput, report);
   const stale = staleSources.length > 0;
+  const gates = report.gates && typeof report.gates === "object" && !Array.isArray(report.gates) ? report.gates : {};
+  const factCheck = gates.factCheck || {};
   return {
     scorePercent: Number(report.scorePercent || 0),
     threshold: Number(report.threshold || 0),
@@ -211,7 +213,17 @@ function buildTruthReadinessSnapshot(systemOutput) {
     staleSources,
     blockers: Array.isArray(report.blockers) ? report.blockers : [],
     improvementActions: Array.isArray(report.improvementActions) ? report.improvementActions : [],
-    gates: report.gates && typeof report.gates === "object" && !Array.isArray(report.gates) ? report.gates : {},
+    gates,
+    writableClaimCoverage: {
+      ratio: Number(factCheck.metrics?.writableClaimCoverageRatio || 0),
+      minRatio: Number(factCheck.metrics?.minWritableClaimCoverage || 0),
+      writableClaimCount: Number(factCheck.metrics?.writableClaimCount || 0),
+      coveredWritableClaimCount: Number(factCheck.metrics?.coveredWritableClaimCount || 0),
+      missingWritableClaimCount: Number(factCheck.metrics?.missingWritableClaimCount || 0),
+      missingWritableClaimIds: Array.isArray(factCheck.missingWritableClaimIds)
+        ? factCheck.missingWritableClaimIds.slice(0, 20)
+        : [],
+    },
     generatedAt: report.generatedAt || "",
   };
 }

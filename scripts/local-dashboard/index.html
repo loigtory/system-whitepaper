@@ -1146,6 +1146,8 @@
         const blockers = readiness.blockers || [];
         const actions = (readiness.improvementActions || []).slice(0, 8);
         const staleSources = readiness.staleSources || [];
+        const writableCoverage = readiness.writableClaimCoverage || {};
+        const missingClaimIds = writableCoverage.missingWritableClaimIds || [];
         return `
           <section class="card">
             <h2>真实度门禁</h2>
@@ -1165,6 +1167,14 @@
               <div class="usage-item">
                 <div class="muted">阻塞项</div>
                 <div class="usage-value">${escapeHtml(String(blockers.length))}</div>
+              </div>
+              <div class="usage-item">
+                <div class="muted">可写声明覆盖</div>
+                <div class="usage-value">${escapeHtml(String(Math.round(Number(writableCoverage.ratio || 0) * 1000) / 10))}%</div>
+              </div>
+              <div class="usage-item">
+                <div class="muted">缺失可写声明</div>
+                <div class="usage-value">${escapeHtml(String(writableCoverage.missingWritableClaimCount || 0))}</div>
               </div>
             </div>
             ${
@@ -1193,6 +1203,14 @@
                     .map((item) => `<span class="usage-history-item">${escapeHtml(`${item.severity || "P?"} ${item.id || ""}: ${item.message || ""}`)}</span>`)
                     .join("")}</div>`
                 : `<div class="muted" style="margin-top: 10px">无阻塞项。</div>`
+            }
+            ${
+              missingClaimIds.length
+                ? `<div class="usage-history">${missingClaimIds
+                    .slice(0, 8)
+                    .map((id) => `<span class="usage-history-item">缺失可写声明：${escapeHtml(id)}</span>`)
+                    .join("")}</div>`
+                : ""
             }
             ${
               actions.length

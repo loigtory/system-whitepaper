@@ -150,6 +150,7 @@ Before finalizing, verify:
 - Core conclusion traceability = 100%.
 - Deterministic business claims should come from `verified-claims.json`; weak or database-only non-writable claims must not be written as confirmed conclusions.
 - Pending-review content should cover most writable claims; low writable-claim coverage means the whitepaper is incomplete even when every written sentence is supported.
+- When `fact-check-report.json` lists `missingWritableClaimIds`, rerun scoped narrative work first (`--narrative-part function-sections` or a concrete module) so the Agent covers the missing writable claims before review.
 - `fact-check-report.json` must have `canFinalize=true` before producing `whitepaper.final.md`.
 - `truth-readiness-report.json` must have `canSubmitReview=true`, score >= 95%, and matching source-artifact fingerprints before human review or final approval; `run-review-decision.js --status approved` blocks final Markdown/Word generation when this report is missing, malformed, non-passing, or stale.
 - No duplicated function explanations.

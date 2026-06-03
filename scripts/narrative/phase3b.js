@@ -79,6 +79,58 @@ function loadVerifiedClaims(context = {}) {
   return readExistingJsonObject(claimsPath, {}, { label: "Verified claims" });
 }
 
+function loadFactCheckReport(context = {}) {
+  if (context.factCheckReport) return ensureJsonObject(context.factCheckReport, "Fact-check report");
+  const outputDir = resolveOutputDir(context);
+  const reportPath = context.factCheckReportPath || path.join(outputDir, "fact-check-report.json");
+  if (!context.factCheckReportPath && !fs.existsSync(reportPath)) return null;
+  return readExistingJsonObject(reportPath, null, { label: "Fact-check report" });
+}
+
+function compactWritableClaimGap(factCheckReport = null, claimsArtifact = {}, options = {}) {
+  const missingIds = Array.isArray(factCheckReport?.missingWritableClaimIds)
+    ? factCheckReport.missingWritableClaimIds
+    : [];
+  const claims = Array.isArray(claimsArtifact.claims) ? claimsArtifact.claims : [];
+  const claimById = new Map(claims.map((claim) => [claim.id, claim]));
+  const targetModule = String(options.moduleName || "").trim();
+  const missingWritableClaims = missingIds
+    .map((id) => claimById.get(id) || { id })
+    .filter((claim) => {
+      if (!targetModule) return true;
+      return String(claim.module || "").trim() === targetModule;
+    })
+    .slice(0, options.limit || 80)
+    .map((claim) => ({
+      id: claim.id || "",
+      type: claim.type || "",
+      subject: claim.subject || "",
+      module: claim.module || "",
+      function: claim.function || "",
+      entity: claim.entity || "",
+      table: claim.table || "",
+      status: claim.status || "",
+      confidence: claim.confidence || "",
+      text: claim.text || "",
+      evidence: claim.evidence || {},
+    }));
+  const metrics = factCheckReport?.metrics || {};
+  return {
+    available: Boolean(factCheckReport),
+    scope: targetModule ? { module: targetModule } : { module: "" },
+    canFinalize: factCheckReport?.canFinalize ?? null,
+    metrics: {
+      writableClaimCount: Number(metrics.writableClaimCount || 0),
+      coveredWritableClaimCount: Number(metrics.coveredWritableClaimCount || 0),
+      missingWritableClaimCount: Number(metrics.missingWritableClaimCount || missingIds.length || 0),
+      writableClaimCoverageRatio: Number(metrics.writableClaimCoverageRatio || 0),
+      minWritableClaimCoverage: Number(metrics.minWritableClaimCoverage || 0),
+    },
+    missingWritableClaimIds: missingWritableClaims.map((claim) => claim.id).filter(Boolean),
+    missingWritableClaims,
+  };
+}
+
 function loadReviewDecision(context = {}) {
   if (context.reviewDecision) return ensureJsonObject(context.reviewDecision, "Review decision");
   if (!context.reviewRerun) return null;
@@ -128,14 +180,20 @@ function compactEvidenceSummary(summary = {}) {
   };
 }
 
-function compactVerifiedClaims(claimsArtifact = {}) {
-  const claims = Array.isArray(claimsArtifact.claims) ? claimsArtifact.claims : [];
+function compactVerifiedClaims(claimsArtifact = {}, options = {}) {
+  const targetModule = String(options.moduleName || "").trim();
+  const claims = (Array.isArray(claimsArtifact.claims) ? claimsArtifact.claims : []).filter((claim) => {
+    if (!targetModule) return true;
+    return String(claim.module || "").trim() === targetModule;
+  });
+  const writableClaimIds = new Set(claims.filter((claim) => claim.writable).map((claim) => claim.id).filter(Boolean));
   return {
     system: claimsArtifact.system || {},
     metrics: claimsArtifact.metrics || {},
+    scope: targetModule ? { module: targetModule } : { module: "" },
     writableClaimIds: Array.isArray(claimsArtifact.writableClaimIds)
-      ? claimsArtifact.writableClaimIds.slice(0, 200)
-      : [],
+      ? claimsArtifact.writableClaimIds.filter((id) => writableClaimIds.has(id)).slice(0, 200)
+      : [...writableClaimIds].slice(0, 200),
     claims: claims.slice(0, 220).map((claim) => ({
       id: claim.id || "",
       type: claim.type || "",
@@ -643,11 +701,14 @@ function buildPhase3bPrompt(context = {}) {
   const paths = resolvePhase3bPaths(context);
   const evidenceSummary = compactEvidenceSummary(loadEvidenceSummary(context));
   const qualitySummary = loadQualitySummary(context);
-  const verifiedClaims = compactVerifiedClaims(loadVerifiedClaims(context));
+  const verifiedClaimsArtifact = loadVerifiedClaims(context);
+  const verifiedClaims = compactVerifiedClaims(verifiedClaimsArtifact);
+  const writableClaimGap = compactWritableClaimGap(loadFactCheckReport(context), verifiedClaimsArtifact);
   const reviewDecision = loadReviewDecision(context);
   const inlineSummary = JSON.stringify(evidenceSummary, null, 2);
   const inlineQuality = JSON.stringify(qualitySummary, null, 2);
   const inlineVerifiedClaims = JSON.stringify(verifiedClaims, null, 2);
+  const inlineWritableClaimGap = JSON.stringify(writableClaimGap, null, 2);
 
   const lines = [
     "你正在执行 system-whitepaper Skill 的【成稿 · 写稿】节点（M10 低 Token 模式）。",
@@ -682,6 +743,12 @@ function buildPhase3bPrompt(context = {}) {
     "- Body sections may only assert claims with writable=true.",
     "- Claims with writable=false must only appear under pending/unverified confirmation items.",
     "- Do not invent business flow, purpose, role, status, or automation claims outside verified-claims.",
+    "- If writable-claim-coverage-gap lists missingWritableClaims, write those writable claims into the relevant body sections before considering the draft complete.",
+    "",
+    "writable-claim-coverage-gap (from fact-check-report, if available):",
+    "```json",
+    inlineWritableClaimGap,
+    "```",
     "",
     "evidence-summary（已压缩内联）：",
     "```json",
@@ -721,12 +788,19 @@ function buildPhase3bPartPrompt(context = {}) {
   } = context;
   const paths = resolvePhase3bPaths(context);
   const qualitySummary = loadQualitySummary(context);
-  const verifiedClaims = compactVerifiedClaims(loadVerifiedClaims(context));
+  const verifiedClaimsArtifact = loadVerifiedClaims(context);
   const reviewDecision = loadReviewDecision(context);
   const partInfo = part || { id: "overview-flow", type: "overview" };
+  const verifiedClaims = compactVerifiedClaims(verifiedClaimsArtifact, {
+    moduleName: partInfo.type === "module" ? partInfo.moduleName : "",
+  });
+  const writableClaimGap = compactWritableClaimGap(loadFactCheckReport(context), verifiedClaimsArtifact, {
+    moduleName: partInfo.type === "module" ? partInfo.moduleName : "",
+  });
   const inlineSummary = JSON.stringify(partInfo.summary || {}, null, 2);
   const inlineQuality = JSON.stringify(qualitySummary, null, 2);
   const inlineVerifiedClaims = JSON.stringify(verifiedClaims, null, 2);
+  const inlineWritableClaimGap = JSON.stringify(writableClaimGap, null, 2);
   const outputFile = partInfo.outputPath || path.join(paths.fragmentPartsDir, `${partInfo.id}.md`);
   const sectionInstruction =
     partInfo.type === "module"
@@ -777,6 +851,12 @@ function buildPhase3bPartPrompt(context = {}) {
     "- Body sections may only assert claims with writable=true.",
     "- Claims with writable=false must only appear under pending/unverified confirmation items.",
     "- Do not invent business flow, purpose, role, status, or automation claims outside verified-claims.",
+    "- If writable-claim-coverage-gap lists missingWritableClaims for this part, cover those claims in this fragment.",
+    "",
+    "writable-claim-coverage-gap (from fact-check-report, filtered to this part when possible):",
+    "```json",
+    inlineWritableClaimGap,
+    "```",
     "",
     "分片 evidence-summary：",
     "```json",
@@ -891,6 +971,7 @@ function writePreparationFiles(context = {}) {
   const evidenceSummary = loadEvidenceSummary(context);
   const qualitySummary = loadQualitySummary(context);
   const verifiedClaims = loadVerifiedClaims(context);
+  const factCheckReport = loadFactCheckReport(context);
   const skeleton = buildWhitepaperSkeleton({
     ...context,
     evidenceSummary,
@@ -905,6 +986,7 @@ function writePreparationFiles(context = {}) {
     evidenceSummary,
     qualityReport: qualitySummary,
     verifiedClaims,
+    factCheckReport,
     verifiedClaimsPath: undefined,
   });
   const parts = buildNarrativeParts(context, evidenceSummary);
@@ -926,6 +1008,7 @@ function writePreparationFiles(context = {}) {
       evidenceSummary,
       qualityReport: qualitySummary,
       verifiedClaims,
+      factCheckReport,
       verifiedClaimsPath: undefined,
     });
     fs.writeFileSync(part.promptPath, partPrompt, "utf8");
@@ -1436,6 +1519,7 @@ module.exports = {
   compactEvidenceSummary,
   compactModuleSummary,
   compactOverviewSummary,
+  compactWritableClaimGap,
   normalizeNarrativePartSelector,
   resolveCursorApiKey,
   resolveCursorSdkPrompts,

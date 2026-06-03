@@ -1744,6 +1744,17 @@ test("buildPhase3bPrompt uses low-token inline inputs without reading large repo
       writableClaimIds: ["function:ai-task:list"],
       metrics: { writableClaimCount: 1 },
     },
+    factCheckReport: {
+      canFinalize: false,
+      missingWritableClaimIds: ["function:ai-task:list"],
+      metrics: {
+        writableClaimCount: 1,
+        coveredWritableClaimCount: 0,
+        missingWritableClaimCount: 1,
+        writableClaimCoverageRatio: 0,
+        minWritableClaimCoverage: 0.8,
+      },
+    },
   });
 
   assert.match(prompt, /narrative-brief\.md/);
@@ -1752,6 +1763,8 @@ test("buildPhase3bPrompt uses low-token inline inputs without reading large repo
   assert.match(prompt, /verified-claims/);
   assert.match(prompt, /writable=true/);
   assert.match(prompt, /function:ai-task:list/);
+  assert.match(prompt, /writable-claim-coverage-gap/);
+  assert.match(prompt, /missingWritableClaims/);
   assert.doesNotMatch(prompt, /SKILL\.md/);
   assert.doesNotMatch(prompt, /docs\/narrative-guide\.md/);
   assert.doesNotMatch(prompt, /whitepaper\.draft\.md/);
@@ -1925,6 +1938,55 @@ test("phase3b split prompts scope overview and module writing separately", () =>
   assert.match(modulePrompt, /只写模块「AI任务」/);
   assert.match(modulePrompt, /## 2 功能模块概览中的该模块条目/);
   assert.match(modulePrompt, /不要写系统概览、典型流程/);
+});
+
+test("phase3b part prompt filters writable claim gap to selected module", () => {
+  const { buildNarrativeParts, buildPhase3bPartPrompt } = require("./narrative/phase3b");
+  const summary = {
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    modules: [{ name: "AI任务" }, { name: "发布管理" }],
+    functions: [
+      { module: "AI任务", name: "任务列表" },
+      { module: "发布管理", name: "发布列表" },
+    ],
+  };
+  const claims = {
+    claims: [
+      {
+        id: "function:ai-task:list",
+        type: "function-presence",
+        subject: "任务列表",
+        module: "AI任务",
+        writable: true,
+        status: "confirmed",
+      },
+      {
+        id: "function:publish:list",
+        type: "function-presence",
+        subject: "发布列表",
+        module: "发布管理",
+        writable: true,
+        status: "confirmed",
+      },
+    ],
+    writableClaimIds: ["function:ai-task:list", "function:publish:list"],
+  };
+  const parts = buildNarrativeParts({ outputPath: "outputs/adp/whitepaper.pending-review.md" }, summary);
+  const prompt = buildPhase3bPartPrompt({
+    systemCode: "adp",
+    systemName: "AI保单数据闭环平台",
+    outputPath: "outputs/adp/whitepaper.pending-review.md",
+    part: parts.find((item) => item.moduleName === "AI任务"),
+    qualityReport: {},
+    verifiedClaims: claims,
+    factCheckReport: {
+      missingWritableClaimIds: ["function:ai-task:list", "function:publish:list"],
+      metrics: { writableClaimCoverageRatio: 0.5, minWritableClaimCoverage: 0.8 },
+    },
+  });
+
+  assert.match(prompt, /function:ai-task:list/);
+  assert.doesNotMatch(prompt, /function:publish:list/);
 });
 
 test("phase3b module part paths avoid slug collisions", () => {
@@ -4595,6 +4657,80 @@ test("dashboard snapshot marks stale truth readiness report as not submittable",
   assert.ok(snapshot.systems[0].truthReadiness.staleSources.length > 0);
 });
 
+test("dashboard snapshot exposes writable claim coverage gaps", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
+  const { buildDashboardSnapshot } = require("./local-dashboard/server");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-writable-gap-"));
+  const configPath = path.join(dir, "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://adp.example.test/",
+    ].join("\n"),
+    "utf8",
+  );
+  const output = path.join(dir, "outputs", "adp");
+  fs.mkdirSync(output, { recursive: true });
+  let state = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
+  state = updateNodeStatus(state, "truth-readiness", "success");
+  writePipelineState(path.join(output, "pipeline-state.json"), state);
+  fs.writeFileSync(path.join(output, "whitepaper.pending-review.md"), "# 待审\n\n任务列表", "utf8");
+  fs.writeFileSync(path.join(output, "quality-report.json"), JSON.stringify({ canFinalize: true }), "utf8");
+  fs.writeFileSync(path.join(output, "narrative-quality-report.json"), JSON.stringify({ canSubmitReview: true }), "utf8");
+  fs.writeFileSync(path.join(output, "verified-claims.json"), JSON.stringify({ claims: [] }), "utf8");
+  fs.writeFileSync(
+    path.join(output, "fact-check-report.json"),
+    JSON.stringify({
+      canFinalize: false,
+      missingWritableClaimIds: ["function:保单任务:任务详情"],
+      metrics: {
+        writableClaimCount: 2,
+        coveredWritableClaimCount: 1,
+        missingWritableClaimCount: 1,
+        writableClaimCoverageRatio: 0.5,
+        minWritableClaimCoverage: 0.8,
+      },
+    }),
+    "utf8",
+  );
+  writePassingTruthReadinessReport(output, {
+    canSubmitReview: false,
+    canFinalize: false,
+    gates: {
+      factCheck: {
+        pass: false,
+        scorePercent: 50,
+        missingWritableClaimIds: ["function:保单任务:任务详情"],
+        metrics: {
+          writableClaimCount: 2,
+          coveredWritableClaimCount: 1,
+          missingWritableClaimCount: 1,
+          writableClaimCoverageRatio: 0.5,
+          minWritableClaimCoverage: 0.8,
+        },
+      },
+    },
+    blockers: [{ id: "fact-check.writable-coverage", message: "Missing writable claims." }],
+  });
+
+  const snapshot = buildDashboardSnapshot({ configPath });
+  const coverage = snapshot.systems[0].truthReadiness.writableClaimCoverage;
+
+  assert.equal(coverage.ratio, 0.5);
+  assert.equal(coverage.minRatio, 0.8);
+  assert.equal(coverage.missingWritableClaimCount, 1);
+  assert.deepEqual(coverage.missingWritableClaimIds, ["function:保单任务:任务详情"]);
+});
+
 test("dashboard snapshot regenerates missing docx for finalized system", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -5692,6 +5828,12 @@ test("dashboard frontend renders truth readiness gate summary", () => {
       blockers: [],
       improvementActions: [],
       generatedAt: "2026-05-21T02:00:00.000Z",
+      writableClaimCoverage: {
+        ratio: 0.5,
+        minRatio: 0.8,
+        missingWritableClaimCount: 1,
+        missingWritableClaimIds: ["function:保单任务:任务详情"],
+      },
       gates: {
         evidence: { label: "Evidence", pass: true, scorePercent: 100 },
         claims: { label: "Claims", pass: true, scorePercent: 100 },
@@ -5702,6 +5844,10 @@ test("dashboard frontend renders truth readiness gate summary", () => {
   assert.match(html, /真实度门禁/);
   assert.match(html, /96%/);
   assert.match(html, /95%/);
+  assert.match(html, /可写声明覆盖/);
+  assert.match(html, /50%/);
+  assert.match(html, /缺失可写声明/);
+  assert.match(html, /function:保单任务:任务详情/);
   assert.match(html, /无阻塞项/);
 });
 
@@ -9397,6 +9543,15 @@ test("truth readiness blocks low writable claim coverage", () => {
   assert.equal(report.canSubmitReview, false);
   assert.equal(report.gates.factCheck.metrics.writableClaimCoverageRatio, 0.5);
   assert.deepEqual(report.gates.factCheck.missingWritableClaimIds, ["function:保单任务:任务详情"]);
+  assert.ok(report.blockers.some((item) => item.id === "fact-check.writable-coverage"));
+  assert.ok(
+    report.improvementActions.some(
+      (item) =>
+        item.id === "narrative.cover-missing-writable-claims" &&
+        item.narrativePart === "function-sections" &&
+        item.missingWritableClaimIds.includes("function:保单任务:任务详情"),
+    ),
+  );
 });
 
 test("package manifest whitelists only skill runtime assets", () => {
