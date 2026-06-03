@@ -42,6 +42,7 @@
     "scripts/run-phase3b.js",
     "scripts/run-review-decision.js",
     "scripts/run-local-e2e-smoke.js",
+    "scripts/repair-artifacts.js",
     "scripts/run-batch-repair-queue.js",
     "scripts/run-repair-follow-up-loop.js",
     "scripts/run-whitepaper-batch.js",

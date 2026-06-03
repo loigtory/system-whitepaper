@@ -14,6 +14,10 @@ const { loadBatchConfig, resolveBatchConcurrency } = require("./run-whitepaper-b
 const { runBatchAcceptance } = require("./check-batch-acceptance");
 const { runDeliveryReadiness } = require("./check-delivery-readiness");
 const { runRealRunReadiness } = require("./check-real-run-readiness");
+const {
+  assertValidRepairClosureArtifact,
+  assertValidRepairFollowUpPlanArtifact,
+} = require("./repair-artifacts");
 
 const REPAIR_NODE_ORDER = NODES.map((node) => node.id).filter((nodeId) => nodeId !== "review");
 const REPAIR_NODE_ALLOWLIST = new Set(REPAIR_NODE_ORDER);
@@ -449,6 +453,7 @@ function renderRepairClosureMarkdown(closure = {}) {
 function writeRepairClosure(outputRoot, state, options = {}) {
   const batchDir = path.join(outputRoot, "_batch");
   const closure = buildRepairClosureReport(state, { ...options, outputRoot });
+  assertValidRepairClosureArtifact(closure);
   const jsonPath = path.join(batchDir, "repair-closure.json");
   const markdownPath = path.join(batchDir, "repair-closure.md");
   writeJson(jsonPath, closure);
@@ -791,6 +796,7 @@ function renderRepairFollowUpPlanMarkdown(plan = {}) {
 function writeRepairFollowUpPlan(outputRoot, state, options = {}) {
   const batchDir = path.join(outputRoot, "_batch");
   const followUpPlan = buildRepairFollowUpPlan(state, { ...options, outputRoot });
+  assertValidRepairFollowUpPlanArtifact(followUpPlan);
   const jsonPath = path.join(batchDir, "repair-follow-up-plan.json");
   const markdownPath = path.join(batchDir, "repair-follow-up-plan.md");
   writeJson(jsonPath, followUpPlan);
@@ -1055,6 +1061,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  assertValidRepairClosureArtifact,
+  assertValidRepairFollowUpPlanArtifact,
   buildRepairBatchArgs,
   buildRepairClosureReport,
   buildRepairFollowUpPlan,

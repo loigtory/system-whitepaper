@@ -16,6 +16,10 @@ const {
   normalizeThreshold,
   scanDatabaseProfileSafety,
 } = require("./check-truth-readiness");
+const {
+  assertValidRepairClosureArtifact,
+  assertValidRepairFollowUpPlanArtifact,
+} = require("./repair-artifacts");
 
 const DEFAULT_TARGET_TRUTH_SCORE_PERCENT = 95;
 const ACCEPTED_BATCH_STATUSES = new Set(["success", "review-pending", "finalized"]);
@@ -466,6 +470,26 @@ function buildBatchArtifactAcceptance(context = {}, systems = [], options = {}) 
   const blockers = [];
   const warnings = [];
   const targetCodes = new Set(systems.map((system) => String(system.code || "").trim()).filter(Boolean));
+  let repairClosureValid = Boolean(repairClosure);
+  let followUpPlanValid = Boolean(followUpPlan);
+
+  if (repairClosure) {
+    try {
+      assertValidRepairClosureArtifact(repairClosure);
+    } catch (error) {
+      repairClosureValid = false;
+      blockers.push(blocker("repair.closure-invalid-artifact", `Repair closure artifact is invalid: ${error.message}`));
+    }
+  }
+
+  if (followUpPlan) {
+    try {
+      assertValidRepairFollowUpPlanArtifact(followUpPlan);
+    } catch (error) {
+      followUpPlanValid = false;
+      blockers.push(blocker("repair.follow-up-invalid-artifact", `Repair follow-up artifact is invalid: ${error.message}`));
+    }
+  }
 
   if (!batchState) {
     blockers.push(blocker("batch.run-state-missing", "outputs/_batch/run-state.json is missing or malformed."));
@@ -547,20 +571,22 @@ function buildBatchArtifactAcceptance(context = {}, systems = [], options = {}) 
   }
 
   const repairClosureMatches =
+    repairClosureValid &&
     repairClosure &&
     generatedAtMatches(repairClosure.diagnosis?.generatedAt, diagnosis?.generatedAt) &&
     generatedAtMatches(repairClosure.repairQueue?.generatedAt, repairQueue?.generatedAt);
-  if (repairClosure && repairClosure.status !== "passed" && (remainingRepairItems > 0 || repairClosureMatches)) {
+  if (repairClosureValid && repairClosure && repairClosure.status !== "passed" && (remainingRepairItems > 0 || repairClosureMatches)) {
     blockers.push(blocker("repair.closure-not-passed", "Repair closure is not passed while repair items remain."));
-  } else if (repairClosure && repairClosure.status !== "passed") {
+  } else if (repairClosureValid && repairClosure && repairClosure.status !== "passed") {
     warnings.push(warning("repair.closure-not-passed-stale", "Repair closure is not passed, but current repair queue is empty."));
   }
 
   const followUpMatches =
+    followUpPlanValid &&
     followUpPlan &&
     generatedAtMatches(followUpPlan.source?.diagnosisGeneratedAt, diagnosis?.generatedAt) &&
     generatedAtMatches(followUpPlan.source?.repairQueueGeneratedAt, repairQueue?.generatedAt);
-  if (followUpPlan && ["ready-to-run", "needs-agent-writing", "blocked"].includes(String(followUpPlan.status || ""))) {
+  if (followUpPlanValid && followUpPlan && ["ready-to-run", "needs-agent-writing", "blocked"].includes(String(followUpPlan.status || ""))) {
     if (remainingRepairItems > 0 || followUpMatches) {
       blockers.push(blocker("repair.follow-up-not-complete", `Repair follow-up status is ${followUpPlan.status}.`));
     } else {

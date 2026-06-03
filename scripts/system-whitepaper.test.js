@@ -7595,6 +7595,8 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   const path = require("node:path");
   const { EventEmitter } = require("node:events");
   const {
+    assertValidRepairClosureArtifact,
+    assertValidRepairFollowUpPlanArtifact,
     buildRepairClosureReport,
     buildRepairFollowUpPlan,
     buildRepairRunPlan,
@@ -7702,6 +7704,15 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   assert.equal(passedClosure.status, "passed");
   assert.equal(passedClosure.canSubmitAll, true);
   assert.equal(passedClosure.repairQueueEmpty, true);
+  assert.doesNotThrow(() => assertValidRepairClosureArtifact(passedClosure));
+  assert.throws(
+    () => assertValidRepairClosureArtifact({ ...passedClosure, repairQueueEmpty: false }),
+    /repairQueueEmpty=true/,
+  );
+  assert.throws(
+    () => assertValidRepairClosureArtifact({ ...passedClosure, blockers: ["still blocked"] }),
+    /zero failed groups, pending groups, and blockers/,
+  );
 
   const blockedClosure = buildRepairClosureReport(
     {
@@ -7760,6 +7771,24 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   );
   assert.equal(passedFollowUp.status, "complete");
   assert.equal(passedFollowUp.summary.commands, 0);
+  assert.doesNotThrow(() => assertValidRepairFollowUpPlanArtifact(passedFollowUp));
+  assert.throws(
+    () =>
+      assertValidRepairFollowUpPlanArtifact({
+        ...passedFollowUp,
+        commands: [
+          {
+            id: "forged-command",
+            canAutoRun: true,
+            canRunWithoutAgentWriting: true,
+            requiresAgentWriting: false,
+            command: { npmScript: "repair:batch", args: [] },
+          },
+        ],
+        summary: { ...passedFollowUp.summary, commands: 1, lowQuotaCommands: 1 },
+      }),
+    /status=complete requires no remaining commands/,
+  );
 
   const followUpPlan = buildRepairFollowUpPlan(
     {
@@ -7819,6 +7848,16 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   assert.equal(
     followUpPlan.commands.find((item) => item.id === "repair-remaining-low-quota").command.args.includes("--max-items"),
     false,
+  );
+  assert.doesNotThrow(() => assertValidRepairFollowUpPlanArtifact(followUpPlan));
+  assert.throws(
+    () =>
+      assertValidRepairFollowUpPlanArtifact({
+        ...followUpPlan,
+        commands: followUpPlan.commands.filter((item) => item.requiresAgentWriting),
+        summary: { ...followUpPlan.summary, commands: 1, lowQuotaCommands: 0, agentWritingCommands: 1 },
+      }),
+    /status=ready-to-run requires low-quota commands/,
   );
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "repair-queue-runner-"));
@@ -7895,6 +7934,7 @@ test("repair follow-up loop consumes low-quota commands only", async () => {
   const { EventEmitter } = require("node:events");
   const {
     buildRepairBatchChildArgs,
+    buildFollowUpChildArgs,
     runRepairFollowUpLoop,
     resolveFollowUpPath,
     selectNextFollowUpCommand,
@@ -7903,10 +7943,32 @@ test("repair follow-up loop consumes low-quota commands only", async () => {
 
   const followUpPlan = {
     artifactType: "batch-repair-follow-up-plan",
+    version: 1,
+    generatedAt: "2026-06-03T00:00:00.000Z",
     status: "ready-to-run",
     nextBestAction: "Run the first low-quota follow-up command.",
-    summary: { commands: 2, lowQuotaCommands: 1, agentWritingCommands: 1 },
-    source: { closureStatus: "blocked" },
+    source: {
+      closureStatus: "blocked",
+      runStatus: "partial",
+      diagnosisGeneratedAt: "2026-06-03T00:00:00.000Z",
+      repairQueueGeneratedAt: "2026-06-03T00:00:00.000Z",
+    },
+    policy: {
+      reset: false,
+      reviewNodeAllowed: false,
+      agentWritingRequiresFlag: true,
+    },
+    summary: {
+      commands: 2,
+      lowQuotaCommands: 1,
+      agentWritingCommands: 1,
+      failedGroups: 0,
+      pendingGroups: 0,
+      remainingQueueItems: 1,
+      lowQuotaQueueItems: 1,
+      agentWritingQueueItems: 0,
+      blockedQueueItems: 0,
+    },
     commands: [
       {
         id: "repair-remaining-agent-writing",
@@ -7927,6 +7989,17 @@ test("repair follow-up loop consumes low-quota commands only", async () => {
         },
       },
     ],
+    queueItems: [
+      {
+        id: "repair-remaining-low-quota",
+        systemCode: "adp",
+        canAutoRun: true,
+        quotaImpact: "low",
+        nodesCsv: "truth-readiness",
+      },
+    ],
+    blockedQueueItems: [],
+    blockers: ["batch repair still requires follow-up"],
   };
   const selected = selectNextFollowUpCommand(followUpPlan);
   assert.equal(selected.command.id, "repair-remaining-low-quota");
@@ -7944,6 +8017,35 @@ test("repair follow-up loop consumes low-quota commands only", async () => {
       "4",
       "--systems",
       "adp",
+    ],
+  );
+  const diagnosisBatchCommand = {
+    id: "diagnosis-refresh",
+    canAutoRun: true,
+    canRunWithoutAgentWriting: true,
+    requiresAgentWriting: false,
+    requiresExplicitQuotaApproval: false,
+    command: {
+      npmScript: "batch",
+      args: ["--systems", "adp", "--nodes", "truth-readiness", "--reset", "--config", "evil.yaml"],
+    },
+  };
+  assert.equal(selectNextFollowUpCommand({ commands: [diagnosisBatchCommand] }).command.id, "diagnosis-refresh");
+  assert.deepEqual(
+    buildFollowUpChildArgs(diagnosisBatchCommand, {
+      configPath: "config/systems.local.yaml",
+      concurrency: 4,
+    }),
+    [
+      "scripts/run-whitepaper-batch.js",
+      "--config",
+      "config/systems.local.yaml",
+      "--concurrency",
+      "4",
+      "--systems",
+      "adp",
+      "--nodes",
+      "truth-readiness",
     ],
   );
   assert.equal(summarizeLoopStatus({ status: "needs-agent-writing" }, [], { maxRounds: 3 }).status, "needs-agent-writing");
@@ -7994,11 +8096,36 @@ test("repair follow-up loop consumes low-quota commands only", async () => {
       path.join(batchDir, "repair-follow-up-plan.json"),
       JSON.stringify({
         artifactType: "batch-repair-follow-up-plan",
+        version: 1,
+        generatedAt: "2026-06-03T00:01:00.000Z",
         status: "complete",
         nextBestAction: "No repair follow-up is required.",
-        summary: { commands: 0, lowQuotaCommands: 0, agentWritingCommands: 0 },
-        source: { closureStatus: "passed" },
+        source: {
+          closureStatus: "passed",
+          runStatus: "success",
+          diagnosisGeneratedAt: "2026-06-03T00:01:00.000Z",
+          repairQueueGeneratedAt: "2026-06-03T00:01:00.000Z",
+        },
+        policy: {
+          reset: false,
+          reviewNodeAllowed: false,
+          agentWritingRequiresFlag: true,
+        },
+        summary: {
+          commands: 0,
+          lowQuotaCommands: 0,
+          agentWritingCommands: 0,
+          failedGroups: 0,
+          pendingGroups: 0,
+          remainingQueueItems: 0,
+          lowQuotaQueueItems: 0,
+          agentWritingQueueItems: 0,
+          blockedQueueItems: 0,
+        },
         commands: [],
+        queueItems: [],
+        blockedQueueItems: [],
+        blockers: [],
       }),
       "utf8",
     );
@@ -8021,6 +8148,20 @@ test("repair follow-up loop consumes low-quota commands only", async () => {
   assert.equal(runState.deliveryReadiness.status, "blocked");
   assert.equal(runState.realRunReadiness.status, "blocked");
   assert.equal(launchCount, 1);
+
+  fs.writeFileSync(
+    path.join(batchDir, "repair-follow-up-plan.json"),
+    JSON.stringify({
+      ...followUpPlan,
+      commands: followUpPlan.commands.filter((item) => item.requiresAgentWriting),
+      summary: { ...followUpPlan.summary, commands: 1, lowQuotaCommands: 0, agentWritingCommands: 1 },
+    }),
+    "utf8",
+  );
+  await assert.rejects(
+    () => runRepairFollowUpLoop({ args: { config: configPath, "max-rounds": 1 }, spawn: fakeSpawn }),
+    /not a valid follow-up artifact/,
+  );
 });
 
 test("batch acceptance report gates 95+ truth delivery without reading secrets", () => {
@@ -8162,13 +8303,39 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
     }),
     "utf8",
   );
+  const repairClosurePath = path.join(outputRoot, "_batch", "repair-closure.json");
   fs.writeFileSync(
-    path.join(outputRoot, "_batch", "repair-closure.json"),
+    repairClosurePath,
     JSON.stringify({
       artifactType: "batch-repair-closure",
+      version: 1,
+      generatedAt: "2026-06-03T00:03:00.000Z",
       status: "passed",
-      diagnosis: { generatedAt: "2026-06-03T00:02:00.000Z" },
-      repairQueue: { generatedAt: "2026-06-03T00:02:30.000Z" },
+      targetTruthScorePercent: 95,
+      canSubmitAll: true,
+      repairQueueEmpty: true,
+      runStatus: "success",
+      runStartedAt: "2026-06-03T00:02:30.000Z",
+      runFinishedAt: "2026-06-03T00:03:00.000Z",
+      diagnosisAvailable: true,
+      repairQueueAvailable: true,
+      diagnosis: {
+        generatedAt: "2026-06-03T00:02:00.000Z",
+        summary: {
+          total: 1,
+          ready: 1,
+          blocked: 0,
+          belowTarget: 0,
+          missingWritableClaims: 0,
+          minTruthScore: 98,
+        },
+      },
+      repairQueue: {
+        generatedAt: "2026-06-03T00:02:30.000Z",
+        summary: { total: 0, autoRunnable: 0, blocked: 0, requiresAgentWriting: 0 },
+      },
+      failedGroups: [],
+      pendingGroups: [],
       blockers: [],
     }),
     "utf8",
@@ -8182,6 +8349,24 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   assert.equal(accepted.summary.smokeEvidence, 0);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "acceptance-report.json")), true);
   assert.match(renderBatchAcceptanceMarkdown(accepted), /Batch Acceptance Report/);
+
+  const acceptedClosureArtifact = JSON.parse(fs.readFileSync(repairClosurePath, "utf8"));
+  fs.writeFileSync(
+    repairClosurePath,
+    JSON.stringify({
+      ...acceptedClosureArtifact,
+      repairQueueEmpty: false,
+    }),
+    "utf8",
+  );
+  const forgedClosure = buildBatchAcceptanceReport({ args: { config: configPath } });
+  assert.equal(forgedClosure.status, "blocked");
+  assert.ok(forgedClosure.blockers.some((item) => item.id === "repair.closure-invalid-artifact"));
+  fs.writeFileSync(
+    repairClosurePath,
+    JSON.stringify(acceptedClosureArtifact),
+    "utf8",
+  );
 
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
@@ -14983,6 +15168,7 @@ test("package manifest whitelists only skill runtime assets", () => {
     "scripts/run-whitepaper-batch.js",
     "scripts/run-whitepaper-pipeline.js",
     "scripts/run-phase3b.js",
+    "scripts/repair-artifacts.js",
     "scripts/run-batch-repair-queue.js",
     "scripts/run-repair-follow-up-loop.js",
     "scripts/run-local-e2e-smoke.js",
@@ -15050,6 +15236,7 @@ test("npm pack dry-run excludes private and process-only assets", () => {
     "scripts/init-local-config.js",
     "scripts/run-whitepaper-batch.js",
     "scripts/run-whitepaper-pipeline.js",
+    "scripts/repair-artifacts.js",
     "scripts/run-batch-repair-queue.js",
     "scripts/run-repair-follow-up-loop.js",
     "scripts/run-local-e2e-smoke.js",

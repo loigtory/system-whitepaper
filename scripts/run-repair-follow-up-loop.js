@@ -14,11 +14,15 @@ const { loadBatchConfig, resolveBatchConcurrency } = require("./run-whitepaper-b
 const { runBatchAcceptance } = require("./check-batch-acceptance");
 const { runDeliveryReadiness } = require("./check-delivery-readiness");
 const { runRealRunReadiness } = require("./check-real-run-readiness");
+const { assertValidRepairFollowUpPlanArtifact } = require("./repair-artifacts");
 
 const DEFAULT_MAX_ROUNDS = 3;
+const SUPPORTED_FOLLOW_UP_SCRIPTS = new Set(["repair:batch", "batch"]);
 const SAFE_REPAIR_VALUE_FLAGS = new Set([
   "--systems",
   "--system",
+  "--nodes",
+  "--narrative-part",
   "--max-items",
   "--provider",
   "--model",
@@ -63,6 +67,11 @@ function readFollowUpPlan(filePath) {
   if (plan.artifactType && plan.artifactType !== "batch-repair-follow-up-plan") {
     throw new Error(`Unsupported follow-up artifactType: ${plan.artifactType}`);
   }
+  try {
+    assertValidRepairFollowUpPlanArtifact(plan);
+  } catch (error) {
+    throw new Error(`repair-follow-up-plan.json is not a valid follow-up artifact: ${error.message}`);
+  }
   return plan;
 }
 
@@ -83,7 +92,7 @@ function selectNextFollowUpCommand(plan = {}) {
       skipped.push(createLoopSkippedCommand(command, "missing-command"));
       continue;
     }
-    if (command.command.npmScript !== "repair:batch") {
+    if (!SUPPORTED_FOLLOW_UP_SCRIPTS.has(command.command.npmScript)) {
       skipped.push(createLoopSkippedCommand(command, "unsupported-npm-script"));
       continue;
     }
@@ -100,10 +109,15 @@ function selectNextFollowUpCommand(plan = {}) {
   return { command: null, skipped };
 }
 
-function buildRepairBatchChildArgs(command = {}, options = {}) {
+function resolveFollowUpEntrypoint(command = {}) {
+  if (command.command?.npmScript === "batch") return "scripts/run-whitepaper-batch.js";
+  return "scripts/run-batch-repair-queue.js";
+}
+
+function buildFollowUpChildArgs(command = {}, options = {}) {
   const rawArgs = Array.isArray(command.command?.args) ? command.command.args : [];
   const args = [
-    "scripts/run-batch-repair-queue.js",
+    resolveFollowUpEntrypoint(command),
     "--config",
     options.configPath || "config/systems.local.yaml",
     "--concurrency",
@@ -236,7 +250,7 @@ async function runRepairFollowUpLoop(options = {}) {
     maxRounds,
     policy: {
       agentWritingAllowed: false,
-      supportedNpmScripts: ["repair:batch"],
+      supportedNpmScripts: [...SUPPORTED_FOLLOW_UP_SCRIPTS],
     },
     rounds: [],
     skipped: [],
@@ -263,7 +277,7 @@ async function runRepairFollowUpLoop(options = {}) {
       state.reason = "no low-quota auto-runnable follow-up command is available";
       break;
     }
-    const childArgs = buildRepairBatchChildArgs(command, {
+    const childArgs = buildFollowUpChildArgs(command, {
       configPath: context.configPath,
       concurrency,
       provider: args.provider || "",
@@ -379,8 +393,10 @@ if (require.main === module) {
 }
 
 module.exports = {
-  buildRepairBatchChildArgs,
+  buildFollowUpChildArgs,
+  buildRepairBatchChildArgs: buildFollowUpChildArgs,
   readFollowUpPlan,
+  resolveFollowUpEntrypoint,
   resolveFollowUpPath,
   runRepairFollowUpLoop,
   selectNextFollowUpCommand,
