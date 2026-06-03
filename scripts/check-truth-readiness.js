@@ -6,6 +6,14 @@ const path = require("node:path");
 const { parseArgs, writeJson } = require("./system-whitepaper-lib");
 
 const DEFAULT_THRESHOLD = 0.95;
+const REDACTED_VALUE = "[redacted]";
+const MAX_SAFE_SAMPLE_ROWS = 3;
+const SECRET_KEY_PATTERN = /(password|passwd|pwd|secret|token|key|credential|dsn|url|host|port|user|username|conn|connection|jdbc)/i;
+const SENSITIVE_DATA_KEY_PATTERN =
+  /(phone|mobile|tel|email|idcard|identity|cert|card|bank|account|address|name|customer|client|user|\u59d3\u540d|\u624b\u673a|\u7535\u8bdd|\u90ae\u7bb1|\u8bc1\u4ef6|\u8eab\u4efd\u8bc1|\u94f6\u884c\u5361|\u5730\u5740|\u5ba2\u6237|\u7528\u6237|\u8d26\u53f7|\u8d26\u6237)/i;
+const SENSITIVE_SAMPLE_VALUE_PATTERN =
+  /\b1[3-9]\d{9}\b|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\b(?:\d{15}|\d{17}[0-9X])\b|\b(?:\d[ -]?){13,19}\b/i;
+const ALLOWED_SOURCE_SECRET_KEYS = new Set(["type", "databaseType", "driver", "database", "db", "readOnly", "mode"]);
 
 const REQUIRED_ARTIFACTS = {
   quality: "quality-report.json",
@@ -555,6 +563,118 @@ function isValidDatabaseProfile(value, expectedSystem = {}) {
   return databaseProfileSystemCode(value) === expectedCode;
 }
 
+function safePathJoin(parts = []) {
+  return parts.filter(Boolean).join(".");
+}
+
+function isRedactedValue(value) {
+  return value === REDACTED_VALUE;
+}
+
+function sampleValueLooksMasked(value, requireMask = false) {
+  if (value === null || value === undefined || value === "") return true;
+  if (typeof value === "number" || typeof value === "boolean") return true;
+  const text = String(value);
+  if (requireMask) return isRedactedValue(value) || text.includes("***");
+  return isRedactedValue(value) || text.includes("***") || !SENSITIVE_SAMPLE_VALUE_PATTERN.test(text);
+}
+
+function collectUnsafeSampleValues(value, pathParts = []) {
+  const failures = [];
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      failures.push(...collectUnsafeSampleValues(item, [...pathParts, `[${index}]`]));
+    });
+    return failures;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      const nextPath = [...pathParts, key];
+      if (SENSITIVE_DATA_KEY_PATTERN.test(key) && item && typeof item === "object") {
+        if (!isRedactedValue(item)) {
+          failures.push(`database-profile sample ${safePathJoin(nextPath)} contains an unredacted sensitive object.`);
+        }
+        continue;
+      }
+      failures.push(...collectUnsafeSampleValues(item, nextPath));
+    }
+    return failures;
+  }
+  const key = pathParts[pathParts.length - 1] || "";
+  const sensitiveKey = SENSITIVE_DATA_KEY_PATTERN.test(key);
+  const sensitiveValue = typeof value === "string" && SENSITIVE_SAMPLE_VALUE_PATTERN.test(value);
+  if ((sensitiveKey || sensitiveValue) && !sampleValueLooksMasked(value, sensitiveKey)) {
+    failures.push(`database-profile sample ${safePathJoin(pathParts)} contains an unredacted sensitive value.`);
+  }
+  return failures;
+}
+
+function collectUnsafeSecretValues(value, pathParts = []) {
+  const failures = [];
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      failures.push(...collectUnsafeSecretValues(item, [...pathParts, `[${index}]`]));
+    });
+    return failures;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      const nextPath = [...pathParts, key];
+      if (
+        pathParts.length === 0 &&
+        ALLOWED_SOURCE_SECRET_KEYS.has(key) &&
+        !SECRET_KEY_PATTERN.test(key)
+      ) {
+        continue;
+      }
+      if (SECRET_KEY_PATTERN.test(key) && item !== "" && item !== null && item !== undefined && !isRedactedValue(item)) {
+        failures.push(`database-profile source.secret.${safePathJoin(nextPath)} is not redacted.`);
+        continue;
+      }
+      failures.push(...collectUnsafeSecretValues(item, nextPath));
+    }
+    return failures;
+  }
+  return failures;
+}
+
+function scanDatabaseProfileSafety(profile = {}) {
+  const failures = [];
+  const warnings = [];
+  if (!profile || typeof profile !== "object" || Array.isArray(profile)) {
+    return { pass: false, failures: ["database-profile.json is not a JSON object."], warnings };
+  }
+  if (profile.artifactType !== "database-profile") return { pass: true, failures, warnings };
+  if (profile.safety?.secretRedacted !== true) {
+    failures.push("database-profile.json must declare safety.secretRedacted=true.");
+  }
+  if (profile.source?.secret && typeof profile.source.secret === "object") {
+    failures.push(...collectUnsafeSecretValues(profile.source.secret));
+  }
+  const tables = Array.isArray(profile.tables) ? profile.tables : [];
+  for (const [tableIndex, table] of tables.entries()) {
+    const sampleRows = Array.isArray(table.sampleRows) ? table.sampleRows : [];
+    if (sampleRows.length > MAX_SAFE_SAMPLE_ROWS) {
+      failures.push(
+        `database-profile table ${table.name || tableIndex} includes ${sampleRows.length} sample rows; maximum is ${MAX_SAFE_SAMPLE_ROWS}.`,
+      );
+    }
+    for (const [rowIndex, row] of sampleRows.entries()) {
+      failures.push(
+        ...collectUnsafeSampleValues(row, [
+          `tables[${tableIndex}]`,
+          String(table.name || "table"),
+          `sampleRows[${rowIndex}]`,
+        ]),
+      );
+    }
+  }
+  if (profile.source?.sampleDataIncluded && !tables.some((table) => Array.isArray(table.sampleRows) && table.sampleRows.length)) {
+    warnings.push("database-profile.json declares sampleDataIncluded=true but no sample rows are present.");
+  }
+  return { pass: failures.length === 0, failures: [...new Set(failures)], warnings };
+}
+
 function buildDatabaseGate(artifacts, options = {}) {
   const profile = artifacts.databaseProfile || {
     status: "missing",
@@ -591,17 +711,22 @@ function buildDatabaseGate(artifacts, options = {}) {
   const profileSystemCode = databaseProfileSystemCode(profile.value || {});
   const profileSystemMatches = !expectedSystemCode || (profileArtifactValid && profileSystemCode === expectedSystemCode);
   const profileAvailable = profile.status === "ok" && isValidDatabaseProfile(profile.value, { code: expectedSystemCode });
+  const profileSafety = profile.status === "ok" ? scanDatabaseProfileSafety(profile.value || {}) : { pass: true, failures: [], warnings: [] };
+  const safeProfileAvailable = profileAvailable && profileSafety.pass;
   const available = profileAvailable || entityCount > 0 || columnCount > 0;
+  const score = available && profileSafety.pass ? 1 : 0;
   return {
     id: "database",
     label: "Redacted database evidence",
-    pass: true,
+    pass: profileSafety.pass,
     available,
-    profileAvailable,
+    profileAvailable: safeProfileAvailable,
+    rawProfileAvailable: profileAvailable,
     profileArtifactValid,
     profileSystemMatches,
-    score: available ? 1 : 0,
-    scorePercent: available ? 100 : 0,
+    profileSafety,
+    score,
+    scorePercent: percent(score),
     metrics: {
       entityCount,
       linkedFunctionCount,
@@ -611,13 +736,15 @@ function buildDatabaseGate(artifacts, options = {}) {
       databaseProfileStatus: profile.status,
       databaseProfileArtifactType: profile.value?.artifactType || "",
       databaseProfileSystemCode: profileSystemCode,
+      databaseProfileSafetyPass: profileSafety.pass,
       expectedSystemCode,
       dataDictionaryStatus: dataDictionaryArtifact.status,
       entityModelStatus: entityModelArtifact.status,
     },
     warnings: available
-      ? []
+      ? profileSafety.warnings
       : ["No redacted database profile was available; UI evidence remains the primary truth source."],
+    failures: profileSafety.failures,
   };
 }
 
@@ -714,9 +841,8 @@ function normalizeBoolean(value) {
 function buildDatabaseRequirementGate(gate = {}, options = {}) {
   const required = normalizeBoolean(options.requireDatabaseEvidence);
   const profileAvailable = gate.profileAvailable === true;
-  const pass = !required || profileAvailable;
-  const failures = [];
-  if (required && !profileAvailable) {
+  const failures = Array.isArray(gate.failures) ? [...gate.failures] : [];
+  if (required && gate.pass !== false && !profileAvailable) {
     const expectedCode = gate.metrics?.expectedSystemCode || "";
     const actualCode = gate.metrics?.databaseProfileSystemCode || "";
     if (gate.profileArtifactValid && expectedCode && actualCode !== expectedCode) {
@@ -725,6 +851,7 @@ function buildDatabaseRequirementGate(gate = {}, options = {}) {
       failures.push("Valid redacted database-profile.json is required but missing.");
     }
   }
+  const pass = gate.pass !== false && (!required || profileAvailable) && failures.length === 0;
   return {
     ...gate,
     required,
@@ -739,6 +866,17 @@ function buildDatabaseRequirementGate(gate = {}, options = {}) {
 }
 
 function collectDatabaseRequirementBlockers(gates, options = {}) {
+  if (gates.database.profileSafety?.pass === false) {
+    return [
+      blocker(
+        "database.profile-unsafe",
+        "P0",
+        "database-profile.json is not safely redacted for Truth Pipeline use.",
+        ["db-profile", "db-model", "truth-universe", "truth-claims", "truth-readiness"],
+        { failures: gates.database.failures || [], quotaImpact: "low" },
+      ),
+    ];
+  }
   if (!normalizeBoolean(options.requireDatabaseEvidence) || gates.database.profileAvailable) return [];
   const expectedCode = gates.database.metrics?.expectedSystemCode || "";
   const actualCode = gates.database.metrics?.databaseProfileSystemCode || "";
@@ -925,4 +1063,5 @@ module.exports = {
   loadReadinessInputs,
   normalizeThreshold,
   runTruthReadinessCheck,
+  scanDatabaseProfileSafety,
 };

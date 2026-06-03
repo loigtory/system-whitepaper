@@ -10385,7 +10385,12 @@ test("approved review recomputes current truth readiness before final approval",
   );
   fs.writeFileSync(
     path.join(dir, "database-profile.json"),
-    JSON.stringify({ artifactType: "database-profile", system: { code: "other" }, tables: [] }),
+    JSON.stringify({
+      artifactType: "database-profile",
+      system: { code: "other" },
+      tables: [],
+      safety: { secretRedacted: true },
+    }),
     "utf8",
   );
   writePassingTruthReadinessReport(dir, {
@@ -13243,7 +13248,12 @@ test("truth readiness requires real database profile when database evidence is m
       databaseProfile: {
         file: "database-profile.json",
         status: "ok",
-        value: { artifactType: "database-profile", system: { code: "other" }, tables: [] },
+        value: {
+          artifactType: "database-profile",
+          system: { code: "other" },
+          tables: [],
+          safety: { secretRedacted: true },
+        },
       },
     },
     threshold: 95,
@@ -13261,7 +13271,12 @@ test("truth readiness requires real database profile when database evidence is m
       databaseProfile: {
         file: "database-profile.json",
         status: "ok",
-        value: { artifactType: "database-profile", system: { code: "adp" }, tables: [] },
+        value: {
+          artifactType: "database-profile",
+          system: { code: "adp" },
+          tables: [],
+          safety: { secretRedacted: true },
+        },
       },
     },
     threshold: 95,
@@ -13270,6 +13285,109 @@ test("truth readiness requires real database profile when database evidence is m
   });
   assert.equal(validProfileReport.gates.database.profileAvailable, true);
   assert.equal(validProfileReport.canSubmitReview, true);
+});
+
+test("truth readiness rejects unsafe database profile evidence", () => {
+  const { buildTruthReadinessReport, scanDatabaseProfileSafety } = require("./check-truth-readiness");
+  const artifacts = {
+    quality: {
+      file: "quality-report.json",
+      status: "ok",
+      value: {
+        canFinalize: true,
+        menuCoverage: 1,
+        corePageScreenshotCoverage: 1,
+        coreFunctionClassificationCoverage: 1,
+        writeOperationSafetyCompliance: 1,
+        unverifiedContentLabeling: 1,
+        coreConclusionTraceability: 1,
+        failures: [],
+      },
+    },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: {
+        rules: {
+          lowConfidenceNotWritable: true,
+          databaseOnlyNotConfirmed: true,
+          databaseOnlyNotWritable: true,
+        },
+        metrics: { claimCount: 1, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0, weakCount: 0 },
+        writableClaimIds: ["function:保单任务:任务列表"],
+      },
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: {
+        canFinalize: true,
+        failures: [],
+        metrics: {
+          claimCount: 1,
+          writableClaimCount: 1,
+          checkedAssertions: 1,
+          supportedAssertions: 1,
+          supportedRatio: 1,
+          coveredWritableClaimCount: 1,
+          missingWritableClaimCount: 0,
+          writableClaimCoverageRatio: 1,
+          minWritableClaimCoverage: 0.8,
+        },
+      },
+    },
+    narrative: {
+      file: "narrative-quality-report.json",
+      status: "ok",
+      value: { canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } },
+    },
+    databaseProfile: {
+      file: "database-profile.json",
+      status: "ok",
+      value: {
+        artifactType: "database-profile",
+        system: { code: "adp" },
+        source: {
+          mode: "connector",
+          secret: {
+            type: "mysql",
+            host: "127.0.0.1",
+            password: "[redacted]",
+          },
+        },
+        safety: { secretRedacted: true },
+        tables: [
+          {
+            name: "policy_task",
+            sampleRows: [
+              { id: 1, customer_phone: "13800138000", status: "DONE" },
+              { id: 2, customer_phone: "1***0", status: "DONE" },
+              { id: 3, customer_phone: "1***0", status: "DONE" },
+              { id: 4, customer_phone: "1***0", status: "DONE" },
+            ],
+          },
+        ],
+      },
+    },
+  };
+
+  const safety = scanDatabaseProfileSafety(artifacts.databaseProfile.value);
+  const report = buildTruthReadinessReport({
+    artifacts,
+    threshold: 95,
+    requireDatabaseEvidence: true,
+    expectedSystem: { code: "adp" },
+  });
+
+  assert.equal(safety.pass, false);
+  assert.equal(report.gates.database.pass, false);
+  assert.equal(report.gates.database.profileAvailable, false);
+  assert.equal(report.gates.database.scorePercent, 0);
+  assert.equal(report.canSubmitReview, false);
+  assert.ok(report.blockers.some((item) => item.id === "database.profile-unsafe"));
+  assert.match(report.gates.database.failures.join("\n"), /source\.secret\.host is not redacted/);
+  assert.match(report.gates.database.failures.join("\n"), /customer_phone contains an unredacted sensitive value/);
+  assert.match(report.gates.database.failures.join("\n"), /includes 4 sample rows/);
 });
 
 test("truth readiness blocks missing writable claims and writes report", () => {
