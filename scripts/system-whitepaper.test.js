@@ -10565,6 +10565,7 @@ test("approved review requires passing truth readiness gate", () => {
     score: 0.91,
     scorePercent: 91,
     canSubmitReview: false,
+    canFinalize: false,
     blockers: [{ id: "claims.missing-writable", message: "No writable claims." }],
   });
 
@@ -14651,6 +14652,74 @@ test("truth readiness rejects forged narrative quality pass state", () => {
   assert.equal(report.canSubmitReview, false);
   assert.ok(report.gates.narrative.failures.some((item) => /zero failures/.test(item)));
   assert.ok(report.blockers.some((item) => item.id === "narrative.invalid-artifact"));
+});
+
+test("truth readiness report artifact contract rejects forged pass state", () => {
+  const { assertValidTruthReadinessReportArtifact } = require("./check-truth-readiness");
+  const validReport = truthReadinessReportFixture(__dirname);
+  assert.doesNotThrow(() => assertValidTruthReadinessReportArtifact(validReport));
+
+  assert.throws(
+    () =>
+      assertValidTruthReadinessReportArtifact({
+        ...validReport,
+        blockers: [{ id: "truth.score-below-threshold" }],
+      }),
+    /zero blockers/,
+  );
+  assert.throws(
+    () =>
+      assertValidTruthReadinessReportArtifact({
+        ...validReport,
+        score: 0.94,
+        scorePercent: 94,
+      }),
+    /score >= threshold/,
+  );
+  assert.throws(
+    () =>
+      assertValidTruthReadinessReportArtifact({
+        ...validReport,
+        gates: {
+          ...validReport.gates,
+          factCheck: { ...validReport.gates.factCheck, pass: false },
+        },
+      }),
+    /gates\.factCheck\.pass=true/,
+  );
+  assert.throws(
+    () =>
+      assertValidTruthReadinessReportArtifact({
+        ...validReport,
+        canSubmitReview: false,
+        canFinalize: true,
+      }),
+    /canFinalize=true requires canSubmitReview=true/,
+  );
+  assert.throws(
+    () =>
+      assertValidTruthReadinessReportArtifact({
+        ...validReport,
+        scorePercent: 100,
+      }),
+    /scorePercent must match score/,
+  );
+  assert.throws(
+    () =>
+      assertValidTruthReadinessReportArtifact({
+        ...validReport,
+        requirements: { databaseEvidenceRequired: true },
+        gates: {
+          ...validReport.gates,
+          database: {
+            ...validReport.gates.database,
+            required: true,
+            profileAvailable: false,
+          },
+        },
+      }),
+    /requires profileAvailable database evidence/,
+  );
 });
 
 test("truth readiness blocks incomplete verified claim boundary rules", () => {

@@ -71,6 +71,14 @@ function assertFiniteNumber(value, message) {
   }
 }
 
+function assertNumberRange(value, min, max, message) {
+  assertFiniteNumber(value, message);
+  const number = Number(value);
+  if (number < min || number > max) {
+    throw new Error(message);
+  }
+}
+
 function assertBoolean(value, message) {
   if (typeof value !== "boolean") {
     throw new Error(message);
@@ -129,9 +137,12 @@ function assertValidTruthReadinessReportArtifact(report = {}) {
     throw new Error("truth-readiness-report.json artifactType must be truth-readiness-report.");
   }
   assertFiniteNumber(report.version, "truth-readiness-report.json version must be numeric.");
-  assertFiniteNumber(report.threshold, "truth-readiness-report.json threshold must be numeric.");
-  assertFiniteNumber(report.score, "truth-readiness-report.json score must be numeric.");
-  assertFiniteNumber(report.scorePercent, "truth-readiness-report.json scorePercent must be numeric.");
+  assertNumberRange(report.threshold, 0, 1, "truth-readiness-report.json threshold must be between 0 and 1.");
+  assertNumberRange(report.score, 0, 1, "truth-readiness-report.json score must be between 0 and 1.");
+  assertNumberRange(report.scorePercent, 0, 100, "truth-readiness-report.json scorePercent must be between 0 and 100.");
+  if (Math.abs(Number(report.scorePercent) - percent(report.score)) > 0.000001) {
+    throw new Error("truth-readiness-report.json scorePercent must match score.");
+  }
   assertBoolean(report.canSubmitReview, "truth-readiness-report.json canSubmitReview must be a boolean.");
   assertBoolean(report.canFinalize, "truth-readiness-report.json canFinalize must be a boolean.");
   assertJsonObject(report.requirements, "truth-readiness-report.json requirements must be a JSON object.");
@@ -149,6 +160,32 @@ function assertValidTruthReadinessReportArtifact(report = {}) {
   }
   if (!Array.isArray(report.blockers)) {
     throw new Error("truth-readiness-report.json blockers must be an array.");
+  }
+  if (report.canSubmitReview && report.blockers.length > 0) {
+    throw new Error("truth-readiness-report.json canSubmitReview=true requires zero blockers.");
+  }
+  if (report.canSubmitReview && Number(report.score) < Number(report.threshold)) {
+    throw new Error("truth-readiness-report.json canSubmitReview=true requires score >= threshold.");
+  }
+  if (report.canSubmitReview) {
+    for (const gateId of ["evidence", "claims", "factCheck", "narrative", "database", "lineage"]) {
+      if (report.gates[gateId].pass !== true) {
+        throw new Error(`truth-readiness-report.json canSubmitReview=true requires gates.${gateId}.pass=true.`);
+      }
+    }
+  }
+  if (report.canFinalize && !report.canSubmitReview) {
+    throw new Error("truth-readiness-report.json canFinalize=true requires canSubmitReview=true.");
+  }
+  if (report.canFinalize && (report.gates.factCheck.pass !== true || report.gates.evidence.pass !== true)) {
+    throw new Error("truth-readiness-report.json canFinalize=true requires evidence and fact-check gates to pass.");
+  }
+  if (
+    report.canSubmitReview &&
+    report.requirements.databaseEvidenceRequired &&
+    report.gates.database.profileAvailable !== true
+  ) {
+    throw new Error("truth-readiness-report.json canSubmitReview=true requires profileAvailable database evidence when database evidence is required.");
   }
   if (!Array.isArray(report.improvementActions)) {
     throw new Error("truth-readiness-report.json improvementActions must be an array.");
