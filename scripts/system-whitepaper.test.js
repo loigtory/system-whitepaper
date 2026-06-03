@@ -7263,26 +7263,11 @@ test("batch runner refreshes aggregate state from per-system pipeline states", (
     lastError: "model stream aborted",
   });
   writePipelineState(path.join(claimOutput, "pipeline-state.json"), claimState);
-  fs.writeFileSync(
-    path.join(adpOutput, "truth-readiness-report.json"),
-    JSON.stringify({
-      scorePercent: 96,
-      canSubmitReview: true,
-      canFinalize: true,
-      blockers: [],
-      generatedAt: "2026-06-03T00:02:00.000Z",
-      gates: {
-        factCheck: {
-          metrics: {
-            writableClaimCoverageRatio: 1,
-            minWritableClaimCoverage: 0.8,
-            missingWritableClaimCount: 0,
-          },
-        },
-      },
-    }),
-    "utf8",
-  );
+  writeTruthReadinessReportFixture(adpOutput, {
+    score: 0.96,
+    scorePercent: 96,
+    generatedAt: "2026-06-03T00:02:00.000Z",
+  });
   fs.writeFileSync(
     path.join(adpOutput, "coverage-repair-plan.json"),
     JSON.stringify({
@@ -7330,6 +7315,83 @@ test("batch runner refreshes aggregate state from per-system pipeline states", (
   assert.equal(written.systems[0].truthReadiness.scorePercent, 96);
   assert.equal(written.systems[0].coverageRepair.status, "completed");
   assert.equal(written.failureSummary.counts["narrative-generation"], 1);
+});
+
+test("batch runner degrades invalid truth readiness artifacts during refresh", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    buildBatchDiagnosis,
+    buildBatchRepairQueue,
+    createBatchState,
+    refreshBatchStateFromDisk,
+  } = require("./run-whitepaper-batch");
+  const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
+  const outputRoot = fs.mkdtempSync(path.join(os.tmpdir(), "whitepaper-batch-invalid-truth-"));
+  const systemOutput = path.join(outputRoot, "adp");
+  fs.mkdirSync(systemOutput, { recursive: true });
+  let pipelineState = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
+  for (const nodeId of [
+    "sync",
+    "session",
+    "collect",
+    "inspect",
+    "validate-write",
+    "db-profile",
+    "db-model",
+    "truth-universe",
+    "truth-claims",
+    "build-spec",
+    "compose-guide",
+    "draft",
+    "summary",
+    "narrative",
+    "fact-check",
+    "quality",
+    "truth-readiness",
+  ]) {
+    pipelineState = updateNodeStatus(pipelineState, nodeId, "success");
+  }
+  writePipelineState(path.join(systemOutput, "pipeline-state.json"), pipelineState);
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      scorePercent: 100,
+      canSubmitReview: true,
+      canFinalize: true,
+      blockers: [],
+      improvementActions: [],
+      generatedAt: "2026-06-03T00:02:00.000Z",
+    }),
+    "utf8",
+  );
+
+  const batchState = createBatchState(
+    [{ code: "adp", name: "AI保单数据闭环平台" }],
+    { concurrency: 4, startedAt: "2026-06-03T00:00:00.000Z" },
+  );
+  const refreshed = refreshBatchStateFromDisk(batchState, outputRoot, {
+    now: "2026-06-03T00:03:00.000Z",
+    args: { "with-whitepaper": true },
+  });
+  const system = refreshed.systems[0];
+  assert.equal(system.truthReadiness.scorePercent, 0);
+  assert.equal(system.truthReadiness.canSubmitReview, false);
+  assert.equal(system.truthReadiness.invalidArtifact, true);
+  assert.equal(system.truthReadiness.blockers[0].id, "truth-readiness.invalid-artifact");
+
+  const diagnosis = buildBatchDiagnosis(refreshed);
+  assert.equal(diagnosis.summary.ready, 0);
+  assert.equal(diagnosis.summary.blocked, 1);
+  assert.equal(diagnosis.systems[0].ready, false);
+  assert.ok(diagnosis.systems[0].gaps.some((gap) => gap.type === "truth-readiness.invalid-artifact"));
+
+  const repairQueue = buildBatchRepairQueue(diagnosis);
+  assert.equal(repairQueue.summary.autoRunnable, 1);
+  assert.equal(repairQueue.items[0].actionId, "truth-readiness.invalid-artifact");
+  assert.deepEqual(repairQueue.items[0].nodes, ["truth-readiness"]);
+  assert.equal(repairQueue.items[0].quotaImpact, "low");
 });
 
 test("batch runner classifies failed children and retries recoverable failures only when enabled", async () => {
@@ -7425,26 +7487,11 @@ test("batch runner classifies failed children and retries recoverable failures o
         }),
         "utf8",
       );
-      fs.writeFileSync(
-        path.join(adpOutput, "truth-readiness-report.json"),
-        JSON.stringify({
-          scorePercent: 96,
-          canSubmitReview: true,
-          canFinalize: true,
-          blockers: [],
-          improvementActions: [],
-          gates: {
-            factCheck: {
-              metrics: {
-                writableClaimCoverageRatio: 1,
-                minWritableClaimCoverage: 0.8,
-                missingWritableClaimCount: 0,
-              },
-            },
-          },
-        }),
-        "utf8",
-      );
+      writeTruthReadinessReportFixture(adpOutput, {
+        score: 0.96,
+        scorePercent: 96,
+        generatedAt: "2026-06-03T00:02:00.000Z",
+      });
       child.emit("close", 0, null);
     });
     return child;

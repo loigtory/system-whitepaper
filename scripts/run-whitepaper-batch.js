@@ -16,6 +16,7 @@ const { NODES, readPipelineStateSafe } = require("./pipeline-state");
 const { runBatchAcceptance } = require("./check-batch-acceptance");
 const { runDeliveryReadiness } = require("./check-delivery-readiness");
 const { runRealRunReadiness } = require("./check-real-run-readiness");
+const { assertValidTruthReadinessReportArtifact } = require("./check-truth-readiness");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_BATCH_CONCURRENCY = 4;
@@ -538,32 +539,63 @@ function applyPipelineSnapshot(item, pipelineState, options = {}) {
   return next;
 }
 
+function buildInvalidTruthReadinessSummary(error, truth = {}) {
+  const message = `truth-readiness-report.json is not a valid truth readiness artifact: ${error.message}`;
+  return {
+    scorePercent: 0,
+    canSubmitReview: false,
+    canFinalize: false,
+    blockerCount: 1,
+    blockers: [
+      sanitizeDiagnosticItem({
+        id: "truth-readiness.invalid-artifact",
+        severity: "P0",
+        message,
+        rerunNodes: ["truth-readiness"],
+      }),
+    ],
+    improvementActions: [],
+    generatedAt: truth.generatedAt || "",
+    invalidArtifact: true,
+    error: error.message,
+  };
+}
+
 function buildBatchTruthSummary(systemOutput) {
   const truth = readOptionalJsonObject(path.join(systemOutput, "truth-readiness-report.json"));
   const factCheck = readOptionalJsonObject(path.join(systemOutput, "fact-check-report.json"));
   const repair = readOptionalJsonObject(path.join(systemOutput, "coverage-repair-plan.json"));
-  const factMetrics = truth?.gates?.factCheck?.metrics || factCheck?.metrics || {};
+  let validTruth = null;
+  let truthReadiness = null;
+  if (truth) {
+    try {
+      assertValidTruthReadinessReportArtifact(truth);
+      validTruth = truth;
+      truthReadiness = {
+        scorePercent: Number(truth.scorePercent || 0),
+        canSubmitReview: Boolean(truth.canSubmitReview),
+        canFinalize: Boolean(truth.canFinalize),
+        blockerCount: Array.isArray(truth.blockers) ? truth.blockers.length : 0,
+        blockers: compactItems(truth.blockers, 8).map(sanitizeDiagnosticItem),
+        improvementActions: compactItems(truth.improvementActions, 8).map(sanitizeDiagnosticItem),
+        generatedAt: truth.generatedAt || "",
+      };
+    } catch (error) {
+      truthReadiness = buildInvalidTruthReadinessSummary(error, truth);
+    }
+  }
+  const factMetrics = validTruth?.gates?.factCheck?.metrics || factCheck?.metrics || {};
   return {
-    truthReadiness: truth
-      ? {
-          scorePercent: Number(truth.scorePercent || 0),
-          canSubmitReview: Boolean(truth.canSubmitReview),
-          canFinalize: Boolean(truth.canFinalize),
-          blockerCount: Array.isArray(truth.blockers) ? truth.blockers.length : 0,
-          blockers: compactItems(truth.blockers, 8).map(sanitizeDiagnosticItem),
-          improvementActions: compactItems(truth.improvementActions, 8).map(sanitizeDiagnosticItem),
-          generatedAt: truth.generatedAt || "",
-        }
-      : null,
-    writableClaimCoverage: factCheck || truth?.gates?.factCheck
+    truthReadiness,
+    writableClaimCoverage: factCheck || validTruth?.gates?.factCheck
       ? {
           ratio: Number(factMetrics.writableClaimCoverageRatio || 0),
           minRatio: Number(factMetrics.minWritableClaimCoverage || 0),
           missingWritableClaimCount: Number(factMetrics.missingWritableClaimCount || 0),
           missingWritableClaimIds: Array.isArray(factCheck?.missingWritableClaimIds)
             ? factCheck.missingWritableClaimIds.slice(0, 12)
-            : Array.isArray(truth?.gates?.factCheck?.missingWritableClaimIds)
-              ? truth.gates.factCheck.missingWritableClaimIds.slice(0, 12)
+            : Array.isArray(validTruth?.gates?.factCheck?.missingWritableClaimIds)
+              ? validTruth.gates.factCheck.missingWritableClaimIds.slice(0, 12)
               : [],
         }
       : null,
