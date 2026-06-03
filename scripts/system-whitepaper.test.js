@@ -7068,6 +7068,65 @@ test("batch repair queue prefers low-quota stale refresh over narrative rewrite"
   assert.equal(repairQueue.items[0].canAutoRun, true);
 });
 
+test("batch repair queue prioritizes unsafe database profile refresh without agent writing", () => {
+  const {
+    buildBatchDiagnosis,
+    buildBatchRepairQueue,
+  } = require("./run-whitepaper-batch");
+
+  const diagnosis = buildBatchDiagnosis({
+    batchId: "batch-unsafe-db",
+    status: "failed",
+    systems: [
+      {
+        code: "adp",
+        name: "AI保单数据闭环平台",
+        status: "failed",
+        runStatus: "failed",
+        currentNode: "truth-readiness",
+        truthReadiness: {
+          scorePercent: 70,
+          canSubmitReview: false,
+          canFinalize: false,
+          blockers: [
+            {
+              id: "database.profile-unsafe",
+              severity: "P0",
+              message: "database-profile.json is not safely redacted.",
+              rerunNodes: ["db-profile", "db-model", "truth-universe", "truth-claims", "truth-readiness"],
+              quotaImpact: "low",
+            },
+            {
+              id: "truth.score-below-threshold",
+              severity: "P0",
+              message: "Truth readiness score is below threshold.",
+              rerunNodes: ["truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+            },
+          ],
+          improvementActions: [],
+        },
+        writableClaimCoverage: { missingWritableClaimCount: 0 },
+      },
+    ],
+  });
+
+  const repairQueue = buildBatchRepairQueue(diagnosis, { allowAgentWriting: false });
+
+  assert.equal(diagnosis.summary.quotaSensitive, 0);
+  assert.equal(repairQueue.summary.autoRunnable, 1);
+  assert.equal(repairQueue.summary.requiresAgentWriting, 0);
+  assert.equal(repairQueue.items[0].actionId, "database.profile-unsafe");
+  assert.deepEqual(repairQueue.items[0].nodes, [
+    "db-profile",
+    "db-model",
+    "truth-universe",
+    "truth-claims",
+    "truth-readiness",
+  ]);
+  assert.equal(repairQueue.items[0].quotaImpact, "low");
+  assert.equal(repairQueue.items[0].canAutoRun, true);
+});
+
 test("batch runner refreshes aggregate state from per-system pipeline states", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -8006,6 +8065,31 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
 
   fs.writeFileSync(
     path.join(systemOutput, "database-profile.json"),
+    JSON.stringify({
+      artifactType: "database-profile",
+      system: { code: "adp" },
+      source: { secret: { type: "mysql", host: "127.0.0.1", password: "[redacted]" } },
+      tables: [],
+      safety: { secretRedacted: true },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      ...JSON.parse(fs.readFileSync(path.join(systemOutput, "truth-readiness-report.json"), "utf8")),
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
+  const unsafeDatabaseProfile = buildBatchAcceptanceReport({ args: { config: configPath } });
+  assert.equal(unsafeDatabaseProfile.status, "blocked");
+  assert.equal(unsafeDatabaseProfile.systems[0].databaseEvidenceAvailable, false);
+  assert.equal(unsafeDatabaseProfile.summary.databaseBacked, 0);
+  assert.ok(unsafeDatabaseProfile.blockers.some((item) => item.id === "database.profile-unsafe"));
+
+  fs.writeFileSync(
+    path.join(systemOutput, "database-profile.json"),
     JSON.stringify({ artifactType: "database-profile", system: { code: "adp" }, tables: [], safety: { secretRedacted: true } }),
     "utf8",
   );
@@ -8279,6 +8363,33 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.equal(ready.systems[0].finalExists, false);
   assert.equal(ready.systems[0].docxCurrent, false);
   assert.match(renderDeliveryReadinessMarkdown(ready), /Delivery Readiness Report/);
+
+  fs.writeFileSync(
+    path.join(systemOutput, "database-profile.json"),
+    JSON.stringify({
+      artifactType: "database-profile",
+      system: { code: "adp" },
+      source: { secret: { type: "mysql", host: "127.0.0.1", password: "[redacted]" } },
+      tables: [],
+      safety: { secretRedacted: true },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      ...JSON.parse(fs.readFileSync(path.join(systemOutput, "truth-readiness-report.json"), "utf8")),
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
+  const unsafeDbReady = buildDeliveryReadinessReport({ acceptanceReport });
+  assert.equal(unsafeDbReady.status, "blocked");
+  assert.equal(unsafeDbReady.systems[0].databaseEvidenceAvailable, false);
+  assert.equal(unsafeDbReady.summary.databaseBacked, 0);
+  assert.ok(unsafeDbReady.blockers.some((item) => item.id === "delivery.current-truth-gate-failed"));
+  writePassingTruthArtifacts(systemOutput, { requireDatabaseEvidence: true });
+
   const artifacts = writeDeliveryReadinessReport(outputRoot, ready);
   const stateSummary = buildDeliveryReadinessStateSummary(ready, artifacts);
   assert.equal(stateSummary.status, "ready");

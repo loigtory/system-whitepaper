@@ -13,6 +13,7 @@ const {
   isValidDatabaseProfile,
   loadReadinessInputs,
   normalizeThreshold,
+  scanDatabaseProfileSafety,
 } = require("./check-truth-readiness");
 
 const DEFAULT_TARGET_TRUTH_SCORE_PERCENT = 95;
@@ -99,6 +100,10 @@ function truthRequiresDatabaseEvidence(truth = {}, databaseProfileConfigured = f
   return false;
 }
 
+function isSafeDatabaseProfileForSystem(profile, system = {}) {
+  return isValidDatabaseProfile(profile, system) && scanDatabaseProfileSafety(profile).pass === true;
+}
+
 function currentTruthFailureSummary(report = {}) {
   const blockers = Array.isArray(report.blockers)
     ? report.blockers.map((item) => item.id || item.message || "").filter(Boolean)
@@ -162,7 +167,8 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
   let missingWritableClaimCount = null;
   let writableClaimCoverageRatio = null;
   let minWritableClaimCoverage = null;
-  let databaseEvidenceAvailable = isValidDatabaseProfile(databaseProfile, { code });
+  let databaseEvidenceAvailable = isSafeDatabaseProfileForSystem(databaseProfile, { code });
+  let databaseProfileUnsafe = false;
 
   if (!truth) {
     blockers.push(
@@ -184,6 +190,28 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
       expectedSystem: { code, name: system.name || "" },
     });
     const currentScorePercent = percentFromReport(currentTruth);
+    const currentDatabaseProfileUnsafe = (Array.isArray(currentTruth.blockers) ? currentTruth.blockers : []).find(
+      (item) => item.id === "database.profile-unsafe",
+    );
+    if (currentDatabaseProfileUnsafe) {
+      databaseProfileUnsafe = true;
+      blockers.push(
+        blocker(
+          "database.profile-unsafe",
+          currentDatabaseProfileUnsafe.message || "database-profile.json is not safely redacted for Truth Pipeline use.",
+          {
+            systemCode: code,
+            rerunNodes: currentDatabaseProfileUnsafe.rerunNodes || [
+              "db-profile",
+              "db-model",
+              "truth-universe",
+              "truth-claims",
+              "truth-readiness",
+            ],
+          },
+        ),
+      );
+    }
     scorePercent = Math.min(scorePercent, currentScorePercent);
     canSubmitReview = canSubmitReview && Boolean(currentTruth.canSubmitReview);
     canFinalize = canFinalize && Boolean(currentTruth.canFinalize);
@@ -269,7 +297,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
       );
     }
     databaseEvidenceAvailable = Boolean(
-      currentTruth.gates?.database?.profileAvailable || isValidDatabaseProfile(databaseProfile, { code }),
+      currentTruth.gates?.database?.profileAvailable || isSafeDatabaseProfileForSystem(databaseProfile, { code }),
     );
   }
 
@@ -290,7 +318,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
     );
   }
 
-  if (databaseProfileConfigured && !isValidDatabaseProfile(databaseProfile, { code })) {
+  if (databaseProfileConfigured && !databaseEvidenceAvailable && !databaseProfileUnsafe) {
     blockers.push(
       blocker("database.profile-missing", "databaseProfile.enabled=true but no redacted database evidence is available.", {
         systemCode: code,

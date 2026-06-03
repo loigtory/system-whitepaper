@@ -8,6 +8,7 @@ const {
   buildTruthReadinessReport,
   findStaleReadinessSources,
   loadReadinessInputs,
+  scanDatabaseProfileSafety,
 } = require("./check-truth-readiness");
 const { fingerprintFile, resolveDocxManifestPath } = require("./export-whitepaper-word");
 
@@ -88,6 +89,24 @@ function truthRequiresDatabaseEvidence(truth = {}, databaseProfileConfigured = f
   }
   if (truth.gates?.database?.required !== undefined) return truth.gates.database.required;
   return false;
+}
+
+function currentTruthHasSafeDatabaseProfile(currentTruth = {}) {
+  return (
+    currentTruth.gates?.database?.profileAvailable === true &&
+    currentTruth.gates?.database?.profileSafety?.pass !== false
+  );
+}
+
+function outputHasSafeDatabaseProfile(outputDir) {
+  const profile = loadReadinessInputs(outputDir).databaseProfile?.value;
+  return Boolean(
+    profile &&
+      typeof profile === "object" &&
+      !Array.isArray(profile) &&
+      profile.artifactType === "database-profile" &&
+      scanDatabaseProfileSafety(profile).pass === true,
+  );
 }
 
 function currentTruthFailureSummary(report = {}) {
@@ -297,7 +316,7 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
   let staleSources = [];
   let scorePercent = 0;
   let canSubmitReview = false;
-  let databaseEvidenceAvailable = Boolean(systemReport.databaseEvidenceAvailable);
+  let databaseEvidenceAvailable = false;
 
   if (!systemReport.accepted) {
     blockers.push(
@@ -357,8 +376,10 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
     scorePercent = Math.min(recordedScorePercent, currentScorePercent);
     canSubmitReview = canSubmitReview && Boolean(currentTruth.canSubmitReview);
     databaseEvidenceAvailable = Boolean(
-      currentTruth.gates?.database?.profileAvailable ||
-        (!systemReport.databaseProfileConfigured && systemReport.databaseEvidenceAvailable),
+      currentTruthHasSafeDatabaseProfile(currentTruth) ||
+        (!systemReport.databaseProfileConfigured &&
+          systemReport.databaseEvidenceAvailable &&
+          outputHasSafeDatabaseProfile(outputDir)),
     );
     if (truthReportLooksLikeSmoke(truth)) {
       blockers.push(
