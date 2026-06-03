@@ -940,7 +940,12 @@ function buildDatabaseGate(artifacts, options = {}) {
   };
   const contractFailures = [];
   const validateOptionalDerivedArtifact = (artifact, validator) => {
-    if (artifact.status !== "ok") return false;
+    if (artifact.status === "missing" && !artifact.fingerprint?.exists) return false;
+    if (artifact.status !== "ok") {
+      contractFailures.push(`${artifact.file || "database-derived artifact"} is ${artifact.status}.`);
+      if (artifact.error) contractFailures.push(`${artifact.file || "database-derived artifact"} error: ${artifact.error}`);
+      return false;
+    }
     try {
       validator(artifact.value);
       return true;
@@ -979,13 +984,17 @@ function buildDatabaseGate(artifacts, options = {}) {
   const profileSafety = profile.status === "ok" ? scanDatabaseProfileSafety(profile.value || {}) : { pass: true, failures: [], warnings: [] };
   const safeProfileAvailable = profileAvailable && profileSafety.pass;
   const derivedArtifactsPresent = [dataDictionaryArtifact, entityModelArtifact, universeArtifact].some(
-    (artifact) => artifact.status === "ok",
+    (artifact) => artifact.status === "ok" || artifact.fingerprint?.exists,
   );
+  const derivedArtifactContractPass = (artifact, contractValid) => {
+    if (artifact.status === "missing" && !artifact.fingerprint?.exists) return true;
+    return artifact.status === "ok" && contractValid;
+  };
   const derivedArtifactContractsPass =
     !derivedArtifactsPresent ||
-    (dataDictionaryArtifact.status !== "ok" || dataDictionaryContractValid) &&
-      (entityModelArtifact.status !== "ok" || entityModelContractValid) &&
-      (universeArtifact.status !== "ok" || functionUniverseContractValid);
+    derivedArtifactContractPass(dataDictionaryArtifact, dataDictionaryContractValid) &&
+      derivedArtifactContractPass(entityModelArtifact, entityModelContractValid) &&
+      derivedArtifactContractPass(universeArtifact, functionUniverseContractValid);
   const available = safeProfileAvailable || entityCount > 0 || columnCount > 0;
   const pass = profileSafety.pass && derivedArtifactContractsPass;
   const score = available && pass ? 1 : 0;

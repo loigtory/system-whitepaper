@@ -13986,6 +13986,25 @@ test("truth readiness rejects malformed database-derived truth artifacts", () =>
   );
 });
 
+test("truth readiness rejects invalid database-derived artifact files", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-invalid-db-derived-"));
+  writePassingTruthArtifacts(dir, { databaseProfile: false });
+  fs.writeFileSync(path.join(dir, "data-dictionary.json"), "{bad json", "utf8");
+
+  const report = runTruthReadinessCheck({ inputDir: dir });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.database.pass, false);
+  assert.equal(report.gates.database.derivedArtifactContractsPass, false);
+  assert.equal(report.gates.database.metrics.dataDictionaryStatus, "invalid");
+  assert.ok(report.blockers.some((item) => item.id === "database.derived-artifact-invalid"));
+  assert.ok(report.gates.database.failures.some((item) => /data-dictionary\.json is invalid/.test(item)));
+});
+
 test("truth readiness rejects unsafe database profile evidence", () => {
   const { buildTruthReadinessReport, scanDatabaseProfileSafety } = require("./check-truth-readiness");
   const artifacts = {
