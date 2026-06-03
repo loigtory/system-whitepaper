@@ -342,6 +342,10 @@ function buildNarrativeGate(artifact) {
   };
 }
 
+function isValidDatabaseProfile(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && value.artifactType === "database-profile");
+}
+
 function buildDatabaseGate(artifacts) {
   const profile = artifacts.databaseProfile || {
     status: "missing",
@@ -372,12 +376,14 @@ function buildDatabaseGate(artifacts) {
   const relationCount = Number(entityModel.metrics?.relationCount || coverage.entityRelationCount || 0);
   const columnCount = Number(dataDictionary.metrics?.columnCount || 0);
   const sampleBackedEntityCount = Number(entityModel.metrics?.sampleBackedEntityCount || 0);
-  const available = profile.status === "ok" || entityCount > 0 || columnCount > 0;
+  const profileAvailable = profile.status === "ok" && isValidDatabaseProfile(profile.value);
+  const available = profileAvailable || entityCount > 0 || columnCount > 0;
   return {
     id: "database",
     label: "Redacted database evidence",
     pass: true,
     available,
+    profileAvailable,
     score: available ? 1 : 0,
     scorePercent: available ? 100 : 0,
     metrics: {
@@ -387,6 +393,7 @@ function buildDatabaseGate(artifacts) {
       columnCount,
       sampleBackedEntityCount,
       databaseProfileStatus: profile.status,
+      databaseProfileArtifactType: profile.value?.artifactType || "",
       dataDictionaryStatus: dataDictionaryArtifact.status,
       entityModelStatus: entityModelArtifact.status,
     },
@@ -466,12 +473,14 @@ function normalizeBoolean(value) {
 
 function buildDatabaseRequirementGate(gate = {}, options = {}) {
   const required = normalizeBoolean(options.requireDatabaseEvidence);
-  const pass = !required || gate.available === true;
+  const profileAvailable = gate.profileAvailable === true;
+  const pass = !required || profileAvailable;
   return {
     ...gate,
     required,
     pass,
-    failures: required && !gate.available ? ["Redacted database evidence is required but missing."] : [],
+    profileAvailable,
+    failures: required && !profileAvailable ? ["Valid redacted database-profile.json is required but missing."] : [],
     warnings:
       required || gate.available
         ? []
@@ -480,7 +489,7 @@ function buildDatabaseRequirementGate(gate = {}, options = {}) {
 }
 
 function collectDatabaseRequirementBlockers(gates, options = {}) {
-  if (!normalizeBoolean(options.requireDatabaseEvidence) || gates.database.available) return [];
+  if (!normalizeBoolean(options.requireDatabaseEvidence) || gates.database.profileAvailable) return [];
   return [
     blocker(
       "database.required-profile-missing",
@@ -630,6 +639,7 @@ module.exports = {
   buildReadinessSourceArtifacts,
   buildTruthReadinessReport,
   findStaleReadinessSources,
+  isValidDatabaseProfile,
   loadReadinessInputs,
   normalizeThreshold,
   runTruthReadinessCheck,

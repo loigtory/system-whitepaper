@@ -7559,6 +7559,34 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "acceptance-report.json")), true);
   assert.match(renderBatchAcceptanceMarkdown(accepted), /Batch Acceptance Report/);
 
+  fs.writeFileSync(path.join(systemOutput, "database-profile.json"), JSON.stringify({ artifactType: "entity-model" }), "utf8");
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      ...JSON.parse(fs.readFileSync(path.join(systemOutput, "truth-readiness-report.json"), "utf8")),
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
+  const invalidDatabaseProfile = buildBatchAcceptanceReport({ args: { config: configPath } });
+  assert.equal(invalidDatabaseProfile.status, "blocked");
+  assert.equal(invalidDatabaseProfile.systems[0].databaseEvidenceAvailable, false);
+  assert.ok(invalidDatabaseProfile.blockers.some((item) => item.id === "database.profile-missing"));
+
+  fs.writeFileSync(
+    path.join(systemOutput, "database-profile.json"),
+    JSON.stringify({ artifactType: "database-profile", tables: [], safety: { secretRedacted: true } }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      ...JSON.parse(fs.readFileSync(path.join(systemOutput, "truth-readiness-report.json"), "utf8")),
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
+
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
     JSON.stringify({
@@ -11949,6 +11977,107 @@ test("truth readiness passes only when evidence claims fact-check and narrative 
   assert.equal(report.canSubmitReview, true);
   assert.equal(report.gates.database.available, false);
   assert.ok(report.improvementActions.some((item) => item.id === "database.optional-profile"));
+});
+
+test("truth readiness requires real database profile when database evidence is mandatory", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const artifacts = {
+    quality: {
+      file: "quality-report.json",
+      status: "ok",
+      value: {
+        canFinalize: true,
+        menuCoverage: 1,
+        corePageScreenshotCoverage: 1,
+        coreFunctionClassificationCoverage: 1,
+        writeOperationSafetyCompliance: 1,
+        unverifiedContentLabeling: 1,
+        coreConclusionTraceability: 1,
+        failures: [],
+      },
+    },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: {
+        rules: {
+          lowConfidenceNotWritable: true,
+          databaseOnlyNotConfirmed: true,
+          databaseOnlyNotWritable: true,
+        },
+        metrics: { claimCount: 1, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0, weakCount: 0 },
+        writableClaimIds: ["function:保单任务:任务列表"],
+      },
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: {
+        canFinalize: true,
+        failures: [],
+        metrics: {
+          claimCount: 1,
+          writableClaimCount: 1,
+          checkedAssertions: 1,
+          supportedAssertions: 1,
+          supportedRatio: 1,
+          coveredWritableClaimCount: 1,
+          missingWritableClaimCount: 0,
+          writableClaimCoverageRatio: 1,
+          minWritableClaimCoverage: 0.8,
+        },
+      },
+    },
+    narrative: {
+      file: "narrative-quality-report.json",
+      status: "ok",
+      value: { canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } },
+    },
+    entityModel: {
+      file: "entity-model.json",
+      status: "ok",
+      value: {
+        artifactType: "entity-model",
+        metrics: { entityCount: 2, relationCount: 1, sampleBackedEntityCount: 1 },
+      },
+    },
+    dataDictionary: {
+      file: "data-dictionary.json",
+      status: "ok",
+      value: { artifactType: "data-dictionary", metrics: { columnCount: 8 } },
+    },
+  };
+
+  const optionalReport = buildTruthReadinessReport({ artifacts, threshold: 95 });
+  assert.equal(optionalReport.gates.database.available, true);
+  assert.equal(optionalReport.gates.database.profileAvailable, false);
+  assert.equal(optionalReport.canSubmitReview, true);
+
+  const requiredReport = buildTruthReadinessReport({
+    artifacts,
+    threshold: 95,
+    requireDatabaseEvidence: true,
+  });
+  assert.equal(requiredReport.gates.database.available, true);
+  assert.equal(requiredReport.gates.database.profileAvailable, false);
+  assert.equal(requiredReport.gates.database.pass, false);
+  assert.equal(requiredReport.canSubmitReview, false);
+  assert.ok(requiredReport.blockers.some((item) => item.id === "database.required-profile-missing"));
+
+  const validProfileReport = buildTruthReadinessReport({
+    artifacts: {
+      ...artifacts,
+      databaseProfile: {
+        file: "database-profile.json",
+        status: "ok",
+        value: { artifactType: "database-profile", tables: [] },
+      },
+    },
+    threshold: 95,
+    requireDatabaseEvidence: true,
+  });
+  assert.equal(validProfileReport.gates.database.profileAvailable, true);
+  assert.equal(validProfileReport.canSubmitReview, true);
 });
 
 test("truth readiness blocks missing writable claims and writes report", () => {

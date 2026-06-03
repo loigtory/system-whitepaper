@@ -7,7 +7,7 @@ const {
   readOptionalJsonObject,
   writeJson,
 } = require("./system-whitepaper-lib");
-const { findStaleReadinessSources, normalizeThreshold } = require("./check-truth-readiness");
+const { findStaleReadinessSources, isValidDatabaseProfile, normalizeThreshold } = require("./check-truth-readiness");
 
 const DEFAULT_TARGET_TRUTH_SCORE_PERCENT = 95;
 const ACCEPTED_BATCH_STATUSES = new Set(["success", "review-pending", "finalized"]);
@@ -123,7 +123,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
   let missingWritableClaimCount = null;
   let writableClaimCoverageRatio = null;
   let minWritableClaimCoverage = null;
-  let databaseEvidenceAvailable = Boolean(databaseProfile);
+  let databaseEvidenceAvailable = isValidDatabaseProfile(databaseProfile);
 
   if (!truth) {
     blockers.push(
@@ -201,7 +201,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
         }),
       );
     }
-    databaseEvidenceAvailable = Boolean(truth.gates?.database?.available || databaseProfile);
+    databaseEvidenceAvailable = Boolean(truth.gates?.database?.profileAvailable || isValidDatabaseProfile(databaseProfile));
   }
 
   if (!whitepaperExists) {
@@ -221,7 +221,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
     );
   }
 
-  if (databaseProfileConfigured && !databaseProfile) {
+  if (databaseProfileConfigured && !isValidDatabaseProfile(databaseProfile)) {
     blockers.push(
       blocker("database.profile-missing", "databaseProfile.enabled=true but no redacted database evidence is available.", {
         systemCode: code,
