@@ -13,6 +13,7 @@ const {
   writeJson,
 } = require("./system-whitepaper-lib");
 const { NODES, readPipelineStateSafe } = require("./pipeline-state");
+const { runBatchAcceptance } = require("./check-batch-acceptance");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_BATCH_CONCURRENCY = 4;
@@ -1085,6 +1086,15 @@ function appendLog(filePath, chunk) {
   fs.appendFileSync(filePath, chunk, "utf8");
 }
 
+function writeBatchAcceptance(outputRoot, context, args = {}, systems = []) {
+  const { state } = runBatchAcceptance({
+    args,
+    context,
+    systems,
+  });
+  return state;
+}
+
 async function runBatchPipeline(options = {}) {
   const args = options.args || parseArgs(process.argv.slice(2));
   const context = loadBatchConfig(args.config || options.configPath);
@@ -1150,6 +1160,7 @@ async function runBatchPipeline(options = {}) {
           generatedAt: repairQueue.generatedAt,
         },
       };
+      state.acceptance = writeBatchAcceptance(context.outputRoot, context, args, systems);
       writeBatchRunState(context.outputRoot, state);
       resolve(state);
     };
@@ -1313,6 +1324,7 @@ async function runBatchPipeline(options = {}) {
             generatedAt: repairQueue.generatedAt,
           },
         };
+        state.acceptance = writeBatchAcceptance(context.outputRoot, context, args, systems);
         writeBatchRunState(context.outputRoot, state);
         process.exit(130);
       });
@@ -1363,5 +1375,6 @@ module.exports = {
   renderBatchDiagnosisMarkdown,
   writeBatchDiagnosis,
   writeBatchRepairQueue,
+  writeBatchAcceptance,
   writeBatchRunState,
 };

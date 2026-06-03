@@ -11,6 +11,7 @@ const {
   writeJson,
 } = require("./system-whitepaper-lib");
 const { loadBatchConfig, resolveBatchConcurrency } = require("./run-whitepaper-batch");
+const { runBatchAcceptance } = require("./check-batch-acceptance");
 
 const DEFAULT_MAX_ROUNDS = 3;
 const SAFE_REPAIR_VALUE_FLAGS = new Set([
@@ -174,6 +175,13 @@ function writeFollowUpLoopState(outputRoot, state) {
   return filePath;
 }
 
+function writeFollowUpLoopAcceptance(context, args = {}) {
+  return runBatchAcceptance({
+    args,
+    context,
+  }).state;
+}
+
 function summarizeLoopStatus(plan = {}, rounds = [], options = {}) {
   if (plan.status === "complete") return { status: "complete", reason: "follow-up plan is complete" };
   if (plan.source?.closureStatus === "passed") return { status: "complete", reason: "repair closure passed" };
@@ -321,6 +329,7 @@ async function runRepairFollowUpLoop(options = {}) {
     nextBestAction: plan.nextBestAction || "",
     summary: plan.summary || {},
   };
+  state.acceptance = writeFollowUpLoopAcceptance(context, args);
   state.updatedAt = new Date().toISOString();
   writeFollowUpLoopState(context.outputRoot, state);
   return state;
@@ -348,5 +357,6 @@ module.exports = {
   runRepairFollowUpLoop,
   selectNextFollowUpCommand,
   summarizeLoopStatus,
+  writeFollowUpLoopAcceptance,
   writeFollowUpLoopState,
 };

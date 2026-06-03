@@ -11,6 +11,7 @@ const {
 } = require("./system-whitepaper-lib");
 const { NODES } = require("./pipeline-state");
 const { loadBatchConfig, resolveBatchConcurrency } = require("./run-whitepaper-batch");
+const { runBatchAcceptance } = require("./check-batch-acceptance");
 
 const REPAIR_NODE_ORDER = NODES.map((node) => node.id).filter((nodeId) => nodeId !== "review");
 const REPAIR_NODE_ALLOWLIST = new Set(REPAIR_NODE_ORDER);
@@ -840,6 +841,13 @@ function appendLog(filePath, chunk) {
   fs.appendFileSync(filePath, chunk, "utf8");
 }
 
+function writeRepairAcceptance(context, args = {}) {
+  return runBatchAcceptance({
+    args,
+    context,
+  }).state;
+}
+
 function waitForChild(child, logFile) {
   return new Promise((resolve) => {
     let settled = false;
@@ -921,6 +929,7 @@ async function runRepairQueue(options = {}) {
       batchRetries: args["batch-retries"],
       concurrency,
     });
+    state.acceptance = writeRepairAcceptance(context, args);
     writeRepairRunState(context.outputRoot, state);
     return state;
   }
@@ -994,6 +1003,7 @@ async function runRepairQueue(options = {}) {
     batchRetries: args["batch-retries"],
     concurrency,
   });
+  state.acceptance = writeRepairAcceptance(context, args);
   writeRepairRunState(context.outputRoot, state);
   return state;
 }
@@ -1026,6 +1036,7 @@ module.exports = {
   resolveRepairQueuePath,
   runRepairQueue,
   validateRepairItem,
+  writeRepairAcceptance,
   writeRepairClosure,
   writeRepairFollowUpPlan,
   writeRepairRunPlan,

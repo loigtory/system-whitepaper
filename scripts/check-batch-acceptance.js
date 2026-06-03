@@ -7,10 +7,6 @@ const {
   readOptionalJsonObject,
   writeJson,
 } = require("./system-whitepaper-lib");
-const {
-  loadBatchConfig,
-  selectBatchSystems,
-} = require("./run-whitepaper-batch");
 const { findStaleReadinessSources, normalizeThreshold } = require("./check-truth-readiness");
 
 const DEFAULT_TARGET_TRUTH_SCORE_PERCENT = 95;
@@ -19,6 +15,10 @@ const ACCEPTED_SYSTEM_STATUSES = new Set(["success", "review-pending", "finalize
 
 function nowIso(value) {
   return value || new Date().toISOString();
+}
+
+function getBatchHelpers() {
+  return require("./run-whitepaper-batch");
 }
 
 function splitCsv(value) {
@@ -410,10 +410,11 @@ function summarizeSystems(systems = []) {
 
 function buildBatchAcceptanceReport(input = {}) {
   const args = input.args || {};
-  const context = input.context || loadBatchConfig(args.config || input.configPath);
+  const helpers = !input.context || !input.systems ? getBatchHelpers() : null;
+  const context = input.context || helpers.loadBatchConfig(args.config || input.configPath);
   const threshold = normalizeThreshold(args.threshold || input.threshold || DEFAULT_TARGET_TRUTH_SCORE_PERCENT);
   const targetTruthScorePercent = Math.round(threshold * 1000) / 10;
-  const systems = input.systems || selectBatchSystems(context.config, args);
+  const systems = input.systems || helpers.selectBatchSystems(context.config, args);
   const systemReports = systems.map((system) =>
     buildSystemAcceptance(system, context, { targetTruthScorePercent }),
   );
@@ -513,23 +514,53 @@ function writeBatchAcceptanceReport(outputRoot, report) {
   const markdownPath = path.join(batchDir, "acceptance-report.md");
   writeJson(jsonPath, report);
   fs.writeFileSync(markdownPath, renderBatchAcceptanceMarkdown(report), "utf8");
-  return { jsonPath, markdownPath };
+  return {
+    jsonPath,
+    markdownPath,
+    artifacts: {
+      acceptanceJson: path.relative(batchDir, jsonPath).replace(/\\/g, "/"),
+      acceptanceMarkdown: path.relative(batchDir, markdownPath).replace(/\\/g, "/"),
+    },
+  };
 }
 
-function runBatchAcceptanceCheck(options = {}) {
+function buildBatchAcceptanceStateSummary(report = {}, artifacts = {}) {
+  return {
+    status: report.status || "",
+    canSubmitAll: Boolean(report.canSubmitAll),
+    summary: report.summary || {},
+    artifacts: artifacts.artifacts || artifacts || {},
+    generatedAt: report.generatedAt || "",
+  };
+}
+
+function runBatchAcceptance(options = {}) {
   const args = options.args || parseArgs(process.argv.slice(2));
-  const context = options.context || loadBatchConfig(args.config || options.configPath);
+  const context = options.context || getBatchHelpers().loadBatchConfig(args.config || options.configPath);
   const report = buildBatchAcceptanceReport({
     ...options,
     args,
     context,
   });
-  writeBatchAcceptanceReport(context.outputRoot, report);
-  return report;
+  const artifacts = writeBatchAcceptanceReport(context.outputRoot, report);
+  return {
+    report,
+    artifacts,
+    state: buildBatchAcceptanceStateSummary(report, artifacts),
+  };
+}
+
+function runBatchAcceptanceCheck(options = {}) {
+  return runBatchAcceptance(options).report;
+}
+
+function writeBatchAcceptanceStateSummary(outputRoot, report) {
+  const artifacts = writeBatchAcceptanceReport(outputRoot, report);
+  return buildBatchAcceptanceStateSummary(report, artifacts);
 }
 
 function main() {
-  const report = runBatchAcceptanceCheck();
+  const { report } = runBatchAcceptance();
   console.log(
     `Batch acceptance: status=${report.status}, accepted=${report.summary.accepted}/${report.summary.total}, minTruth=${report.summary.minTruthScorePercent}%`,
   );
@@ -549,10 +580,13 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildBatchAcceptanceStateSummary,
   buildBatchAcceptanceReport,
   buildBatchArtifactAcceptance,
   buildSystemAcceptance,
   renderBatchAcceptanceMarkdown,
+  runBatchAcceptance,
   runBatchAcceptanceCheck,
+  writeBatchAcceptanceStateSummary,
   writeBatchAcceptanceReport,
 };

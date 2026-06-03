@@ -6922,12 +6922,17 @@ test("batch runner classifies failed children and retries recoverable failures o
   assert.equal(written.diagnosis.artifacts.diagnosisJson, "diagnosis.json");
   assert.equal(written.repairQueue.summary.total, 0);
   assert.equal(written.repairQueue.artifacts.repairQueueJson, "repair-queue.json");
+  assert.equal(written.acceptance.status, "blocked");
+  assert.equal(written.acceptance.artifacts.acceptanceJson, "acceptance-report.json");
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "diagnosis.json")), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "diagnosis.md")), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "repair-queue.json")), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "repair-queue.md")), true);
+  assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "acceptance-report.json")), true);
+  assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "acceptance-report.md")), true);
   assert.match(fs.readFileSync(path.join(outputRoot, "_batch", "diagnosis.md"), "utf8"), /Batch Diagnosis/);
   assert.match(fs.readFileSync(path.join(outputRoot, "_batch", "repair-queue.md"), "utf8"), /Batch Repair Queue/);
+  assert.match(fs.readFileSync(path.join(outputRoot, "_batch", "acceptance-report.md"), "utf8"), /Batch Acceptance Report/);
 });
 
 test("batch repair queue runner builds safe plans and executes runnable groups", async () => {
@@ -7191,9 +7196,11 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-closure.md")), true);
   assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-follow-up-plan.json")), true);
   assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "repair-follow-up-plan.md")), true);
+  assert.equal(fs.existsSync(path.join(dir, "outputs", "_batch", "acceptance-report.json")), true);
   assert.equal(dryRunState.closure.status, "blocked");
   assert.equal(dryRunState.followUpPlan.status, "ready-to-run");
   assert.equal(dryRunState.closure.followUp.status, "ready-to-run");
+  assert.equal(dryRunState.acceptance.status, "blocked");
 
   const launched = [];
   const fakeSpawn = (command, args) => {
@@ -7212,6 +7219,7 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   assert.equal(runState.status, "success");
   assert.equal(runState.closure.status, "blocked");
   assert.equal(runState.followUpPlan.status, "ready-to-run");
+  assert.equal(runState.acceptance.status, "blocked");
   assert.equal(launched.length, 1);
   assert.equal(launched[0].command, process.execPath);
   assert.ok(launched[0].args.includes("--systems"));
@@ -7309,6 +7317,8 @@ test("repair follow-up loop consumes low-quota commands only", async () => {
   assert.equal(dryRunState.rounds.length, 1);
   assert.equal(dryRunState.rounds[0].commandId, "repair-remaining-low-quota");
   assert.equal(fs.existsSync(path.join(batchDir, "repair-follow-up-loop-state.json")), true);
+  assert.equal(fs.existsSync(path.join(batchDir, "acceptance-report.json")), true);
+  assert.equal(dryRunState.acceptance.status, "blocked");
 
   let launchCount = 0;
   const fakeSpawn = (command, args) => {
@@ -7343,6 +7353,7 @@ test("repair follow-up loop consumes low-quota commands only", async () => {
   assert.equal(runState.status, "complete");
   assert.equal(runState.rounds.length, 1);
   assert.equal(runState.finalPlan.status, "complete");
+  assert.equal(runState.acceptance.status, "blocked");
   assert.equal(launchCount, 1);
 });
 
