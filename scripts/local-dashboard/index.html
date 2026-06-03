@@ -806,6 +806,8 @@
                 const readiness = item.truthReadiness;
                 const coverage = item.writableClaimCoverage;
                 const repair = item.coverageRepair;
+                const failure = item.failure;
+                const retryPlan = item.retryPlan || failure?.retryPlan;
                 return `
                   <div class="batch-item">
                     <div><strong>${escapeHtml(item.name || item.code)}</strong> ${statusBadge(item.status)}</div>
@@ -814,6 +816,8 @@
                     ${readiness ? `<div class="muted">真实度 ${escapeHtml(String(readiness.scorePercent || 0))}% · 可审 ${readiness.canSubmitReview ? "是" : "否"}</div>` : ""}
                     ${coverage ? `<div class="muted">可写声明缺失 ${escapeHtml(String(coverage.missingWritableClaimCount || 0))}</div>` : ""}
                     ${repair ? `<div class="muted">自动补写 ${escapeHtml(repair.status || "-")} · ${escapeHtml(repair.narrativePart || "-")}</div>` : ""}
+                    ${failure ? `<div class="muted">失败归因 ${escapeHtml(failure.label || failure.category || "-")} · 可恢复 ${failure.recoverable ? "是" : "否"}</div>` : ""}
+                    ${retryPlan?.canRetry ? `<div class="muted">建议重试节点 ${escapeHtml(retryPlan.nodes || "-")} · 额度影响 ${escapeHtml(retryPlan.quotaImpact || "-")}</div>` : ""}
                     ${item.lastError ? `<div class="status failed">${escapeHtml(item.lastError)}</div>` : ""}
                   </div>
                 `;
@@ -828,6 +832,7 @@
                   <div><strong>${escapeHtml(run.systemName)}</strong> · ${statusBadge("running")}</div>
                   <div class="muted">concurrency=${escapeHtml(String(run.concurrency || 4))} · ${escapeHtml(run.currentNodeLabel || "")}</div>
                   <div class="muted">真实度可审 ${escapeHtml(String(run.truthReadyCount || 0))} · 自动补写 ${escapeHtml(String(run.coverageRepairCount || 0))}</div>
+                  <div class="muted">可恢复失败 ${escapeHtml(String(run.failureSummary?.recoverable || 0))} · 写稿额度敏感 ${escapeHtml(String(run.failureSummary?.quotaSensitive || 0))}</div>
                   ${run.lastError ? `<div class="status failed">${escapeHtml(run.lastError)}</div>` : ""}
                 </div>
                 <div class="muted">PID ${run.pid || "-"} · ${formatDuration(run.runningMs)}</div>

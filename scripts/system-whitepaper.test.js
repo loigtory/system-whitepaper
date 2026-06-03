@@ -5936,6 +5936,7 @@ test("dashboard frontend renders batch truth and repair summary", () => {
       currentNodeLabel: "1 running / 1 queued",
       truthReadyCount: 1,
       coverageRepairCount: 1,
+      failureSummary: { recoverable: 1, quotaSensitive: 1 },
       runningMs: 120000,
       progress: { total: 2, completed: 1, percent: 50 },
       systems: [
@@ -5949,6 +5950,16 @@ test("dashboard frontend renders batch truth and repair summary", () => {
           truthReadiness: { scorePercent: 96, canSubmitReview: true },
           writableClaimCoverage: { missingWritableClaimCount: 0 },
           coverageRepair: { status: "completed", narrativePart: "保单任务" },
+          failure: {
+            category: "narrative-generation",
+            label: "写稿生成问题",
+            recoverable: true,
+          },
+          retryPlan: {
+            canRetry: true,
+            nodes: "narrative,fact-check,quality,truth-readiness",
+            quotaImpact: "agent-writing",
+          },
         },
       ],
     },
@@ -5967,6 +5978,12 @@ test("dashboard frontend renders batch truth and repair summary", () => {
   assert.match(html, /可写声明缺失 0/);
   assert.match(html, /自动补写 completed/);
   assert.match(html, /保单任务/);
+  assert.match(html, /可恢复失败 1/);
+  assert.match(html, /写稿额度敏感 1/);
+  assert.match(html, /失败归因/);
+  assert.match(html, /写稿生成问题/);
+  assert.match(html, /建议重试节点 narrative,fact-check,quality,truth-readiness/);
+  assert.match(html, /额度影响 agent-writing/);
 });
 
 function createDashboardFrontendContext() {
@@ -6369,8 +6386,12 @@ test("dashboard pipeline command targets one system and selected nodes", () => {
 test("whitepaper batch runner selects systems and builds isolated child args", () => {
   const {
     buildBatchChildArgs,
+    buildRetryArgs,
+    buildRetryNodes,
+    classifyBatchFailure,
     createBatchState,
     resolveBatchConcurrency,
+    resolveBatchRetries,
     selectBatchSystems,
     updateBatchSystem,
   } = require("./run-whitepaper-batch");
@@ -6401,6 +6422,9 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
   assert.equal(resolveBatchConcurrency({}, config), 4);
   assert.equal(resolveBatchConcurrency({}, { runtime: { concurrency: 3 } }), 3);
   assert.throws(() => resolveBatchConcurrency({ concurrency: 0 }, config), /positive number/);
+  assert.equal(resolveBatchRetries({}, config), 0);
+  assert.equal(resolveBatchRetries({}, { runtime: { batchRetries: 2 } }), 2);
+  assert.throws(() => resolveBatchRetries({ "batch-retries": -1 }, config), /non-negative number/);
 
   const childArgs = buildBatchChildArgs(
     {
@@ -6425,6 +6449,57 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
   assert.ok(childArgs.includes("--reset"));
   assert.ok(childArgs.includes("narrative,fact-check,quality"));
   assert.equal(childArgs.includes("--concurrency"), false);
+  assert.equal(childArgs.includes("--batch-retries"), false);
+  assert.equal(
+    buildRetryNodes({ "with-whitepaper": true }, "fact-check"),
+    "fact-check,quality,truth-readiness",
+  );
+  assert.equal(
+    buildRetryNodes({ withWhitepaper: true }, "fact-check"),
+    "fact-check,quality,truth-readiness",
+  );
+  const retryArgs = buildRetryArgs(
+    { "with-whitepaper": true, reset: true, "batch-retries": 2, provider: "manual" },
+    "narrative",
+  );
+  assert.equal(retryArgs.reset, undefined);
+  assert.equal(retryArgs["batch-retries"], undefined);
+  assert.equal(retryArgs.nodes, "narrative,fact-check,quality,truth-readiness");
+  assert.deepEqual(
+    buildBatchChildArgs(retryArgs, "adp", "config/systems.local.yaml").filter((item) =>
+      ["--reset", "--batch-retries"].includes(item),
+    ),
+    [],
+  );
+  assert.equal(
+    classifyBatchFailure(
+      {
+        currentPhase: "compose",
+        currentNode: "truth-readiness",
+        lastError: "truth readiness failed: low writable claim coverage",
+      },
+      null,
+      { args: { "with-whitepaper": true } },
+    ).category,
+    "quality-gate",
+  );
+  const narrativeFailure = classifyBatchFailure(
+    {
+      currentPhase: "compose",
+      currentNode: "narrative",
+      lastError: "model stream aborted",
+      exitCode: 2,
+    },
+    null,
+    { args: { "with-whitepaper": true } },
+  );
+  assert.equal(narrativeFailure.recoverable, true);
+  assert.equal(narrativeFailure.retryPlan.nodes, "narrative,fact-check,quality,truth-readiness");
+  assert.equal(narrativeFailure.retryPlan.quotaImpact, "agent-writing");
+  assert.equal(
+    classifyBatchFailure({ currentNode: "session", lastError: "401 unauthorized" }).category,
+    "auth-or-session",
+  );
 
   const initial = createBatchState(config.systems, {
     concurrency: 4,
@@ -6463,11 +6538,31 @@ test("batch runner refreshes aggregate state from per-system pipeline states", (
   const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
   const outputRoot = fs.mkdtempSync(path.join(os.tmpdir(), "whitepaper-batch-state-"));
   const adpOutput = path.join(outputRoot, "adp");
+  const claimOutput = path.join(outputRoot, "claim");
   fs.mkdirSync(adpOutput, { recursive: true });
+  fs.mkdirSync(claimOutput, { recursive: true });
   let pipelineState = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
   pipelineState = updateNodeStatus(pipelineState, "sync", "success");
   pipelineState = updateNodeStatus(pipelineState, "session", "running");
   writePipelineState(path.join(adpOutput, "pipeline-state.json"), pipelineState);
+  let claimState = createPipelineState({ code: "claim", name: "理赔系统" });
+  claimState = updateNodeStatus(claimState, "sync", "success");
+  claimState = updateNodeStatus(claimState, "session", "success");
+  claimState = updateNodeStatus(claimState, "collect", "success");
+  claimState = updateNodeStatus(claimState, "inspect", "success");
+  claimState = updateNodeStatus(claimState, "validate-write", "success");
+  claimState = updateNodeStatus(claimState, "db-profile", "success");
+  claimState = updateNodeStatus(claimState, "db-model", "success");
+  claimState = updateNodeStatus(claimState, "truth-universe", "success");
+  claimState = updateNodeStatus(claimState, "truth-claims", "success");
+  claimState = updateNodeStatus(claimState, "build-spec", "success");
+  claimState = updateNodeStatus(claimState, "compose-guide", "success");
+  claimState = updateNodeStatus(claimState, "draft", "success");
+  claimState = updateNodeStatus(claimState, "summary", "success");
+  claimState = updateNodeStatus(claimState, "narrative", "failed", {
+    lastError: "model stream aborted",
+  });
+  writePipelineState(path.join(claimOutput, "pipeline-state.json"), claimState);
   fs.writeFileSync(
     path.join(adpOutput, "truth-readiness-report.json"),
     JSON.stringify({
@@ -6508,8 +6603,10 @@ test("batch runner refreshes aggregate state from per-system pipeline states", (
   );
   const refreshed = refreshBatchStateFromDisk(batchState, outputRoot, {
     now: "2026-06-03T00:03:00.000Z",
+    args: { "with-whitepaper": true },
   });
   const adp = refreshed.systems.find((item) => item.code === "adp");
+  const claim = refreshed.systems.find((item) => item.code === "claim");
   assert.equal(adp.status, "running");
   assert.equal(adp.currentNode, "session");
   assert.equal(adp.truthReadiness.scorePercent, 96);
@@ -6517,6 +6614,13 @@ test("batch runner refreshes aggregate state from per-system pipeline states", (
   assert.equal(adp.writableClaimCoverage.ratio, 1);
   assert.equal(adp.coverageRepair.status, "completed");
   assert.equal(adp.coverageRepair.narrativePart, "保单任务");
+  assert.equal(claim.status, "failed");
+  assert.equal(claim.failureCategory, "narrative-generation");
+  assert.equal(claim.recoverable, true);
+  assert.equal(claim.retryPlan.nodes, "narrative,fact-check,quality,truth-readiness");
+  assert.equal(claim.retryPlan.quotaImpact, "agent-writing");
+  assert.equal(refreshed.failureSummary.recoverable, 1);
+  assert.equal(refreshed.failureSummary.quotaSensitive, 1);
   assert.equal(refreshed.status, "running");
 
   const writtenPath = writeBatchRunState(outputRoot, refreshed);
@@ -6525,6 +6629,117 @@ test("batch runner refreshes aggregate state from per-system pipeline states", (
   assert.equal(written.concurrency, 4);
   assert.equal(written.systems[0].truthReadiness.scorePercent, 96);
   assert.equal(written.systems[0].coverageRepair.status, "completed");
+  assert.equal(written.failureSummary.counts["narrative-generation"], 1);
+});
+
+test("batch runner classifies failed children and retries recoverable failures only when enabled", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { EventEmitter } = require("node:events");
+  const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
+  const { runBatchPipeline } = require("./run-whitepaper-batch");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "whitepaper-batch-retry-"));
+  const outputRoot = path.join(dir, "outputs");
+  const configPath = path.join(dir, "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+    ].join("\n"),
+    "utf8",
+  );
+  const adpOutput = path.join(outputRoot, "adp");
+  fs.mkdirSync(adpOutput, { recursive: true });
+  let launches = 0;
+  const launchedArgs = [];
+  const fakeSpawn = (command, args) => {
+    launches += 1;
+    launchedArgs.push(args.slice());
+    const child = new EventEmitter();
+    child.pid = 9000 + launches;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    setImmediate(() => {
+      if (launches === 1) {
+        let failed = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
+        failed = updateNodeStatus(failed, "sync", "success");
+        failed = updateNodeStatus(failed, "session", "success");
+        failed = updateNodeStatus(failed, "collect", "success");
+        failed = updateNodeStatus(failed, "inspect", "success");
+        failed = updateNodeStatus(failed, "validate-write", "success");
+        failed = updateNodeStatus(failed, "db-profile", "success");
+        failed = updateNodeStatus(failed, "db-model", "success");
+        failed = updateNodeStatus(failed, "truth-universe", "success");
+        failed = updateNodeStatus(failed, "truth-claims", "success");
+        failed = updateNodeStatus(failed, "build-spec", "success");
+        failed = updateNodeStatus(failed, "compose-guide", "success");
+        failed = updateNodeStatus(failed, "draft", "success");
+        failed = updateNodeStatus(failed, "summary", "success");
+        failed = updateNodeStatus(failed, "narrative", "failed", {
+          lastError: "model stream aborted",
+        });
+        writePipelineState(path.join(adpOutput, "pipeline-state.json"), failed);
+        child.emit("close", 2, null);
+        return;
+      }
+      let recovered = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
+      for (const nodeId of [
+        "sync",
+        "session",
+        "collect",
+        "inspect",
+        "validate-write",
+        "db-profile",
+        "db-model",
+        "truth-universe",
+        "truth-claims",
+        "build-spec",
+        "compose-guide",
+        "draft",
+        "summary",
+        "narrative",
+        "fact-check",
+        "quality",
+        "truth-readiness",
+      ]) {
+        recovered = updateNodeStatus(recovered, nodeId, "success");
+      }
+      writePipelineState(path.join(adpOutput, "pipeline-state.json"), recovered);
+      child.emit("close", 0, null);
+    });
+    return child;
+  };
+
+  const state = await runBatchPipeline({
+    args: {
+      config: configPath,
+      systems: "adp",
+      "with-whitepaper": true,
+      reset: true,
+      "batch-retries": 1,
+      provider: "manual",
+    },
+    spawn: fakeSpawn,
+  });
+
+  assert.equal(launches, 2);
+  assert.equal(state.status, "success");
+  assert.equal(state.systems[0].attempts, 2);
+  assert.equal(launchedArgs[0].includes("--reset"), true);
+  assert.equal(launchedArgs[1].includes("--reset"), false);
+  assert.ok(launchedArgs[1].includes("narrative,fact-check,quality,truth-readiness"));
+  const written = JSON.parse(
+    fs.readFileSync(path.join(outputRoot, "_batch", "run-state.json"), "utf8"),
+  );
+  assert.equal(written.systems[0].runStatus, "completed");
+  assert.equal(written.systems[0].attempts, 2);
 });
 
 test("dashboard supports batch pipeline command and active run snapshot", () => {
@@ -6595,8 +6810,30 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
           runStatus: "queued",
           currentPhase: "prepare",
           currentNode: "sync",
+          failure: {
+            category: "narrative-generation",
+            label: "写稿生成问题",
+            recoverable: true,
+            retryPlan: {
+              canRetry: true,
+              nodes: "narrative,fact-check,quality,truth-readiness",
+              quotaImpact: "agent-writing",
+            },
+          },
+          failureCategory: "narrative-generation",
+          recoverable: true,
+          retryPlan: {
+            canRetry: true,
+            nodes: "narrative,fact-check,quality,truth-readiness",
+            quotaImpact: "agent-writing",
+          },
         },
       ],
+      failureSummary: {
+        counts: { "narrative-generation": 1 },
+        recoverable: 1,
+        quotaSensitive: 1,
+      },
     },
   );
   assert.equal(batchActiveRun.mode, "batch");
@@ -6606,6 +6843,8 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(batchActiveRun.progress.total, 2);
   assert.equal(batchActiveRun.truthReadyCount, 1);
   assert.equal(batchActiveRun.coverageRepairCount, 1);
+  assert.equal(batchActiveRun.failureSummary.recoverable, 1);
+  assert.equal(batchActiveRun.failureSummary.quotaSensitive, 1);
 
   const fs = require("node:fs");
   const os = require("node:os");

@@ -872,6 +872,7 @@ function buildBatchActiveRun(run, systems, batch) {
         : "";
   const truthReadyCount = batchSystems.filter((item) => item.truthReadiness?.canSubmitReview).length;
   const repairCount = batchSystems.filter((item) => item.coverageRepair).length;
+  const failureSummary = batch?.failureSummary || { counts: {}, recoverable: 0, quotaSensitive: 0 };
   return {
     mode: "batch",
     systemCode: currentCodes.join(","),
@@ -884,6 +885,7 @@ function buildBatchActiveRun(run, systems, batch) {
     systems: batchSystems,
     truthReadyCount,
     coverageRepairCount: repairCount,
+    failureSummary,
     startedAt: run.startedAt || batch?.startedAt || "",
     runningMs:
       run.startedAt || batch?.startedAt

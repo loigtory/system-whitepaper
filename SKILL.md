@@ -60,7 +60,8 @@ Use the 4-thread model for unattended multi-system development:
 - Run different systems in parallel. Each system must write to its own `outputs/<system-code>/` directory.
 - Do not run the same system twice at the same time. Duplicate system codes or duplicate batch requests are invalid because they can overwrite screenshots, state, prompts, and review artifacts.
 - The batch runner owns `outputs/_batch/run-state.json`. Single-system child pipelines are started with `--no-batch-state` so they cannot overwrite the aggregate batch state.
-- The local dashboard reads the same batch state and shows each running system's status, current phase/node, pid, per-system log path, truth-readiness summary, writable-claim coverage, and coverage-repair status.
+- The local dashboard reads the same batch state and shows each running system's status, current phase/node, pid, per-system log path, truth-readiness summary, writable-claim coverage, coverage-repair status, failure category, and retry plan.
+- Batch retries are opt-in with `-- --batch-retries <n>`. Retried systems resume from the failed node, do not inherit `--reset`, and mark retries that include `narrative` as Agent-writing quota sensitive.
 - Batch execution increases throughput only. It does not multiply Cursor/Codex plan quota and it does not make Agent writing free.
 
 ## Execution Commands
@@ -77,7 +78,7 @@ Use the npm scripts as the stable entrypoints:
 - `npm run truth:readiness -- --input outputs/<code>`: aggregate truth gates into `truth-readiness-report.json`; a non-passing report blocks review submission.
 - `npm run sync`: sync the system registry into `config/systems.local.yaml`.
 - `npm run pipeline`: run the unattended end-to-end pipeline for configured systems.
-- `npm run batch`: run the full whitepaper pipeline for all configured systems with 4 parallel workers; use `-- --systems <code1>,<code2>` to limit scope or `-- --concurrency <n>` to change worker count.
+- `npm run batch`: run the full whitepaper pipeline for all configured systems with 4 parallel workers; use `-- --systems <code1>,<code2>` to limit scope, `-- --concurrency <n>` to change worker count, or `-- --batch-retries <n>` to enable bounded recoverable retries.
 - `npm run dashboard`: open the local review dashboard on port `3920`.
 - `npm run phase3b -- --system <code>`: run or rerun the narrative-writing stage for one system.
 - `npm test`: run the regression suite before and after script changes.
