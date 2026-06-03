@@ -8674,6 +8674,75 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.ok(smoke.blockers.some((item) => item.id === "delivery.smoke-whitepaper"));
 });
 
+test("batch aggregate report contracts reject forged ready states", () => {
+  const { assertValidBatchAcceptanceReportArtifact } = require("./check-batch-acceptance");
+  const { assertValidDeliveryReadinessReportArtifact } = require("./check-delivery-readiness");
+  const acceptance = {
+    artifactType: "batch-acceptance-report",
+    version: 1,
+    generatedAt: "2026-06-03T00:00:00.000Z",
+    status: "accepted",
+    canSubmitAll: true,
+    targetTruthScorePercent: 95,
+    configPath: "config/systems.local.yaml",
+    outputRoot: "outputs",
+    summary: { total: 1, accepted: 1, blocked: 0, blockers: 0, warnings: 0 },
+    systems: [{ code: "adp", status: "accepted", accepted: true, canSubmitReview: true, blockers: [] }],
+    blockers: [],
+    warnings: [],
+  };
+  const delivery = {
+    artifactType: "delivery-readiness-report",
+    version: 1,
+    generatedAt: "2026-06-03T00:01:00.000Z",
+    status: "ready",
+    canDeliver: true,
+    targetTruthScorePercent: 95,
+    acceptance: { status: "accepted", canSubmitAll: true, generatedAt: acceptance.generatedAt },
+    configPath: "config/systems.local.yaml",
+    outputRoot: "outputs",
+    summary: { total: 1, ready: 1, blocked: 0, blockers: 0, warnings: 0 },
+    systems: [{ code: "adp", status: "ready", ready: true, accepted: true, canSubmitReview: true, blockers: [] }],
+    blockers: [],
+    warnings: [],
+  };
+
+  assert.doesNotThrow(() => assertValidBatchAcceptanceReportArtifact(acceptance));
+  assert.doesNotThrow(() => assertValidDeliveryReadinessReportArtifact(delivery));
+  assert.throws(
+    () =>
+      assertValidBatchAcceptanceReportArtifact({
+        ...acceptance,
+        blockers: [{ id: "truth-readiness.current-gate-failed" }],
+      }),
+    /zero blockers/,
+  );
+  assert.throws(
+    () =>
+      assertValidBatchAcceptanceReportArtifact({
+        ...acceptance,
+        systems: [{ code: "adp", status: "blocked", accepted: false, blockers: [] }],
+      }),
+    /every system to be accepted/,
+  );
+  assert.throws(
+    () =>
+      assertValidDeliveryReadinessReportArtifact({
+        ...delivery,
+        acceptance: { status: "blocked", canSubmitAll: false },
+      }),
+    /accepted batch acceptance/,
+  );
+  assert.throws(
+    () =>
+      assertValidDeliveryReadinessReportArtifact({
+        ...delivery,
+        systems: [{ code: "adp", status: "blocked", ready: false, blockers: [] }],
+      }),
+    /every system to be ready/,
+  );
+});
+
 test("real run readiness unifies preflight and final delivery state", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -8774,32 +8843,42 @@ test("real run readiness unifies preflight and final delivery state", () => {
 
   const acceptanceReport = {
     artifactType: "batch-acceptance-report",
+    version: 1,
+    generatedAt: "2026-06-03T00:00:00.000Z",
     status: "accepted",
     canSubmitAll: true,
+    targetTruthScorePercent: 95,
     configPath,
     outputRoot,
-    generatedAt: "2026-06-03T00:00:00.000Z",
-    summary: { total: 1, accepted: 1, blocked: 0, blockers: 0 },
-    systems: [{ code: "adp", status: "accepted" }],
+    summary: { total: 1, accepted: 1, blocked: 0, blockers: 0, warnings: 0 },
+    systems: [{ code: "adp", status: "accepted", accepted: true, canSubmitReview: true, blockers: [] }],
+    blockers: [],
+    warnings: [],
   };
   const deliveryReport = {
     artifactType: "delivery-readiness-report",
+    version: 1,
+    generatedAt: "2026-06-03T00:01:00.000Z",
     status: "ready",
     canDeliver: true,
+    targetTruthScorePercent: 95,
     configPath,
     outputRoot,
-    generatedAt: "2026-06-03T00:01:00.000Z",
     acceptance: {
       status: "accepted",
       canSubmitAll: true,
       generatedAt: "2026-06-03T00:00:00.000Z",
       summary: { total: 1, accepted: 1, blocked: 0, blockers: 0 },
     },
-    summary: { total: 1, ready: 1, blocked: 0, blockers: 0 },
+    summary: { total: 1, ready: 1, blocked: 0, blockers: 0, warnings: 0 },
     systems: [
       {
         code: "adp",
         status: "ready",
+        ready: true,
+        accepted: true,
+        canSubmitReview: true,
+        blockers: [],
         nodeStatus: Object.fromEntries(
           [
             "sync",
@@ -8821,6 +8900,8 @@ test("real run readiness unifies preflight and final delivery state", () => {
         ),
       },
     ],
+    blockers: [],
+    warnings: [],
   };
   const completedBatchRunState = {
     artifactType: "batch-run-state",
@@ -9268,6 +9349,46 @@ test("real run readiness unifies preflight and final delivery state", () => {
   assert.equal(staleDeliveryAcceptance.status, "in-progress");
   assert.equal(staleDeliveryAcceptance.canDeliver, false);
   assert.ok(staleDeliveryAcceptance.warnings.some((item) => item.id === "delivery.acceptance-mismatch"));
+
+  const forgedAcceptanceReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport: {
+      ...acceptanceReport,
+      summary: { total: 1, accepted: 0, blocked: 1, blockers: 0 },
+      systems: [{ code: "adp", status: "blocked", accepted: false, blockers: [] }],
+    },
+    deliveryReport,
+  });
+  assert.equal(forgedAcceptanceReady.status, "ready-to-run");
+  assert.equal(forgedAcceptanceReady.canDeliver, false);
+  assert.ok(forgedAcceptanceReady.warnings.some((item) => item.id === "acceptance.invalid-artifact"));
+
+  const forgedDeliveryReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport,
+    deliveryReport: {
+      ...deliveryReport,
+      summary: { total: 1, ready: 0, blocked: 1, blockers: 0 },
+      systems: [{ code: "adp", status: "blocked", ready: false, nodeStatus: deliveryReport.systems[0].nodeStatus }],
+    },
+  });
+  assert.equal(forgedDeliveryReady.status, "in-progress");
+  assert.equal(forgedDeliveryReady.canDeliver, false);
+  assert.ok(forgedDeliveryReady.warnings.some((item) => item.id === "delivery.invalid-artifact"));
 
   const blockedWithStaleReady = buildRealRunReadinessReport({
     args: { systems: "adp" },

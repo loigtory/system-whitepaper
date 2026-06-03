@@ -110,6 +110,93 @@ function outputHasSafeDatabaseProfile(outputDir) {
   );
 }
 
+function assertJsonObject(value, message) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(message);
+  }
+}
+
+function assertArray(value, message) {
+  if (!Array.isArray(value)) {
+    throw new Error(message);
+  }
+}
+
+function assertBoolean(value, message) {
+  if (typeof value !== "boolean") {
+    throw new Error(message);
+  }
+}
+
+function assertFiniteNumber(value, message) {
+  if (!Number.isFinite(Number(value))) {
+    throw new Error(message);
+  }
+}
+
+function assertValidDeliveryReadinessReportArtifact(report = {}) {
+  assertJsonObject(report, "delivery-readiness-report.json must be a JSON object.");
+  if (report.artifactType !== "delivery-readiness-report") {
+    throw new Error("delivery-readiness-report.json artifactType must be delivery-readiness-report.");
+  }
+  assertFiniteNumber(report.version, "delivery-readiness-report.json version must be numeric.");
+  if (!String(report.generatedAt || "").trim()) {
+    throw new Error("delivery-readiness-report.json generatedAt must be present.");
+  }
+  if (!["ready", "blocked"].includes(String(report.status || ""))) {
+    throw new Error("delivery-readiness-report.json status must be ready or blocked.");
+  }
+  assertBoolean(report.canDeliver, "delivery-readiness-report.json canDeliver must be a boolean.");
+  assertFiniteNumber(report.targetTruthScorePercent, "delivery-readiness-report.json targetTruthScorePercent must be numeric.");
+  assertJsonObject(report.acceptance, "delivery-readiness-report.json acceptance must be a JSON object.");
+  assertJsonObject(report.summary, "delivery-readiness-report.json summary must be a JSON object.");
+  assertArray(report.systems, "delivery-readiness-report.json systems must be an array.");
+  assertArray(report.blockers, "delivery-readiness-report.json blockers must be an array.");
+  assertArray(report.warnings, "delivery-readiness-report.json warnings must be an array.");
+
+  const total = report.systems.length;
+  const summaryTotal = Number(report.summary.total);
+  if (Number.isFinite(summaryTotal) && summaryTotal !== total) {
+    throw new Error("delivery-readiness-report.json summary.total must match systems length.");
+  }
+  if (report.status === "ready" && report.canDeliver !== true) {
+    throw new Error("delivery-readiness-report.json status=ready requires canDeliver=true.");
+  }
+  if (report.canDeliver && report.status !== "ready") {
+    throw new Error("delivery-readiness-report.json canDeliver=true requires status=ready.");
+  }
+  if (report.canDeliver) {
+    if (total <= 0) {
+      throw new Error("delivery-readiness-report.json canDeliver=true requires at least one system.");
+    }
+    if (report.blockers.length > 0 || Number(report.summary.blockers || 0) > 0) {
+      throw new Error("delivery-readiness-report.json canDeliver=true requires zero blockers.");
+    }
+    if (report.acceptance.status !== "accepted" || report.acceptance.canSubmitAll !== true) {
+      throw new Error("delivery-readiness-report.json canDeliver=true requires accepted batch acceptance.");
+    }
+    if (Number(report.summary.ready) !== total || Number(report.summary.blocked || 0) !== 0) {
+      throw new Error("delivery-readiness-report.json canDeliver=true requires all systems ready.");
+    }
+    for (const system of report.systems) {
+      assertJsonObject(system, "delivery-readiness-report.json systems[] must be JSON objects.");
+      const ready = system.ready === true || system.status === "ready";
+      if (!ready) {
+        throw new Error("delivery-readiness-report.json canDeliver=true requires every system to be ready.");
+      }
+      if (system.accepted === false) {
+        throw new Error("delivery-readiness-report.json canDeliver=true requires every system to be accepted.");
+      }
+      if (system.canSubmitReview === false) {
+        throw new Error("delivery-readiness-report.json canDeliver=true requires every system canSubmitReview=true.");
+      }
+      if (Array.isArray(system.blockers) && system.blockers.length > 0) {
+        throw new Error("delivery-readiness-report.json canDeliver=true requires system blockers to be empty.");
+      }
+    }
+  }
+}
+
 function currentTruthFailureSummary(report = {}) {
   const blockers = Array.isArray(report.blockers)
     ? report.blockers.map((item) => item.id || item.message || "").filter(Boolean)
@@ -701,6 +788,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  assertValidDeliveryReadinessReportArtifact,
   buildDeliveryReadinessReport,
   buildDeliveryReadinessStateSummary,
   buildSystemDeliveryReadiness,

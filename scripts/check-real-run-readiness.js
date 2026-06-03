@@ -17,6 +17,8 @@ const {
   findStaleReadinessSources,
   loadReadinessInputs,
 } = require("./check-truth-readiness");
+const { assertValidBatchAcceptanceReportArtifact } = require("./check-batch-acceptance");
+const { assertValidDeliveryReadinessReportArtifact } = require("./check-delivery-readiness");
 
 function nowIso(value) {
   return value || new Date().toISOString();
@@ -213,6 +215,24 @@ function selectScopedReport(report, kind, selectedCodes = [], context = {}) {
       report: null,
       warnings: [
         reportScopeWarning(kind, "artifact-type-mismatch", `Ignored ${kind} report with unsupported artifactType: ${report.artifactType}`),
+      ],
+    };
+  }
+  try {
+    if (kind === "acceptance") {
+      assertValidBatchAcceptanceReportArtifact(report);
+    } else {
+      assertValidDeliveryReadinessReportArtifact(report);
+    }
+  } catch (error) {
+    return {
+      report: null,
+      warnings: [
+        reportScopeWarning(
+          kind,
+          "invalid-artifact",
+          `Ignored ${kind} report because it is not a valid artifact: ${error.message}`,
+        ),
       ],
     };
   }

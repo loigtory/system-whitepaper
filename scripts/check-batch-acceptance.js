@@ -141,6 +141,86 @@ function generatedAtMatches(actual, expected) {
   return Boolean(actual && expected && String(actual) === String(expected));
 }
 
+function assertJsonObject(value, message) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(message);
+  }
+}
+
+function assertArray(value, message) {
+  if (!Array.isArray(value)) {
+    throw new Error(message);
+  }
+}
+
+function assertBoolean(value, message) {
+  if (typeof value !== "boolean") {
+    throw new Error(message);
+  }
+}
+
+function assertFiniteNumber(value, message) {
+  if (!Number.isFinite(Number(value))) {
+    throw new Error(message);
+  }
+}
+
+function assertValidBatchAcceptanceReportArtifact(report = {}) {
+  assertJsonObject(report, "acceptance-report.json must be a JSON object.");
+  if (report.artifactType !== "batch-acceptance-report") {
+    throw new Error("acceptance-report.json artifactType must be batch-acceptance-report.");
+  }
+  assertFiniteNumber(report.version, "acceptance-report.json version must be numeric.");
+  if (!String(report.generatedAt || "").trim()) {
+    throw new Error("acceptance-report.json generatedAt must be present.");
+  }
+  if (!["accepted", "blocked"].includes(String(report.status || ""))) {
+    throw new Error("acceptance-report.json status must be accepted or blocked.");
+  }
+  assertBoolean(report.canSubmitAll, "acceptance-report.json canSubmitAll must be a boolean.");
+  assertFiniteNumber(report.targetTruthScorePercent, "acceptance-report.json targetTruthScorePercent must be numeric.");
+  assertJsonObject(report.summary, "acceptance-report.json summary must be a JSON object.");
+  assertArray(report.systems, "acceptance-report.json systems must be an array.");
+  assertArray(report.blockers, "acceptance-report.json blockers must be an array.");
+  assertArray(report.warnings, "acceptance-report.json warnings must be an array.");
+
+  const total = report.systems.length;
+  const summaryTotal = Number(report.summary.total);
+  if (Number.isFinite(summaryTotal) && summaryTotal !== total) {
+    throw new Error("acceptance-report.json summary.total must match systems length.");
+  }
+  if (report.status === "accepted" && report.canSubmitAll !== true) {
+    throw new Error("acceptance-report.json status=accepted requires canSubmitAll=true.");
+  }
+  if (report.canSubmitAll && report.status !== "accepted") {
+    throw new Error("acceptance-report.json canSubmitAll=true requires status=accepted.");
+  }
+  if (report.canSubmitAll) {
+    if (total <= 0) {
+      throw new Error("acceptance-report.json canSubmitAll=true requires at least one system.");
+    }
+    if (report.blockers.length > 0 || Number(report.summary.blockers || 0) > 0) {
+      throw new Error("acceptance-report.json canSubmitAll=true requires zero blockers.");
+    }
+    if (Number(report.summary.accepted) !== total || Number(report.summary.blocked || 0) !== 0) {
+      throw new Error("acceptance-report.json canSubmitAll=true requires all systems accepted.");
+    }
+    for (const system of report.systems) {
+      assertJsonObject(system, "acceptance-report.json systems[] must be JSON objects.");
+      const accepted = system.accepted === true || system.status === "accepted";
+      if (!accepted) {
+        throw new Error("acceptance-report.json canSubmitAll=true requires every system to be accepted.");
+      }
+      if (Array.isArray(system.blockers) && system.blockers.length > 0) {
+        throw new Error("acceptance-report.json canSubmitAll=true requires system blockers to be empty.");
+      }
+      if (system.canSubmitReview === false) {
+        throw new Error("acceptance-report.json canSubmitAll=true requires every system canSubmitReview=true.");
+      }
+    }
+  }
+}
+
 function buildSystemAcceptance(system = {}, context = {}, options = {}) {
   const code = String(system.code || "").trim();
   const outputDir = path.join(context.outputRoot, code);
@@ -742,6 +822,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  assertValidBatchAcceptanceReportArtifact,
   buildBatchAcceptanceStateSummary,
   buildBatchAcceptanceReport,
   buildBatchArtifactAcceptance,
