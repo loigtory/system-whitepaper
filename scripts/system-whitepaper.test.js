@@ -7555,8 +7555,53 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   assert.equal(accepted.canSubmitAll, true);
   assert.equal(accepted.summary.accepted, 1);
   assert.equal(accepted.summary.databaseBacked, 1);
+  assert.equal(accepted.summary.smokeEvidence, 0);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "acceptance-report.json")), true);
   assert.match(renderBatchAcceptanceMarkdown(accepted), /Batch Acceptance Report/);
+
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      ...JSON.parse(fs.readFileSync(path.join(systemOutput, "truth-readiness-report.json"), "utf8")),
+      mode: "local-e2e-smoke",
+    }),
+    "utf8",
+  );
+  const smokeTruth = buildBatchAcceptanceReport({ args: { config: configPath } });
+  assert.equal(smokeTruth.status, "blocked");
+  assert.equal(smokeTruth.canSubmitAll, false);
+  assert.equal(smokeTruth.summary.smokeEvidence, 1);
+  assert.ok(smokeTruth.blockers.some((item) => item.id === "truth-readiness.smoke-report"));
+
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      ...JSON.parse(fs.readFileSync(path.join(systemOutput, "truth-readiness-report.json"), "utf8")),
+      mode: "",
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "whitepaper.pending-review.md"),
+    "# AI保单数据闭环平台功能白皮书\n\nlocal-e2e-smoke artifact, not final business whitepaper.",
+    "utf8",
+  );
+  const smokeWhitepaper = buildBatchAcceptanceReport({ args: { config: configPath } });
+  assert.equal(smokeWhitepaper.status, "blocked");
+  assert.equal(smokeWhitepaper.canSubmitAll, false);
+  assert.equal(smokeWhitepaper.summary.smokeEvidence, 1);
+  assert.ok(smokeWhitepaper.blockers.some((item) => item.id === "whitepaper.smoke-artifact"));
+
+  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      ...JSON.parse(fs.readFileSync(path.join(systemOutput, "truth-readiness-report.json"), "utf8")),
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
 
   fs.writeFileSync(path.join(systemOutput, "quality-report.json"), "{\"canFinalize\":false}", "utf8");
   const stale = buildBatchAcceptanceReport({ args: { config: configPath } });

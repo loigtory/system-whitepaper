@@ -64,6 +64,30 @@ function fileExists(filePath) {
   return fs.existsSync(filePath);
 }
 
+function readTextIfExists(filePath) {
+  try {
+    return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+  } catch {
+    return "";
+  }
+}
+
+function truthReportLooksLikeSmoke(report = {}) {
+  const mode = String(report.mode || "").toLowerCase();
+  if (mode.includes("smoke") || mode.includes("local-e2e")) return true;
+  return (Array.isArray(report.improvementActions) ? report.improvementActions : []).some((item) =>
+    /smoke|local-e2e/i.test(`${item.id || ""} ${item.message || ""}`),
+  );
+}
+
+function markdownLooksLikeSmoke(markdown = "") {
+  const text = String(markdown || "");
+  if (/local-e2e-smoke|smoke gate|smoke artifact/i.test(text)) return true;
+  if (text.includes("\u672c\u5730\u5192\u70df") || text.includes("\u5192\u70df")) return true;
+  if (text.includes("\u4e0d\u4ee3\u8868\u6700\u7ec8\u4e1a\u52a1\u767d\u76ae\u4e66")) return true;
+  return /local-e2e-smoke|smoke gate|本地冒烟|冒烟|不代表最终业务白皮书|不代表最终业务白皮书内容/i.test(text);
+}
+
 function readBatchArtifact(outputRoot, fileName) {
   return readOptionalJsonObject(path.join(outputRoot, "_batch", fileName));
 }
@@ -83,15 +107,19 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
   const truth = readOptionalJsonObject(truthPath);
   const factCheck = readOptionalJsonObject(factCheckPath);
   const databaseProfile = readOptionalJsonObject(databaseProfilePath);
+  const pendingMarkdown = readTextIfExists(pendingReviewPath);
+  const finalMarkdown = readTextIfExists(finalPath);
   const targetTruthScorePercent = Number(options.targetTruthScorePercent || DEFAULT_TARGET_TRUTH_SCORE_PERCENT);
   const blockers = [];
   const warnings = [];
   const databaseProfileConfigured = Boolean(system.databaseProfile?.enabled);
   const whitepaperExists = fileExists(pendingReviewPath) || fileExists(finalPath);
+  const smokeWhitepaper = markdownLooksLikeSmoke(pendingMarkdown) || markdownLooksLikeSmoke(finalMarkdown);
   let scorePercent = 0;
   let canSubmitReview = false;
   let canFinalize = false;
   let staleSources = [];
+  let smokeTruth = false;
   let missingWritableClaimCount = null;
   let writableClaimCoverageRatio = null;
   let minWritableClaimCoverage = null;
@@ -109,6 +137,15 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
     canSubmitReview = Boolean(truth.canSubmitReview);
     canFinalize = Boolean(truth.canFinalize);
     staleSources = findStaleReadinessSources(outputDir, truth);
+    smokeTruth = truthReportLooksLikeSmoke(truth);
+    if (smokeTruth) {
+      blockers.push(
+        blocker("truth-readiness.smoke-report", "truth-readiness-report.json is marked as local smoke evidence.", {
+          systemCode: code,
+          rerunNodes: ["truth-readiness"],
+        }),
+      );
+    }
     if (!canSubmitReview) {
       blockers.push(
         blocker("truth-readiness.not-submittable", "truth-readiness-report.json does not allow review submission.", {
@@ -175,6 +212,14 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
       }),
     );
   }
+  if (smokeWhitepaper) {
+    blockers.push(
+      blocker("whitepaper.smoke-artifact", "Whitepaper Markdown contains local smoke wording.", {
+        systemCode: code,
+        rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+      }),
+    );
+  }
 
   if (databaseProfileConfigured && !databaseProfile) {
     blockers.push(
@@ -202,6 +247,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
     whitepaperExists,
     pendingReviewExists: fileExists(pendingReviewPath),
     finalExists: fileExists(finalPath),
+    smokeEvidence: smokeTruth || smokeWhitepaper,
     databaseProfileConfigured,
     databaseEvidenceAvailable,
     missingWritableClaimCount,
@@ -402,6 +448,7 @@ function summarizeSystems(systems = []) {
     minTruthScorePercent: scores.length ? Math.min(...scores) : 0,
     missingWritableClaims: systems.reduce((sum, item) => sum + Number(item.missingWritableClaimCount || 0), 0),
     staleSystems: systems.filter((item) => Number(item.staleSourceCount || 0) > 0).length,
+    smokeEvidence: systems.filter((item) => item.smokeEvidence).length,
     databaseBacked: systems.filter((item) => item.databaseEvidenceAvailable).length,
     databaseConfigured: systems.filter((item) => item.databaseProfileConfigured).length,
     whitepapers: systems.filter((item) => item.whitepaperExists).length,
