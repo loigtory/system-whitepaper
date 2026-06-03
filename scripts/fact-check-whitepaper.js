@@ -193,6 +193,21 @@ function assertValidVerifiedClaimsArtifact(claimsArtifact = {}) {
   }
 }
 
+function assertValidFactCheckReportArtifact(report = {}) {
+  if (!report || typeof report !== "object" || Array.isArray(report)) {
+    throw new Error("fact-check-report.json must be a JSON object.");
+  }
+  if (report.artifactType !== "fact-check-report") {
+    throw new Error("fact-check-report.json artifactType must be fact-check-report.");
+  }
+  if (typeof report.canFinalize !== "boolean") {
+    throw new Error("fact-check-report.json canFinalize must be a boolean.");
+  }
+  if (!report.metrics || typeof report.metrics !== "object" || Array.isArray(report.metrics)) {
+    throw new Error("fact-check-report.json metrics must be a JSON object.");
+  }
+}
+
 function buildFactCheckReport(input = {}) {
   const markdown = String(input.markdown || "");
   const claimsArtifact = input.claimsArtifact || {};
@@ -330,6 +345,8 @@ function buildFactCheckReport(input = {}) {
     supportedRatio >= Number(input.minSupportedRatio || DEFAULT_MIN_SUPPORTED_RATIO);
 
   return {
+    artifactType: "fact-check-report",
+    version: 1,
     canSubmitReview: failures.length === 0,
     canFinalize:
       failures.length === 0 &&
@@ -445,6 +462,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  assertValidFactCheckReportArtifact,
   assertValidVerifiedClaimsArtifact,
   buildFactCheckSourceArtifacts,
   buildFactCheckReport,

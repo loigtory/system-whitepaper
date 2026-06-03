@@ -4,7 +4,11 @@ const fs = require("node:fs");
 const crypto = require("node:crypto");
 const path = require("node:path");
 const { parseArgs, writeJson } = require("./system-whitepaper-lib");
-const { assertValidVerifiedClaimsArtifact } = require("./fact-check-whitepaper");
+const {
+  assertValidFactCheckReportArtifact,
+  assertValidVerifiedClaimsArtifact,
+} = require("./fact-check-whitepaper");
+const { assertValidNarrativeQualityReportArtifact } = require("./check-narrative");
 
 const DEFAULT_THRESHOLD = 0.95;
 const REDACTED_VALUE = "[redacted]";
@@ -457,6 +461,15 @@ function buildClaimsGate(artifact) {
 
 function buildFactCheckGate(artifact) {
   const value = artifact.value || {};
+  const contractFailures = [];
+  if (artifact.status === "ok") {
+    try {
+      assertValidFactCheckReportArtifact(value);
+    } catch (error) {
+      contractFailures.push(error.message);
+    }
+  }
+  const artifactContractValid = artifact.status === "ok" && contractFailures.length === 0;
   const metrics = value.metrics || {};
   const supportedRatio = clamp01(metrics.supportedRatio ?? (value.canFinalize ? 1 : 0));
   const writableClaimCoverageRatio = clamp01(
@@ -465,6 +478,7 @@ function buildFactCheckGate(artifact) {
   const minWritableClaimCoverage = clamp01(metrics.minWritableClaimCoverage ?? 0.8);
   const failures = [];
   if (artifact.status !== "ok") failures.push(`${artifact.file} is ${artifact.status}.`);
+  failures.push(...contractFailures);
   for (const failure of Array.isArray(value.failures) ? value.failures : []) failures.push(String(failure));
   if (artifact.status === "ok" && !Object.hasOwn(metrics, "writableClaimCoverageRatio")) {
     failures.push("Writable claim coverage metric is missing.");
@@ -474,16 +488,20 @@ function buildFactCheckGate(artifact) {
   }
   const warnings = Array.isArray(value.warnings) ? value.warnings.map(String) : [];
   const pass =
-    artifact.status === "ok" &&
+    artifactContractValid &&
     value.canFinalize === true &&
     failures.length === 0 &&
     writableClaimCoverageRatio >= minWritableClaimCoverage;
+  const score = artifactContractValid ? Math.min(supportedRatio, writableClaimCoverageRatio) : 0;
   return {
     id: "fact-check",
     label: "Fact-check against writable claims",
     pass,
-    score: Math.min(supportedRatio, writableClaimCoverageRatio),
-    scorePercent: percent(Math.min(supportedRatio, writableClaimCoverageRatio)),
+    artifactStatus: artifact.status,
+    artifactContractValid,
+    contractFailures,
+    score,
+    scorePercent: percent(score),
     metrics: {
       claimCount: Number(metrics.claimCount || 0),
       writableClaimCount: Number(metrics.writableClaimCount || 0),
@@ -519,21 +537,34 @@ function buildFactCheckFreshnessGate(gate, artifacts = {}) {
 
 function buildNarrativeGate(artifact) {
   const value = artifact.value || {};
+  const contractFailures = [];
+  if (artifact.status === "ok") {
+    try {
+      assertValidNarrativeQualityReportArtifact(value);
+    } catch (error) {
+      contractFailures.push(error.message);
+    }
+  }
+  const artifactContractValid = artifact.status === "ok" && contractFailures.length === 0;
   const chars = Number(value.counts?.chars || 0);
   const evidencePages = Number(value.counts?.evidencePages || 0);
   const failures = [];
   if (artifact.status !== "ok") failures.push(`${artifact.file} is ${artifact.status}.`);
+  failures.push(...contractFailures);
   for (const failure of Array.isArray(value.failures) ? value.failures : []) failures.push(String(failure));
   const warnings = Array.isArray(value.warnings) ? value.warnings.map(String) : [];
   const score =
-    artifact.status === "ok"
+    artifactContractValid
       ? (value.canSubmitReview ? 0.8 : Math.min(0.6, chars / 1200)) +
         (evidencePages > 0 ? 0.2 : 0)
       : 0;
   return {
     id: "narrative",
     label: "Narrative business readability",
-    pass: artifact.status === "ok" && value.canSubmitReview === true && failures.length === 0,
+    pass: artifactContractValid && value.canSubmitReview === true && failures.length === 0,
+    artifactStatus: artifact.status,
+    artifactContractValid,
+    contractFailures,
     score: clamp01(score),
     scorePercent: percent(score),
     counts: { chars, evidencePages },
@@ -792,7 +823,19 @@ function collectBlockers(gates) {
     );
   }
   if (!gates.factCheck.pass) {
-    if (hasStaleSources(gates.factCheck)) {
+    const invalidArtifact =
+      gates.factCheck.artifactStatus === "invalid" ||
+      (Array.isArray(gates.factCheck.contractFailures) && gates.factCheck.contractFailures.length > 0);
+    if (invalidArtifact) {
+      blockers.push(
+        blocker(
+          "fact-check.invalid-artifact",
+          "P0",
+          "fact-check-report.json is not a valid fact-check artifact.",
+          ["fact-check", "quality", "truth-readiness"],
+        ),
+      );
+    } else if (hasStaleSources(gates.factCheck)) {
       blockers.push(
         blocker(
           "fact-check.stale-sources",
@@ -828,7 +871,19 @@ function collectBlockers(gates) {
     }
   }
   if (!gates.narrative.pass) {
-    if (hasStaleSources(gates.narrative)) {
+    const invalidArtifact =
+      gates.narrative.artifactStatus === "invalid" ||
+      (Array.isArray(gates.narrative.contractFailures) && gates.narrative.contractFailures.length > 0);
+    if (invalidArtifact) {
+      blockers.push(
+        blocker(
+          "narrative.invalid-artifact",
+          "P1",
+          "narrative-quality-report.json is not a valid narrative quality artifact.",
+          ["quality", "truth-readiness"],
+        ),
+      );
+    } else if (hasStaleSources(gates.narrative)) {
       blockers.push(
         blocker(
           "narrative.stale-sources",

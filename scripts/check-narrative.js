@@ -36,6 +36,8 @@ function buildNarrativeQualityReport(input = {}) {
   const evidencePageCount =
     pages.length || Number(evidenceSummary.metrics?.counts?.pages || 0);
   return {
+    artifactType: "narrative-quality-report",
+    version: 1,
     canSubmitReview: failures.length === 0,
     failures,
     warnings,
@@ -44,6 +46,21 @@ function buildNarrativeQualityReport(input = {}) {
       evidencePages: evidencePageCount,
     },
   };
+}
+
+function assertValidNarrativeQualityReportArtifact(report = {}) {
+  if (!report || typeof report !== "object" || Array.isArray(report)) {
+    throw new Error("narrative-quality-report.json must be a JSON object.");
+  }
+  if (report.artifactType !== "narrative-quality-report") {
+    throw new Error("narrative-quality-report.json artifactType must be narrative-quality-report.");
+  }
+  if (typeof report.canSubmitReview !== "boolean") {
+    throw new Error("narrative-quality-report.json canSubmitReview must be a boolean.");
+  }
+  if (!report.counts || typeof report.counts !== "object" || Array.isArray(report.counts)) {
+    throw new Error("narrative-quality-report.json counts must be a JSON object.");
+  }
 }
 
 function fingerprintFile(filePath) {
@@ -86,6 +103,8 @@ function runNarrativeCheck(options = {}) {
 
   if (!fs.existsSync(markdownPath)) {
     const report = {
+      artifactType: "narrative-quality-report",
+      version: 1,
       canSubmitReview: false,
       failures: [`Pending review markdown not found: ${markdownPath}`],
       warnings: [],
@@ -131,6 +150,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  assertValidNarrativeQualityReportArtifact,
   buildNarrativeQualityReport,
   buildNarrativeSourceArtifacts,
   fingerprintFile,
