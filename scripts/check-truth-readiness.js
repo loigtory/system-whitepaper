@@ -151,6 +151,11 @@ function lineageMismatch(key, artifact, current, ownerFile) {
   if (String(recorded.file || "") !== String(current?.file || "")) {
     return `${ownerFile} source ${key} file changed from ${recorded.file || "unknown"} to ${current?.file || "unknown"}.`;
   }
+  const recordedFingerprint = normalizeSourceFingerprint(recorded);
+  const currentFingerprint = normalizeSourceFingerprint(current);
+  if (recordedFingerprint.exists && !currentFingerprint.exists) {
+    return `${ownerFile} source ${current?.file || recorded.file || key} no longer exists.`;
+  }
   if (!sourceFingerprintMatches(recorded, current)) {
     return `${ownerFile} source ${current?.file || key} fingerprint is stale.`;
   }
@@ -169,7 +174,10 @@ function buildLineageGate(artifacts = {}) {
   ];
   for (const [key, artifact, current, ownerFile] of checks) {
     if (artifact?.status !== "ok" || !artifact?.fingerprint?.exists) continue;
-    if (!current?.fingerprint?.exists) continue;
+    const recorded = artifact?.value?.sourceArtifacts?.[key];
+    const recordedSourceExists = normalizeSourceFingerprint(recorded || {}).exists;
+    if (!recorded && !current?.fingerprint?.exists) continue;
+    if (!recordedSourceExists && !current?.fingerprint?.exists) continue;
     const failure = lineageMismatch(key, artifact, current, ownerFile);
     if (failure) failures.push(failure);
   }

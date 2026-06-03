@@ -12706,6 +12706,17 @@ test("truth readiness rejects stale database truth lineage", () => {
   assert.equal(passing.canSubmitReview, true);
   assert.equal(passing.gates.lineage.pass, true);
 
+  fs.unlinkSync(path.join(dir, "database-profile.json"));
+  const missingSource = runTruthReadinessCheck({
+    inputDir: dir,
+    requireDatabaseEvidence: true,
+    systemCode: "adp",
+  });
+  assert.equal(missingSource.canSubmitReview, false);
+  assert.equal(missingSource.gates.lineage.pass, false);
+  assert.ok(missingSource.gates.lineage.failures.some((item) => /database-profile\.json/.test(item) && /no longer exists/.test(item)));
+  assert.ok(missingSource.blockers.some((item) => item.id === "truth.lineage-stale"));
+
   fs.writeFileSync(
     path.join(dir, "database-profile.json"),
     JSON.stringify({
