@@ -12497,6 +12497,34 @@ test("build database model rejects unsafe database profile before writing derive
   assert.equal(fs.existsSync(path.join(dir, "entity-model.json")), false);
 });
 
+test("build database model rejects invalid database profile contract before writing derived artifacts", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    buildDatabaseModelArtifacts,
+    buildDatabaseModelFromDir,
+  } = require("./build-database-model");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "database-model-invalid-profile-"));
+  const profile = {
+    artifactType: "entity-model",
+    safety: { secretRedacted: true },
+    tables: [],
+  };
+  fs.writeFileSync(path.join(dir, "database-profile.json"), JSON.stringify(profile), "utf8");
+
+  assert.throws(
+    () => buildDatabaseModelArtifacts(profile, { generatedAt: "2026-06-03T00:00:00.000Z" }),
+    /not a valid database profile artifact.*artifactType must be database-profile/s,
+  );
+  assert.throws(
+    () => buildDatabaseModelFromDir(dir, { generatedAt: "2026-06-03T00:00:00.000Z" }),
+    /not a valid database profile artifact.*artifactType must be database-profile/s,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "data-dictionary.json")), false);
+  assert.equal(fs.existsSync(path.join(dir, "entity-model.json")), false);
+});
+
 test("build function universe merges UI functions and redacted database entities", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -12598,27 +12626,44 @@ test("build function universe merges UI functions and redacted database entities
   );
 });
 
-test("build function universe tolerates malformed optional database profile", () => {
+test("build function universe rejects malformed optional database profile before writing artifact", () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { buildFunctionUniverseFromDir } = require("./build-function-universe");
+  const {
+    buildFunctionUniverseArtifact,
+    buildFunctionUniverseFromDir,
+  } = require("./build-function-universe");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "function-universe-bad-db-"));
+  const evidenceSummary = {
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    modules: [{ name: "AI任务" }],
+    functions: [{ module: "AI任务", name: "任务列表", menuPath: "AI任务 > 任务列表" }],
+  };
   fs.writeFileSync(
     path.join(dir, "evidence-summary.json"),
-    JSON.stringify({
-      system: { code: "adp", name: "AI保单数据闭环平台" },
-      modules: [{ name: "AI任务" }],
-      functions: [{ module: "AI任务", name: "任务列表", menuPath: "AI任务 > 任务列表" }],
-    }),
+    JSON.stringify(evidenceSummary),
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "database-profile.json"), "{bad json", "utf8");
 
-  const { artifact } = buildFunctionUniverseFromDir(dir);
+  assert.throws(
+    () => buildFunctionUniverseFromDir(dir),
+    /Database profile is malformed/,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "function-universe.json")), false);
 
-  assert.equal(artifact.functions.length, 1);
-  assert.equal(artifact.entities.length, 0);
+  const invalidProfile = { artifactType: "entity-model", safety: { secretRedacted: true }, entities: [] };
+  fs.writeFileSync(path.join(dir, "database-profile.json"), JSON.stringify(invalidProfile), "utf8");
+  assert.throws(
+    () => buildFunctionUniverseArtifact({ evidenceSummary, databaseProfile: invalidProfile }),
+    /not a valid database profile artifact.*artifactType must be database-profile/s,
+  );
+  assert.throws(
+    () => buildFunctionUniverseFromDir(dir),
+    /not a valid database profile artifact.*artifactType must be database-profile/s,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "function-universe.json")), false);
 });
 
 test("build function universe rejects unsafe optional database profile before writing artifact", () => {

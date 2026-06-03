@@ -5,11 +5,13 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const {
   parseArgs,
-  readOptionalJsonObject,
   readRequiredJsonObject,
   writeJson,
 } = require("./system-whitepaper-lib");
-const { scanDatabaseProfileSafety } = require("./check-truth-readiness");
+const {
+  assertValidDatabaseProfileArtifact,
+  scanDatabaseProfileSafety,
+} = require("./check-truth-readiness");
 
 function compactString(value) {
   return String(value || "").trim();
@@ -184,9 +186,22 @@ function buildEntityRelations(entityModel = {}) {
   );
 }
 
+function hasObjectContent(value) {
+  return value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length > 0;
+}
+
 function assertSafeDatabaseProfile(databaseProfile = {}) {
-  if (!databaseProfile || typeof databaseProfile !== "object" || Array.isArray(databaseProfile)) return;
-  if (databaseProfile.artifactType !== "database-profile") return;
+  if (!hasObjectContent(databaseProfile)) return;
+  try {
+    assertValidDatabaseProfileArtifact(databaseProfile);
+  } catch (error) {
+    throw new Error(
+      [
+        "database-profile.json is not a valid database profile artifact; refusing to build function universe artifacts.",
+        error.message,
+      ].join(" "),
+    );
+  }
   const safety = scanDatabaseProfileSafety(databaseProfile);
   if (!safety.pass) {
     throw new Error(
@@ -233,23 +248,23 @@ function buildFunctionUniverseArtifact(input = {}) {
   };
 }
 
+function readOptionalExistingJsonObject(filePath, label) {
+  const resolved = path.resolve(String(filePath || ""));
+  if (!fs.existsSync(resolved)) return {};
+  return readRequiredJsonObject(resolved, { label });
+}
+
 function buildFunctionUniverseFromDir(inputDir, options = {}) {
   const dir = path.resolve(String(inputDir || "."));
-  const evidenceSummary = readRequiredJsonObject(
-    options.evidenceSummaryPath || path.join(dir, "evidence-summary.json"),
-    { label: "Evidence summary" },
-  );
-  const databaseProfile = readOptionalJsonObject(
-    options.databaseProfilePath || path.join(dir, "database-profile.json"),
-    {},
-  ) || {};
-  const entityModel = readOptionalJsonObject(
-    options.entityModelPath || path.join(dir, "entity-model.json"),
-    {},
-  ) || {};
   const evidenceSummaryPath = options.evidenceSummaryPath || path.join(dir, "evidence-summary.json");
   const databaseProfilePath = options.databaseProfilePath || path.join(dir, "database-profile.json");
   const entityModelPath = options.entityModelPath || path.join(dir, "entity-model.json");
+  const evidenceSummary = readRequiredJsonObject(
+    evidenceSummaryPath,
+    { label: "Evidence summary" },
+  );
+  const databaseProfile = readOptionalExistingJsonObject(databaseProfilePath, "Database profile");
+  const entityModel = readOptionalExistingJsonObject(entityModelPath, "Entity model");
   const artifact = buildFunctionUniverseArtifact({
     evidenceSummary,
     databaseProfile,
@@ -293,5 +308,6 @@ module.exports = {
   buildFunctionUniverseFromDir,
   buildSourceArtifacts,
   fingerprintFile,
+  readOptionalExistingJsonObject,
   scoreFunctionEntityMatch,
 };

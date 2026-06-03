@@ -94,6 +94,35 @@ function assertSourceArtifactObject(value, fileName) {
   assertJsonObject(value, `${fileName} sourceArtifacts must be a JSON object.`);
 }
 
+function assertValidDatabaseProfileArtifact(value = {}) {
+  assertJsonObject(value, "database-profile.json must be a JSON object.");
+  if (value.artifactType !== "database-profile") {
+    throw new Error("database-profile.json artifactType must be database-profile.");
+  }
+  if (value.version !== undefined) {
+    assertFiniteNumber(value.version, "database-profile.json version must be numeric when present.");
+  }
+  if (value.generatedAt !== undefined && !String(value.generatedAt || "").trim()) {
+    throw new Error("database-profile.json generatedAt must be non-empty when present.");
+  }
+  if (value.system !== undefined && value.system !== null) {
+    assertJsonObject(value.system, "database-profile.json system must be a JSON object when present.");
+  }
+  if (value.source !== undefined && value.source !== null) {
+    assertJsonObject(value.source, "database-profile.json source must be a JSON object when present.");
+  }
+  assertJsonObject(value.safety, "database-profile.json safety must be a JSON object.");
+  if (value.safety.secretRedacted !== true) {
+    throw new Error("database-profile.json safety.secretRedacted must be true.");
+  }
+  if (value.tables !== undefined) {
+    assertArray(value.tables, "database-profile.json tables must be an array when present.");
+  }
+  if (value.entityCandidates !== undefined) {
+    assertArray(value.entityCandidates, "database-profile.json entityCandidates must be an array when present.");
+  }
+}
+
 function assertValidTruthReadinessReportArtifact(report = {}) {
   assertJsonObject(report, "truth-readiness-report.json must be a JSON object.");
   if (report.artifactType !== "truth-readiness-report") {
@@ -1387,6 +1416,7 @@ if (require.main === module) {
 
 module.exports = {
   DEFAULT_THRESHOLD,
+  assertValidDatabaseProfileArtifact,
   assertValidDataDictionaryArtifact,
   assertValidEntityModelArtifact,
   assertValidFunctionUniverseArtifact,
