@@ -7737,6 +7737,7 @@ test("real run readiness unifies preflight and final delivery state", () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
+  const { buildReadinessSourceArtifacts, loadReadinessInputs } = require("./check-truth-readiness");
   const {
     buildRealRunReadinessReport,
     renderRealRunReadinessMarkdown,
@@ -7750,6 +7751,27 @@ test("real run readiness unifies preflight and final delivery state", () => {
   fs.mkdirSync(path.dirname(tokenPath), { recursive: true });
   fs.mkdirSync(outputRoot, { recursive: true });
   fs.writeFileSync(tokenPath, "valid-token", "utf8");
+  const systemOutput = path.join(outputRoot, "adp");
+  fs.mkdirSync(systemOutput, { recursive: true });
+  fs.writeFileSync(path.join(systemOutput, "evidence-summary.json"), JSON.stringify({ system: { code: "adp" } }), "utf8");
+  fs.writeFileSync(path.join(systemOutput, "function-universe.json"), JSON.stringify({ functions: [] }), "utf8");
+  fs.writeFileSync(path.join(systemOutput, "verified-claims.json"), JSON.stringify({ claims: [] }), "utf8");
+  fs.writeFileSync(path.join(systemOutput, "fact-check-report.json"), JSON.stringify({ canFinalize: true }), "utf8");
+  fs.writeFileSync(path.join(systemOutput, "quality-report.json"), JSON.stringify({ canFinalize: true }), "utf8");
+  fs.writeFileSync(path.join(systemOutput, "narrative-quality-report.json"), JSON.stringify({ canSubmitReview: true }), "utf8");
+  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      artifactType: "truth-readiness-report",
+      scorePercent: 98,
+      canSubmitReview: true,
+      canFinalize: true,
+      blockers: [],
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
   fs.writeFileSync(
     configPath,
     [
@@ -7844,6 +7866,68 @@ test("real run readiness unifies preflight and final delivery state", () => {
   const artifacts = writeRealRunReadinessReport(outputRoot, ready);
   assert.equal(fs.existsSync(artifacts.jsonPath), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "real-run-readiness-report.md")), true);
+
+  fs.writeFileSync(
+    path.join(systemOutput, "verified-claims.json"),
+    JSON.stringify({ claims: [{ id: "claim-new", text: "changed after delivery readiness" }] }),
+    "utf8",
+  );
+  const staleTruthSources = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport,
+    deliveryReport,
+  });
+  assert.equal(staleTruthSources.status, "in-progress");
+  assert.equal(staleTruthSources.canDeliver, false);
+  assert.ok(staleTruthSources.warnings.some((item) => item.id === "delivery.current-truth-invalid"));
+  fs.writeFileSync(path.join(systemOutput, "verified-claims.json"), JSON.stringify({ claims: [] }), "utf8");
+
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      artifactType: "truth-readiness-report",
+      scorePercent: 98,
+      canSubmitReview: true,
+      mode: "local-e2e-smoke",
+      blockers: [],
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
+  const staleSmokeTruth = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport,
+    deliveryReport,
+  });
+  assert.equal(staleSmokeTruth.status, "in-progress");
+  assert.equal(staleSmokeTruth.canDeliver, false);
+  assert.ok(staleSmokeTruth.warnings.some((item) => item.id === "delivery.current-truth-invalid"));
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      artifactType: "truth-readiness-report",
+      scorePercent: 98,
+      canSubmitReview: true,
+      canFinalize: true,
+      blockers: [],
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
 
   const dbSecretPath = path.join(dir, "secrets", "db", "adp.json");
   fs.mkdirSync(path.dirname(dbSecretPath), { recursive: true });

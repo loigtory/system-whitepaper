@@ -11,6 +11,7 @@ const {
 } = require("./system-whitepaper-lib");
 const { resolveDatabaseProfileConfig } = require("./collect-database-profile");
 const { runDoctor } = require("./doctor");
+const { findStaleReadinessSources } = require("./check-truth-readiness");
 
 function nowIso(value) {
   return value || new Date().toISOString();
@@ -255,6 +256,19 @@ function parseGeneratedAtMs(value) {
   return Number.isFinite(ms) ? ms : null;
 }
 
+function percentFromTruthReport(report = {}) {
+  if (Number.isFinite(Number(report.scorePercent))) return Number(report.scorePercent);
+  if (Number.isFinite(Number(report.score))) return Math.round(Number(report.score) * 1000) / 10;
+  return 0;
+}
+
+function truthReportLooksLikeSmoke(report = {}) {
+  const mode = String(report.mode || "").toLowerCase();
+  if (mode.includes("smoke") || mode.includes("local-e2e")) return true;
+  const generatedBy = String(report.generatedBy || report.provenance?.generatedBy || "").toLowerCase();
+  return generatedBy.includes("smoke") || generatedBy.includes("local-e2e");
+}
+
 function bindDeliveryReportToAcceptance(deliveryReport, acceptanceReport) {
   if (!deliveryReport) return { report: null, warnings: [] };
   if (!acceptanceReport) {
@@ -302,6 +316,47 @@ function bindDeliveryReportToAcceptance(deliveryReport, acceptanceReport) {
   return { report: deliveryReport, warnings: [] };
 }
 
+function bindDeliveryReportToCurrentSources(deliveryReport, context = {}) {
+  if (!deliveryReport) return { report: null, warnings: [] };
+  const invalidSystems = [];
+  const targetTruthScorePercent = Number(deliveryReport.targetTruthScorePercent || 95);
+  for (const system of Array.isArray(deliveryReport.systems) ? deliveryReport.systems : []) {
+    const code = String(system?.code || system?.systemCode || "").trim();
+    if (!code) continue;
+    const truthReportPath = path.join(context.outputRoot || "", code, "truth-readiness-report.json");
+    const truthReport = readJsonObjectIfExists(truthReportPath);
+    if (!truthReport) {
+      invalidSystems.push({ code, reason: "missing-truth-readiness" });
+      continue;
+    }
+    if (
+      truthReportLooksLikeSmoke(truthReport) ||
+      truthReport.canSubmitReview !== true ||
+      percentFromTruthReport(truthReport) < targetTruthScorePercent
+    ) {
+      invalidSystems.push({ code, reason: "truth-not-currently-ready" });
+      continue;
+    }
+    const staleSources = findStaleReadinessSources(path.join(context.outputRoot || "", code), truthReport);
+    if (staleSources.length) {
+      invalidSystems.push({ code, reason: "stale-truth-sources" });
+    }
+  }
+  if (invalidSystems.length) {
+    return {
+      report: null,
+      warnings: [
+        reportScopeWarning(
+          "delivery",
+          "current-truth-invalid",
+          `Ignored delivery report because current truth-readiness evidence is not delivery-ready for systems: ${invalidSystems.map((item) => `${item.code}:${item.reason}`).join(",")}.`,
+        ),
+      ],
+    };
+  }
+  return { report: deliveryReport, warnings: [] };
+}
+
 function deriveStatus(preparationStatus, acceptanceReport, deliveryReport) {
   if (preparationStatus === "blocked") return "blocked";
   if (deliveryReport?.status === "blocked" || acceptanceReport?.status === "blocked") return "blocked";
@@ -342,9 +397,15 @@ function buildRealRunReadinessReport(input = {}) {
   const acceptanceSelection = selectScopedReport(rawAcceptanceReport, "acceptance", selectedCodes, context);
   const deliverySelection = selectScopedReport(rawDeliveryReport, "delivery", selectedCodes, context);
   const boundDeliverySelection = bindDeliveryReportToAcceptance(deliverySelection.report, acceptanceSelection.report);
-  warnings.push(...acceptanceSelection.warnings, ...deliverySelection.warnings, ...boundDeliverySelection.warnings);
+  const freshDeliverySelection = bindDeliveryReportToCurrentSources(boundDeliverySelection.report, context);
+  warnings.push(
+    ...acceptanceSelection.warnings,
+    ...deliverySelection.warnings,
+    ...boundDeliverySelection.warnings,
+    ...freshDeliverySelection.warnings,
+  );
   const acceptanceReport = acceptanceSelection.report;
-  const deliveryReport = boundDeliverySelection.report;
+  const deliveryReport = freshDeliverySelection.report;
   const preparationStatus = blockers.length ? "blocked" : "ready-to-run";
   const status = deriveStatus(preparationStatus, acceptanceReport, deliveryReport);
   return {
