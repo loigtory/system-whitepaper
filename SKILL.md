@@ -39,7 +39,7 @@ The unattended pipeline is grouped into five business-visible phases:
    - **库表画像**: when enabled, convert private test-database metadata or a read-only connector scan into redacted `database-profile.json`; skip this node when `databaseProfile.enabled=false`.
    - **库表模型**: convert the redacted profile into `data-dictionary.json` and `entity-model.json`; these are script-derived evidence artifacts, not Agent database access.
    - **功能宇宙**: merge UI evidence and redacted database entities into `function-universe.json` candidates.
-   - **可信断言**: convert the universe into `verified-claims.json`; only `writable=true` claims may become body assertions.
+   - **可信断言**: convert the universe into `verified-claims.json`; only `writable=true` claims may become body assertions. Database-only claims must remain evidence-only/pending until UI evidence confirms them.
 4. **成稿**:
    - **底稿**: generate `whitepaper.draft.md` from evidence. This is a factual draft, not the final whitepaper.
    - **摘要**: build `evidence-summary.json` for LLM input.
@@ -72,7 +72,7 @@ Use the npm scripts as the stable entrypoints:
 - `npm run db:profile -- --system <code>`: build a redacted `database-profile.json` from private test-database metadata or `databaseProfile.mode=connector` / `--connector` read-only schema scan when enabled.
 - `npm run db:model -- --input outputs/<code>`: derive `data-dictionary.json` and `entity-model.json` from the redacted database profile.
 - `npm run truth:universe -- --input outputs/<code>`: merge UI evidence summary and redacted database profile into `function-universe.json` candidates.
-- `npm run truth:claims -- --input outputs/<code>`: convert the function universe into `verified-claims.json` with confidence and writable/non-writable boundaries.
+- `npm run truth:claims -- --input outputs/<code>`: convert the function universe into `verified-claims.json` with confidence and writable/non-writable boundaries; database-only inferred claims are not writable.
 - `npm run truth:fact-check -- --input outputs/<code>`: check `whitepaper.pending-review.md` against writable claims and block unsupported or weak body assertions.
 - `npm run truth:readiness -- --input outputs/<code>`: aggregate truth gates into `truth-readiness-report.json`; a non-passing report blocks review submission.
 - `npm run sync`: sync the system registry into `config/systems.local.yaml`.
@@ -148,7 +148,7 @@ Before finalizing, verify:
 - Write-operation safety compliance = 100%.
 - Unverified-content labeling = 100%.
 - Core conclusion traceability = 100%.
-- Deterministic business claims should come from `verified-claims.json`; weak claims must not be written as confirmed conclusions.
+- Deterministic business claims should come from `verified-claims.json`; weak or database-only non-writable claims must not be written as confirmed conclusions.
 - `fact-check-report.json` must have `canFinalize=true` before producing `whitepaper.final.md`.
 - `truth-readiness-report.json` must have `canSubmitReview=true`, score >= 95%, and matching source-artifact fingerprints before human review or final approval; `run-review-decision.js --status approved` blocks final Markdown/Word generation when this report is missing, malformed, non-passing, or stale.
 - No duplicated function explanations.

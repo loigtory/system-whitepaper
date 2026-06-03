@@ -42,6 +42,18 @@ function hasSourceType(sources, type) {
   return (sources || []).some((source) => source.type === type);
 }
 
+function sourceTypeStartsWith(sources, prefix) {
+  return (sources || []).some((source) => compactString(source.type).startsWith(prefix));
+}
+
+function claimHasUiEvidence(claim = {}) {
+  return sourceTypeStartsWith(claim.sources, "ui-") || hasSourceType(claim.sources, "screenshot");
+}
+
+function claimHasDatabaseEvidence(claim = {}) {
+  return sourceTypeStartsWith(claim.sources, "db-");
+}
+
 function confidenceRank(value) {
   return { high: 3, medium: 2, low: 1 }[value] || 0;
 }
@@ -73,7 +85,13 @@ function classifyClaim(confidence, sources = []) {
 }
 
 function claimIsWritable(claim) {
-  return claim.status === "confirmed" || claim.status === "inferred";
+  if (claimHasDatabaseEvidence(claim) && !claimHasUiEvidence(claim)) return false;
+  if (claim.status === "confirmed") return true;
+  if (claim.status !== "inferred") return false;
+  if (claim.type === "function-entity-link") {
+    return claimHasUiEvidence(claim) && claimHasDatabaseEvidence(claim);
+  }
+  return claimHasUiEvidence(claim);
 }
 
 function buildModuleClaims(universe = {}) {
@@ -263,11 +281,15 @@ function buildVerifiedClaimsArtifact(input = {}) {
       confirmedCount: uniqueClaims.filter((claim) => claim.status === "confirmed").length,
       inferredCount: uniqueClaims.filter((claim) => claim.status === "inferred").length,
       weakCount: uniqueClaims.filter((claim) => claim.status === "weak").length,
+      databaseOnlyClaimCount: uniqueClaims.filter((claim) =>
+        claimHasDatabaseEvidence(claim) && !claimHasUiEvidence(claim),
+      ).length,
       supportedRatio: uniqueClaims.length ? writableClaims.length / uniqueClaims.length : 1,
     },
     rules: {
       lowConfidenceNotWritable: true,
       databaseOnlyNotConfirmed: true,
+      databaseOnlyNotWritable: true,
       purpose:
         "Claims are the only allowed business-writing source for the next narrative/fact-check stages.",
     },
@@ -310,5 +332,8 @@ if (require.main === module) {
 module.exports = {
   buildVerifiedClaimsArtifact,
   buildVerifiedClaimsFromDir,
+  claimHasDatabaseEvidence,
+  claimHasUiEvidence,
+  claimIsWritable,
   classifyClaim,
 };

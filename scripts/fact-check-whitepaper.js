@@ -62,7 +62,7 @@ function claimTerms(claim = {}) {
 function buildTermIndex(claims = []) {
   const allTerms = new Map();
   const writableTerms = new Map();
-  const weakTerms = new Map();
+  const nonWritableTerms = new Map();
 
   for (const claim of claims || []) {
     for (const term of claimTerms(claim)) {
@@ -73,13 +73,13 @@ function buildTermIndex(claims = []) {
         if (!writableTerms.has(term)) writableTerms.set(term, []);
         writableTerms.get(term).push(claim);
       } else {
-        if (!weakTerms.has(term)) weakTerms.set(term, []);
-        weakTerms.get(term).push(claim);
+        if (!nonWritableTerms.has(term)) nonWritableTerms.set(term, []);
+        nonWritableTerms.get(term).push(claim);
       }
     }
   }
 
-  return { allTerms, writableTerms, weakTerms };
+  return { allTerms, writableTerms, nonWritableTerms };
 }
 
 function lineContainsTerm(line, term) {
@@ -99,12 +99,12 @@ function buildFactCheckReport(input = {}) {
   const claimsArtifact = input.claimsArtifact || {};
   const claims = Array.isArray(claimsArtifact.claims) ? claimsArtifact.claims : [];
   const claimById = new Map(claims.map((claim) => [claim.id, claim]));
-  const { allTerms, writableTerms, weakTerms } = buildTermIndex(claims);
+  const { allTerms, writableTerms, nonWritableTerms } = buildTermIndex(claims);
   const failures = [];
   const warnings = [];
   const supported = [];
   const pendingReferences = [];
-  const weakAssertions = [];
+  const nonWritableAssertions = [];
   const unsupportedHeadings = [];
   const unknownClaimRefs = [];
   const nonWritableClaimRefs = [];
@@ -133,7 +133,7 @@ function buildFactCheckReport(input = {}) {
     for (const term of allTerms.keys()) {
       if (!lineContainsTerm(line, term)) continue;
       const writableClaims = writableTerms.get(term) || [];
-      const weakClaims = weakTerms.get(term) || [];
+      const nonWritableClaims = nonWritableTerms.get(term) || [];
       if (writableClaims.length) {
         for (const claim of writableClaims) {
           const key = `${claim.id}:${lineNumber}`;
@@ -142,16 +142,16 @@ function buildFactCheckReport(input = {}) {
             seenSupported.add(key);
           }
         }
-      } else if (weakClaims.length) {
+      } else if (nonWritableClaims.length) {
         const item = {
           line: lineNumber,
           term,
-          claimIds: weakClaims.map((claim) => claim.id),
+          claimIds: nonWritableClaims.map((claim) => claim.id),
         };
         if (inPendingSection) {
           pendingReferences.push(item);
         } else {
-          weakAssertions.push(item);
+          nonWritableAssertions.push(item);
         }
       }
     }
@@ -169,20 +169,20 @@ function buildFactCheckReport(input = {}) {
   if (unsupportedHeadings.length) {
     failures.push("Unsupported headings appear in the whitepaper body.");
   }
-  if (weakAssertions.length) {
-    failures.push("Weak claims are written as body assertions instead of pending confirmations.");
+  if (nonWritableAssertions.length) {
+    failures.push("Non-writable claims are written as body assertions instead of pending confirmations.");
   }
   if (unknownClaimRefs.length) {
     failures.push("Whitepaper references claim ids that do not exist.");
   }
   if (nonWritableClaimRefs.length) {
-    failures.push("Whitepaper references non-writable weak claim ids.");
+    failures.push("Whitepaper references non-writable claim ids.");
   }
   if (!supported.length && claims.length) {
     warnings.push("No writable claim terms were found in the whitepaper body.");
   }
 
-  const checkedAssertions = supported.length + weakAssertions.length + unsupportedHeadings.length;
+  const checkedAssertions = supported.length + nonWritableAssertions.length + unsupportedHeadings.length;
   const supportedRatio = checkedAssertions ? supported.length / checkedAssertions : 1;
   const hasEnoughSupport =
     (!claims.length || supported.length > 0) && supportedRatio >= Number(input.minSupportedRatio || 0.95);
@@ -194,7 +194,8 @@ function buildFactCheckReport(input = {}) {
     warnings,
     supported,
     pendingReferences,
-    weakAssertions,
+    nonWritableAssertions,
+    weakAssertions: nonWritableAssertions,
     unsupportedHeadings,
     unknownClaimRefs,
     nonWritableClaimRefs,

@@ -8797,6 +8797,8 @@ test("build verified claims assigns confidence and writable boundaries", () => {
   const {
     buildVerifiedClaimsArtifact,
     buildVerifiedClaimsFromDir,
+    claimHasDatabaseEvidence,
+    claimHasUiEvidence,
     classifyClaim,
   } = require("./build-verified-claims");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "verified-claims-"));
@@ -8880,14 +8882,49 @@ test("build verified claims assigns confidence and writable boundaries", () => {
   assert.equal(weakFunction.status, "weak");
   assert.equal(weakFunction.writable, false);
   assert.equal(dbEntity.status, "inferred");
-  assert.equal(dbEntity.writable, true);
+  assert.equal(dbEntity.writable, false);
   assert.equal(statusClaim.status, "inferred");
+  assert.equal(statusClaim.writable, false);
   assert.equal(relationClaim.status, "inferred");
-  assert.equal(relationClaim.writable, true);
+  assert.equal(relationClaim.writable, false);
+  assert.equal(claimHasDatabaseEvidence(relationClaim), true);
+  assert.equal(claimHasUiEvidence(relationClaim), false);
+  assert.equal(
+    artifact.claims
+      .filter((claim) => claimHasDatabaseEvidence(claim) && !claimHasUiEvidence(claim))
+      .every((claim) => claim.writable === false),
+    true,
+  );
   assert.ok(artifact.writableClaimIds.includes("link:保单任务:任务列表:adp-test-policy-task"));
-  assert.ok(artifact.writableClaimIds.some((id) => id.startsWith("relation:")));
+  assert.equal(artifact.writableClaimIds.some((id) => id.startsWith("relation:")), false);
   assert.equal(artifact.metrics.claimCount, 7);
+  assert.equal(artifact.metrics.databaseOnlyClaimCount, 3);
   assert.equal(artifact.metrics.weakCount, 1);
+  assert.equal(artifact.rules.databaseOnlyNotWritable, true);
+});
+
+test("build verified claims never marks database-only claims writable", () => {
+  const { claimIsWritable } = require("./build-verified-claims");
+
+  assert.equal(
+    claimIsWritable({
+      type: "business-entity",
+      status: "confirmed",
+      sources: [{ type: "db-table", id: "adp_test.policy_task" }],
+    }),
+    false,
+  );
+  assert.equal(
+    claimIsWritable({
+      type: "function-entity-link",
+      status: "inferred",
+      sources: [
+        { type: "ui-function", id: "保单任务 > 任务列表" },
+        { type: "db-table", id: "adp_test.policy_task" },
+      ],
+    }),
+    true,
+  );
 });
 
 test("build verified claims rejects missing function universe", () => {
@@ -8977,8 +9014,9 @@ test("fact check blocks unknown headings and weak body assertions", () => {
 
   assert.equal(report.canFinalize, false);
   assert.ok(report.failures.some((item) => /Unsupported headings/.test(item)));
-  assert.ok(report.failures.some((item) => /Weak claims/.test(item)));
+  assert.ok(report.failures.some((item) => /Non-writable claims/.test(item)));
   assert.equal(report.unsupportedHeadings[0].term, "自动理赔审批");
+  assert.equal(report.nonWritableAssertions[0].term, "status");
   assert.equal(report.weakAssertions[0].term, "status");
 });
 
@@ -9077,13 +9115,18 @@ test("truth readiness passes only when evidence claims fact-check and narrative 
       file: "verified-claims.json",
       status: "ok",
       value: {
-        rules: { lowConfidenceNotWritable: true, databaseOnlyNotConfirmed: true },
+        rules: {
+          lowConfidenceNotWritable: true,
+          databaseOnlyNotConfirmed: true,
+          databaseOnlyNotWritable: true,
+        },
         metrics: {
           claimCount: 2,
           writableClaimCount: 1,
           confirmedCount: 1,
           inferredCount: 0,
           weakCount: 0,
+          databaseOnlyClaimCount: 1,
         },
         writableClaimIds: ["function:保单任务:任务列表"],
       },
@@ -9136,7 +9179,11 @@ test("truth readiness blocks missing writable claims and writes report", () => {
   fs.writeFileSync(
     path.join(dir, "verified-claims.json"),
     JSON.stringify({
-      rules: { lowConfidenceNotWritable: true, databaseOnlyNotConfirmed: true },
+      rules: {
+        lowConfidenceNotWritable: true,
+        databaseOnlyNotConfirmed: true,
+        databaseOnlyNotWritable: true,
+      },
       metrics: { claimCount: 1, writableClaimCount: 0, confirmedCount: 1, inferredCount: 0 },
       writableClaimIds: [],
     }),
@@ -9163,6 +9210,55 @@ test("truth readiness blocks missing writable claims and writes report", () => {
   assert.equal(report.canSubmitReview, false);
   assert.ok(report.blockers.some((item) => item.id === "claims.missing-writable"));
   assert.ok(report.blockers.some((item) => item.rerunNodes.includes("truth-readiness")));
+});
+
+test("truth readiness blocks incomplete verified claim boundary rules", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const artifacts = {
+    quality: {
+      file: "quality-report.json",
+      status: "ok",
+      value: {
+        canFinalize: true,
+        menuCoverage: 1,
+        corePageScreenshotCoverage: 1,
+        coreFunctionClassificationCoverage: 1,
+        writeOperationSafetyCompliance: 1,
+        unverifiedContentLabeling: 1,
+        coreConclusionTraceability: 1,
+        failures: [],
+      },
+    },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: {
+        rules: { lowConfidenceNotWritable: true, databaseOnlyNotConfirmed: true },
+        metrics: { claimCount: 1, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0, weakCount: 0 },
+        writableClaimIds: ["function:保单任务:任务列表"],
+      },
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: {
+        canFinalize: true,
+        failures: [],
+        metrics: { claimCount: 1, checkedAssertions: 1, supportedAssertions: 1, supportedRatio: 1 },
+      },
+    },
+    narrative: {
+      file: "narrative-quality-report.json",
+      status: "ok",
+      value: { canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } },
+    },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.gates.claims.pass, false);
+  assert.equal(report.canSubmitReview, false);
+  assert.ok(report.gates.claims.failures.some((item) => /boundary rules/.test(item)));
 });
 
 test("package manifest whitelists only skill runtime assets", () => {

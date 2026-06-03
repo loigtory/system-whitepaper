@@ -233,10 +233,13 @@ function buildClaimsGate(artifact) {
   const confirmedCount = Number(metrics.confirmedCount || 0);
   const inferredCount = Number(metrics.inferredCount || 0);
   const weakCount = Number(metrics.weakCount || 0);
+  const databaseOnlyClaimCount = Number(metrics.databaseOnlyClaimCount || 0);
   const hasWritableClaims = writableClaimCount > 0;
   const hasConfirmedOrInferred = confirmedCount + inferredCount > 0;
   const boundaryConfigured =
-    value.rules?.lowConfidenceNotWritable === true && value.rules?.databaseOnlyNotConfirmed === true;
+    value.rules?.lowConfidenceNotWritable === true &&
+    value.rules?.databaseOnlyNotConfirmed === true &&
+    value.rules?.databaseOnlyNotWritable === true;
   const score =
     artifact.status === "ok"
       ? (hasWritableClaims ? 0.65 : 0) +
@@ -247,17 +250,21 @@ function buildClaimsGate(artifact) {
   if (artifact.status !== "ok") failures.push(`${artifact.file} is ${artifact.status}.`);
   if (!hasWritableClaims) failures.push("No writable verified claims are available for body assertions.");
   if (!hasConfirmedOrInferred) failures.push("No confirmed or inferred claims are available.");
+  if (!boundaryConfigured) failures.push("Verified claim boundary rules are incomplete.");
   const warnings = [];
   if (weakCount > 0) {
     warnings.push(`${weakCount} weak claim(s) must remain pending/unverified unless later confirmed.`);
   }
+  if (databaseOnlyClaimCount > 0) {
+    warnings.push(`${databaseOnlyClaimCount} database-only claim(s) are evidence-only until UI evidence confirms them.`);
+  }
   return {
     id: "claims",
     label: "Verified writable claims",
-    pass: artifact.status === "ok" && hasWritableClaims && hasConfirmedOrInferred,
+    pass: artifact.status === "ok" && hasWritableClaims && hasConfirmedOrInferred && boundaryConfigured,
     score: clamp01(score),
     scorePercent: percent(score),
-    metrics: { claimCount, writableClaimCount, confirmedCount, inferredCount, weakCount },
+    metrics: { claimCount, writableClaimCount, confirmedCount, inferredCount, weakCount, databaseOnlyClaimCount },
     writableClaimIds: Array.isArray(value.writableClaimIds) ? value.writableClaimIds : [],
     failures,
     warnings,
