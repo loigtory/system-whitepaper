@@ -15,6 +15,7 @@ const {
   writePipelineState,
 } = require("./pipeline-state");
 const { exportWhitepaperWord } = require("./export-whitepaper-word");
+const { DEFAULT_THRESHOLD, normalizeThreshold } = require("./check-truth-readiness");
 
 function unique(items) {
   return [...new Set(items.filter(Boolean))];
@@ -240,6 +241,54 @@ function buildReviewDecision(input = {}) {
   };
 }
 
+function readApprovalTruthReadiness(inputDir) {
+  const reportPath = path.join(inputDir, "truth-readiness-report.json");
+  if (!fs.existsSync(reportPath)) {
+    throw new Error(`truth-readiness-report.json not found: ${reportPath}`);
+  }
+  let report = null;
+  try {
+    report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+  } catch (error) {
+    throw new Error(`truth-readiness-report.json is malformed: ${error.message}`);
+  }
+  if (!report || typeof report !== "object" || Array.isArray(report)) {
+    throw new Error(`truth-readiness-report.json must be a JSON object: ${reportPath}`);
+  }
+  return { reportPath, report };
+}
+
+function approvalTruthScore(report = {}) {
+  const score = Number(report.score);
+  if (Number.isFinite(score)) return score;
+  const scorePercent = Number(report.scorePercent);
+  if (Number.isFinite(scorePercent)) return scorePercent / 100;
+  return 0;
+}
+
+function assertApprovalTruthReadiness(inputDir, options = {}) {
+  const { reportPath, report } = readApprovalTruthReadiness(inputDir);
+  const threshold = normalizeThreshold(options.threshold ?? report.threshold ?? DEFAULT_THRESHOLD);
+  const score = approvalTruthScore(report);
+  if (report.canSubmitReview === true && score >= threshold) {
+    return report;
+  }
+  const blockers = Array.isArray(report.blockers)
+    ? report.blockers.map((item) => item.id || item.message || "").filter(Boolean).join(", ")
+    : "";
+  throw new Error(
+    [
+      `Truth readiness gate has not passed: ${reportPath}`,
+      `canSubmitReview=${Boolean(report.canSubmitReview)}`,
+      `score=${Math.round(score * 1000) / 10}%`,
+      `threshold=${Math.round(threshold * 1000) / 10}%`,
+      blockers ? `blockers=${blockers}` : "",
+    ]
+      .filter(Boolean)
+      .join("; "),
+  );
+}
+
 function runReviewDecision(options = {}) {
   const inputDir = path.resolve(String(options.inputDir || options.input || "."));
   const evidenceSummary =
@@ -256,6 +305,7 @@ function runReviewDecision(options = {}) {
     if (!fs.existsSync(pendingPath)) {
       throw new Error(`Pending review markdown not found: ${pendingPath}`);
     }
+    assertApprovalTruthReadiness(inputDir, options);
     promotePendingReviewToFinal(pendingPath, finalPath, {
       systemName: options.systemName || state?.name,
     });
@@ -338,6 +388,7 @@ if (require.main === module) {
 
 module.exports = {
   appendNarrativeGuardNodes,
+  assertApprovalTruthReadiness,
   buildReviewDecision,
   inferTargetModules,
   inferRewriteScope,

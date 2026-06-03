@@ -47,6 +47,35 @@ const {
   shouldVisitUrl,
 } = require("./system-whitepaper-lib");
 
+function writePassingTruthReadinessReport(dir, overrides = {}) {
+  const report = {
+    artifactType: "truth-readiness-report",
+    version: 1,
+    threshold: 0.95,
+    score: 0.98,
+    scorePercent: 98,
+    canSubmitReview: true,
+    canFinalize: true,
+    gates: {
+      evidence: { pass: true, scorePercent: 100 },
+      claims: { pass: true, scorePercent: 100 },
+      factCheck: { pass: true, scorePercent: 100 },
+      narrative: { pass: true, scorePercent: 100 },
+      database: { pass: true, available: false, scorePercent: 0 },
+    },
+    blockers: [],
+    improvementActions: [],
+    generatedAt: "2026-05-20T00:00:00.000Z",
+    ...overrides,
+  };
+  require("node:fs").writeFileSync(
+    require("node:path").join(dir, "truth-readiness-report.json"),
+    JSON.stringify(report),
+    "utf8",
+  );
+  return report;
+}
+
 test("safeScreenshotName removes unsafe path characters while preserving meaning", () => {
   assert.equal(
     safeScreenshotName("合同管理", "合同删除", "确认弹窗", "20260518"),
@@ -6831,6 +6860,7 @@ test("approved review creates final markdown and word output", () => {
     "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\n支撑保单数据闭环管理。",
     "utf8",
   );
+  writePassingTruthReadinessReport(dir);
 
   const decision = runReviewDecision({
     inputDir: dir,
@@ -6848,6 +6878,39 @@ test("approved review creates final markdown and word output", () => {
   assert.match(path.basename(decision.docxPath), /\.docx$/);
 });
 
+test("approved review requires passing truth readiness gate", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runReviewDecision } = require("./run-review-decision");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "review-truth-gate-"));
+  fs.writeFileSync(
+    path.join(dir, "whitepaper.pending-review.md"),
+    "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\n支撑保单数据闭环管理。",
+    "utf8",
+  );
+
+  assert.throws(
+    () => runReviewDecision({ inputDir: dir, status: "approved" }),
+    /truth-readiness-report\.json not found/,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "whitepaper.final.md")), false);
+
+  writePassingTruthReadinessReport(dir, {
+    score: 0.91,
+    scorePercent: 91,
+    canSubmitReview: false,
+    blockers: [{ id: "claims.missing-writable", message: "No writable claims." }],
+  });
+
+  assert.throws(
+    () => runReviewDecision({ inputDir: dir, status: "approved" }),
+    /Truth readiness gate has not passed/,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "whitepaper.final.md")), false);
+});
+
 test("approved review tolerates malformed optional pipeline state", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -6860,6 +6923,7 @@ test("approved review tolerates malformed optional pipeline state", () => {
     "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\n支撑保单数据闭环管理。",
     "utf8",
   );
+  writePassingTruthReadinessReport(dir);
   fs.writeFileSync(path.join(dir, "pipeline-state.json"), "{bad json", "utf8");
 
   const decision = runReviewDecision({
@@ -6954,6 +7018,10 @@ test("local e2e smoke approves copied adp artifacts without mutating source outp
   assert.equal(result.status, "passed");
   assert.ok(fs.existsSync(path.join(smokeOutput, "whitepaper.pending-review.md")));
   assert.ok(fs.existsSync(result.docxPath));
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(smokeOutput, "truth-readiness-report.json"), "utf8")).mode,
+    "local-e2e-smoke",
+  );
   assert.equal(fs.existsSync(path.join(sourceOutput, "whitepaper.final.md")), false);
 });
 

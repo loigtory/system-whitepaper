@@ -71,6 +71,32 @@ function prepareSmokeOutput(options = {}) {
     }),
     "utf8",
   );
+  writeJson(path.join(smokeOutput, "truth-readiness-report.json"), {
+    artifactType: "truth-readiness-report",
+    version: 1,
+    mode: "local-e2e-smoke",
+    threshold: 0.95,
+    score: 0.99,
+    scorePercent: 99,
+    canSubmitReview: true,
+    canFinalize: true,
+    gates: {
+      evidence: { pass: true, scorePercent: 100 },
+      claims: { pass: true, scorePercent: 100 },
+      factCheck: { pass: true, scorePercent: 100 },
+      narrative: { pass: true, scorePercent: 100 },
+      database: { pass: true, available: false, scorePercent: 0 },
+    },
+    blockers: [],
+    improvementActions: [
+      {
+        id: "smoke-only",
+        message: "Smoke gate validates approval/export plumbing only; it is not business truth evidence.",
+        rerunNodes: [],
+      },
+    ],
+    generatedAt: new Date().toISOString(),
+  });
 
   let state = createPipelineState({
     code: options.systemCode,
