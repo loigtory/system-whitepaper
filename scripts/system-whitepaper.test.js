@@ -7701,6 +7701,184 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.ok(smoke.blockers.some((item) => item.id === "delivery.smoke-whitepaper"));
 });
 
+test("real run readiness unifies preflight and final delivery state", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    buildRealRunReadinessReport,
+    renderRealRunReadinessMarkdown,
+    writeRealRunReadinessReport,
+  } = require("./check-real-run-readiness");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "real-run-readiness-"));
+  const outputRoot = path.join(dir, "outputs");
+  const configPath = path.join(dir, "systems.local.yaml");
+  const tokenPath = path.join(dir, "secrets", "huntian-token.txt");
+  fs.mkdirSync(path.dirname(tokenPath), { recursive: true });
+  fs.mkdirSync(outputRoot, { recursive: true });
+  fs.writeFileSync(tokenPath, "valid-token", "utf8");
+  fs.writeFileSync(
+    configPath,
+    [
+      "auth:",
+      "  tokenFile: secrets/huntian-token.txt",
+      "runtime:",
+      "  environment: test",
+      "  outputDir: outputs",
+      "  testDataPrefix: AI_AUTO_TEST_",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.example.test/",
+      "    databaseProfile:",
+      "      enabled: false",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const context = {
+    projectRoot: dir,
+    configPath,
+    configDir: dir,
+    outputRoot,
+    config: {
+      runtime: { outputDir: "outputs" },
+      systems: [
+        {
+          code: "adp",
+          name: "AI保单数据闭环平台",
+          url: "https://pre-adp.example.test/",
+          databaseProfile: { enabled: false },
+        },
+      ],
+    },
+  };
+  const preflight = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+  });
+  assert.equal(preflight.status, "ready-to-run");
+  assert.equal(preflight.canStartRealRun, true);
+  assert.equal(preflight.canDeliver, false);
+  assert.match(renderRealRunReadinessMarkdown(preflight), /Real Run Readiness Report/);
+
+  const acceptanceReport = {
+    artifactType: "batch-acceptance-report",
+    status: "accepted",
+    canSubmitAll: true,
+    generatedAt: "2026-06-03T00:00:00.000Z",
+    summary: { total: 1, accepted: 1, blocked: 0, blockers: 0 },
+  };
+  const deliveryReport = {
+    artifactType: "delivery-readiness-report",
+    status: "ready",
+    canDeliver: true,
+    generatedAt: "2026-06-03T00:01:00.000Z",
+    summary: { total: 1, ready: 1, blocked: 0, blockers: 0 },
+  };
+  const ready = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport,
+    deliveryReport,
+  });
+  assert.equal(ready.status, "ready");
+  assert.equal(ready.canDeliver, true);
+  const artifacts = writeRealRunReadinessReport(outputRoot, ready);
+  assert.equal(fs.existsSync(artifacts.jsonPath), true);
+  assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "real-run-readiness-report.md")), true);
+
+  const dbSecretPath = path.join(dir, "secrets", "db", "adp.json");
+  fs.mkdirSync(path.dirname(dbSecretPath), { recursive: true });
+  const dbMetadataPath = path.join(dir, "fixtures", "db-metadata.json");
+  fs.mkdirSync(path.dirname(dbMetadataPath), { recursive: true });
+  fs.writeFileSync(dbMetadataPath, JSON.stringify({ tables: [] }), "utf8");
+  fs.writeFileSync(dbSecretPath, JSON.stringify({ readOnly: true, metadataFile: "fixtures/db-metadata.json" }), "utf8");
+  const dbContext = {
+    ...context,
+    config: {
+      ...context.config,
+      systems: [
+        {
+          ...context.config.systems[0],
+          databaseProfile: {
+            enabled: true,
+            mode: "metadata-file",
+            readOnly: true,
+            secretFile: "secrets/db/adp.json",
+          },
+        },
+      ],
+    },
+  };
+  const dbReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context: dbContext,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+  });
+  assert.equal(dbReady.status, "ready-to-run");
+  assert.equal(dbReady.summary.databaseEnabled, 1);
+
+  const connectorReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context: {
+      ...context,
+      config: {
+        ...context.config,
+        systems: [
+          {
+            ...context.config.systems[0],
+            databaseProfile: {
+              enabled: true,
+              mode: "connector",
+              secretFile: "secrets/db/adp.json",
+            },
+          },
+        ],
+      },
+    },
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+  });
+  assert.equal(connectorReady.status, "ready-to-run");
+
+  const blockedWithStaleReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: false,
+      failures: [{ id: "runtime.test-data-prefix-missing", message: "runtime.testDataPrefix is required." }],
+      warnings: [],
+      counts: { failures: 1, warnings: 0, systems: 1 },
+    },
+    deliveryReport,
+  });
+  assert.equal(blockedWithStaleReady.status, "blocked");
+  assert.equal(blockedWithStaleReady.canDeliver, false);
+});
+
 test("dashboard supports batch pipeline command and active run snapshot", () => {
   const {
     buildActiveRun,
@@ -11451,6 +11629,7 @@ test("package manifest whitelists only skill runtime assets", () => {
     "scripts/build-verified-claims.js",
     "scripts/check-batch-acceptance.js",
     "scripts/check-delivery-readiness.js",
+    "scripts/check-real-run-readiness.js",
     "scripts/check-truth-readiness.js",
     "scripts/fact-check-whitepaper.js",
     "scripts/system-whitepaper-lib.js",
@@ -11518,6 +11697,7 @@ test("npm pack dry-run excludes private and process-only assets", () => {
     "scripts/build-verified-claims.js",
     "scripts/check-batch-acceptance.js",
     "scripts/check-delivery-readiness.js",
+    "scripts/check-real-run-readiness.js",
     "scripts/check-truth-readiness.js",
     "scripts/fact-check-whitepaper.js",
     "scripts/system-whitepaper-lib.js",
@@ -11604,6 +11784,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
       "scripts/build-verified-claims.js",
       "scripts/check-batch-acceptance.js",
       "scripts/check-delivery-readiness.js",
+      "scripts/check-real-run-readiness.js",
       "scripts/check-truth-readiness.js",
       "scripts/fact-check-whitepaper.js",
       "scripts/system-whitepaper-lib.js",
@@ -11633,6 +11814,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
           'require("./scripts/build-verified-claims");',
           'require("./scripts/check-batch-acceptance");',
           'require("./scripts/check-delivery-readiness");',
+          'require("./scripts/check-real-run-readiness");',
           'require("./scripts/check-truth-readiness");',
           'require("./scripts/fact-check-whitepaper");',
           'require("./scripts/system-whitepaper-lib");',
