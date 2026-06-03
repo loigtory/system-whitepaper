@@ -2,6 +2,7 @@
 
 const path = require("node:path");
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const {
   buildQualityReport,
   computeEvidenceMetrics,
@@ -9,6 +10,31 @@ const {
   readRequiredJsonObject,
   writeJson,
 } = require("./system-whitepaper-lib");
+
+function fingerprintFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { exists: false, size: 0, mtimeMs: null, sha256: "" };
+  }
+  const buffer = fs.readFileSync(filePath);
+  const stat = fs.statSync(filePath);
+  return {
+    exists: true,
+    size: stat.size,
+    mtimeMs: Math.round(stat.mtimeMs),
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+function buildQualitySourceArtifacts(input = {}) {
+  const result = {};
+  if (input.evidencePath) {
+    result.evidence = {
+      file: path.basename(input.evidencePath),
+      fingerprint: fingerprintFile(input.evidencePath),
+    };
+  }
+  return result;
+}
 
 function readOperationGuideGate(gatePath) {
   if (!fs.existsSync(gatePath)) return null;
@@ -46,7 +72,11 @@ function main() {
   }
 
   const output = path.join(inputDir, "quality-report.json");
-  writeJson(output, { ...report, counts: metrics.counts });
+  writeJson(output, {
+    ...report,
+    counts: metrics.counts,
+    sourceArtifacts: buildQualitySourceArtifacts({ evidencePath }),
+  });
   console.log(`Quality report written: ${output}`);
   console.log(
     `Coverage: menus ${metrics.counts.visitedMenus}/${metrics.counts.coreMenus}, pages ${metrics.counts.pages}, actions ${metrics.counts.actions}`,
@@ -64,6 +94,8 @@ function main() {
 }
 
 module.exports = {
+  buildQualitySourceArtifacts,
+  fingerprintFile,
   readOperationGuideGate,
 };
 

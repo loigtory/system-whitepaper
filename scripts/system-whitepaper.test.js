@@ -55,6 +55,7 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
     buildReadinessSourceArtifacts,
     loadReadinessInputs,
   } = require("./check-truth-readiness");
+  const { buildQualitySourceArtifacts } = require("./check-quality");
   const writeJsonIfMissing = (fileName, value) => {
     const filePath = path.join(dir, fileName);
     if (!fs.existsSync(filePath)) {
@@ -67,6 +68,11 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
       fs.writeFileSync(filePath, value, "utf8");
     }
   };
+  writeJsonIfMissing("evidence.json", {
+    menuInventory: [{ title: "保单任务", status: "visited", url: "/policy-task" }],
+    pageInventory: [{ id: "policy-task", type: "page", screenshot: "screenshots/task.png" }],
+    actionInventory: [{ function: "任务列表", type: "query" }],
+  });
   writeJsonIfMissing("quality-report.json", {
     canFinalize: true,
     menuCoverage: 1,
@@ -76,6 +82,7 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
     unverifiedContentLabeling: 1,
     coreConclusionTraceability: 1,
     failures: [],
+    sourceArtifacts: buildQualitySourceArtifacts({ evidencePath: path.join(dir, "evidence.json") }),
   });
   writeJsonIfMissing("verified-claims.json", {
     rules: {
@@ -160,6 +167,18 @@ function writePassingTruthArtifacts(dir, options = {}) {
   } = require("./check-truth-readiness");
   const { buildSourceArtifacts: buildUniverseSourceArtifacts } = require("./build-function-universe");
   const { buildSourceArtifacts: buildClaimSourceArtifacts } = require("./build-verified-claims");
+  const { buildQualitySourceArtifacts } = require("./check-quality");
+  if (!fs.existsSync(path.join(dir, "evidence.json"))) {
+    fs.writeFileSync(
+      path.join(dir, "evidence.json"),
+      JSON.stringify({
+        menuInventory: [{ title: "保单任务", status: "visited", url: "/policy-task" }],
+        pageInventory: [{ id: "policy-task", type: "page", screenshot: "screenshots/task.png" }],
+        actionInventory: [{ function: "任务列表", type: "query" }],
+      }),
+      "utf8",
+    );
+  }
   fs.writeFileSync(
     path.join(dir, "quality-report.json"),
     JSON.stringify({
@@ -171,6 +190,7 @@ function writePassingTruthArtifacts(dir, options = {}) {
       unverifiedContentLabeling: 1,
       coreConclusionTraceability: 1,
       failures: [],
+      sourceArtifacts: buildQualitySourceArtifacts({ evidencePath: path.join(dir, "evidence.json") }),
     }),
     "utf8",
   );
@@ -12722,6 +12742,35 @@ test("truth readiness rejects stale database truth lineage", () => {
   });
   assert.equal(passing.canSubmitReview, true);
   assert.equal(passing.gates.lineage.pass, true);
+
+  fs.writeFileSync(
+    path.join(dir, "evidence.json"),
+    JSON.stringify({
+      menuInventory: [{ title: "批改任务", status: "visited", url: "/endorsement-task" }],
+      pageInventory: [{ id: "endorsement-task", type: "page", screenshot: "screenshots/endorsement.png" }],
+      actionInventory: [{ function: "批改任务列表", type: "query" }],
+    }),
+    "utf8",
+  );
+  const staleQualityEvidence = runTruthReadinessCheck({
+    inputDir: dir,
+    requireDatabaseEvidence: true,
+    systemCode: "adp",
+  });
+  assert.equal(staleQualityEvidence.canSubmitReview, false);
+  assert.equal(staleQualityEvidence.gates.lineage.pass, false);
+  assert.ok(staleQualityEvidence.gates.lineage.failures.some((item) => /evidence\.json/.test(item)));
+  assert.ok(staleQualityEvidence.blockers.some((item) => item.id === "truth.lineage-stale"));
+
+  fs.writeFileSync(
+    path.join(dir, "evidence.json"),
+    JSON.stringify({
+      menuInventory: [{ title: "保单任务", status: "visited", url: "/policy-task" }],
+      pageInventory: [{ id: "policy-task", type: "page", screenshot: "screenshots/task.png" }],
+      actionInventory: [{ function: "任务列表", type: "query" }],
+    }),
+    "utf8",
+  );
 
   fs.writeFileSync(
     path.join(dir, "evidence-summary.json"),

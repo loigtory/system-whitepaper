@@ -15,6 +15,7 @@ const REQUIRED_ARTIFACTS = {
 };
 
 const OPTIONAL_ARTIFACTS = {
+  evidence: "evidence.json",
   evidenceSummary: "evidence-summary.json",
   dataDictionary: "data-dictionary.json",
   entityModel: "entity-model.json",
@@ -165,6 +166,7 @@ function lineageMismatch(key, artifact, current, ownerFile) {
 function buildLineageGate(artifacts = {}) {
   const failures = [];
   const checks = [
+    ["evidence", artifacts.quality, artifacts.evidence, "quality-report.json"],
     ["databaseProfile", artifacts.dataDictionary, artifacts.databaseProfile, "data-dictionary.json"],
     ["databaseProfile", artifacts.entityModel, artifacts.databaseProfile, "entity-model.json"],
     ["dataDictionary", artifacts.entityModel, artifacts.dataDictionary, "entity-model.json"],

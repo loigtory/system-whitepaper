@@ -59,6 +59,7 @@ const {
   shouldAutoRefreshCookie,
 } = require("./refresh-huntian-cookie");
 const { loadMenuListCacheRawText, resolveMenuApiPath } = require("./menu-list-capture");
+const { buildQualitySourceArtifacts } = require("./check-quality");
 
 function shouldUsePersistentProfile(config, args = {}) {
   if (args["persistent-profile"] === false) return false;
@@ -301,10 +302,11 @@ async function main() {
     ...metrics,
     blockedItems: result.evidence.blockedItems || [],
   });
-  writeJson(path.join(systemOutput, "evidence.json"), result.evidence);
+  writeJson(evidencePath, result.evidence);
   writeJson(path.join(systemOutput, "quality-report.json"), {
     ...qualityReport,
     counts: metrics.counts,
+    sourceArtifacts: buildQualitySourceArtifacts({ evidencePath }),
   });
   console.log(`Evidence package written: ${systemOutput}`);
   console.log(
