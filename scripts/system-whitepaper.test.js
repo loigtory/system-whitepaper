@@ -12581,6 +12581,7 @@ test("build verified claims assigns confidence and writable boundaries", () => {
         sources: [{ type: "db-foreign-key", id: "adp_test.policy_task.policy_id", label: "policy" }],
       },
     ],
+    rules: { noConclusion: true },
   };
   fs.writeFileSync(path.join(dir, "function-universe.json"), JSON.stringify(functionUniverse), "utf8");
 
@@ -12620,6 +12621,35 @@ test("build verified claims assigns confidence and writable boundaries", () => {
   assert.equal(artifact.metrics.databaseOnlyClaimCount, 3);
   assert.equal(artifact.metrics.weakCount, 1);
   assert.equal(artifact.rules.databaseOnlyNotWritable, true);
+});
+
+test("build verified claims rejects invalid function universe contract before writing artifact", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    buildVerifiedClaimsArtifact,
+    buildVerifiedClaimsFromDir,
+  } = require("./build-verified-claims");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "verified-claims-bad-universe-"));
+  const functionUniverse = {
+    artifactType: "function-universe",
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    modules: [{ name: "保单任务" }],
+    functions: [{ module: "保单任务", name: "任务列表" }],
+    rules: { noConclusion: false },
+  };
+  fs.writeFileSync(path.join(dir, "function-universe.json"), JSON.stringify(functionUniverse), "utf8");
+
+  assert.throws(
+    () => buildVerifiedClaimsArtifact({ functionUniverse }),
+    /rules\.noConclusion=true/,
+  );
+  assert.throws(
+    () => buildVerifiedClaimsFromDir(dir),
+    /rules\.noConclusion=true/,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "verified-claims.json")), false);
 });
 
 test("build verified claims never marks database-only claims writable", () => {

@@ -282,8 +282,21 @@ function buildEntityRelationClaims(universe = {}) {
   });
 }
 
+function assertValidFunctionUniverse(universe = {}) {
+  if (!universe || typeof universe !== "object" || Array.isArray(universe)) {
+    throw new Error("function-universe.json must be a JSON object.");
+  }
+  if (universe.artifactType !== "function-universe") {
+    throw new Error("function-universe.json artifactType must be function-universe.");
+  }
+  if (universe.rules?.noConclusion !== true) {
+    throw new Error("function-universe.json must declare rules.noConclusion=true before claims can be generated.");
+  }
+}
+
 function buildVerifiedClaimsArtifact(input = {}) {
   const universe = input.functionUniverse || {};
+  assertValidFunctionUniverse(universe);
   const claims = [
     ...buildModuleClaims(universe),
     ...buildFunctionClaims(universe),
