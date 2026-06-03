@@ -8,6 +8,7 @@ const {
   readRequiredJsonObject,
   writeJson,
 } = require("./system-whitepaper-lib");
+const { scanDatabaseProfileSafety } = require("./check-truth-readiness");
 
 const STATUS_FIELD_PATTERN = /(status|state|stage|flag|type|状态|阶段|类型|标识)/i;
 const TIME_FIELD_PATTERN = /(time|date|created|updated|创建|更新|时间|日期)/i;
@@ -240,6 +241,15 @@ function buildEntityModel(dataDictionary = {}, options = {}) {
 }
 
 function buildDatabaseModelArtifacts(profile = {}, options = {}) {
+  const safety = scanDatabaseProfileSafety(profile);
+  if (!safety.pass) {
+    throw new Error(
+      [
+        "database-profile.json is not safely redacted; refusing to build database model artifacts.",
+        ...safety.failures,
+      ].join(" "),
+    );
+  }
   const generatedAt = options.generatedAt || new Date().toISOString();
   const dataDictionary = buildDataDictionary(profile, { generatedAt });
   const entityModel = buildEntityModel(dataDictionary, { generatedAt });

@@ -12301,6 +12301,48 @@ test("build database model derives dictionary and entity model from redacted pro
   assert.ok(inferEntityRelations(result.dataDictionary.tables).some((relation) => relation.type === "naming-reference"));
 });
 
+test("build database model rejects unsafe database profile before writing derived artifacts", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    buildDatabaseModelArtifacts,
+    buildDatabaseModelFromDir,
+  } = require("./build-database-model");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "database-model-unsafe-"));
+  const profile = {
+    artifactType: "database-profile",
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    source: {
+      mode: "connector",
+      databaseType: "mysql",
+      secret: { type: "mysql", host: "127.0.0.1", password: "[redacted]" },
+    },
+    safety: { secretRedacted: true },
+    tables: [
+      {
+        schema: "adp_test",
+        name: "policy_task",
+        comment: "保单任务",
+        columns: [{ name: "customer_phone", type: "varchar", comment: "客户手机号" }],
+        sampleRows: [{ customer_phone: "13800138000" }],
+      },
+    ],
+  };
+  fs.writeFileSync(path.join(dir, "database-profile.json"), JSON.stringify(profile), "utf8");
+
+  assert.throws(
+    () => buildDatabaseModelArtifacts(profile, { generatedAt: "2026-06-03T00:00:00.000Z" }),
+    /not safely redacted.*source\.secret\.host.*customer_phone/s,
+  );
+  assert.throws(
+    () => buildDatabaseModelFromDir(dir, { generatedAt: "2026-06-03T00:00:00.000Z" }),
+    /not safely redacted.*source\.secret\.host.*customer_phone/s,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "data-dictionary.json")), false);
+  assert.equal(fs.existsSync(path.join(dir, "entity-model.json")), false);
+});
+
 test("build function universe merges UI functions and redacted database entities", () => {
   const fs = require("node:fs");
   const os = require("node:os");
