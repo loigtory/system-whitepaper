@@ -40,6 +40,7 @@
     "scripts/run-review-decision.js",
     "scripts/run-local-e2e-smoke.js",
     "scripts/run-batch-repair-queue.js",
+    "scripts/run-repair-follow-up-loop.js",
     "scripts/run-whitepaper-batch.js",
     "scripts/run-whitepaper-pipeline.js",
     "scripts/start-dashboard.ps1",
@@ -69,7 +70,8 @@
     "phase3b": "node scripts/run-phase3b.js --config config/systems.local.yaml",
     "pipeline": "node scripts/run-whitepaper-pipeline.js --config config/systems.local.yaml",
     "batch": "node scripts/run-whitepaper-batch.js --config config/systems.local.yaml --with-whitepaper --concurrency 4",
-    "repair:batch": "node scripts/run-batch-repair-queue.js --config config/systems.local.yaml --concurrency 4"
+    "repair:batch": "node scripts/run-batch-repair-queue.js --config config/systems.local.yaml --concurrency 4",
+    "repair:loop": "node scripts/run-repair-follow-up-loop.js --config config/systems.local.yaml --concurrency 4"
   },
   "dependencies": {
     "@cursor/sdk": "^1.0.13",

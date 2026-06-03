@@ -7220,6 +7220,132 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   assert.equal(launched[0].args.includes("--review-rerun"), false);
 });
 
+test("repair follow-up loop consumes low-quota commands only", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { EventEmitter } = require("node:events");
+  const {
+    buildRepairBatchChildArgs,
+    runRepairFollowUpLoop,
+    resolveFollowUpPath,
+    selectNextFollowUpCommand,
+    summarizeLoopStatus,
+  } = require("./run-repair-follow-up-loop");
+
+  const followUpPlan = {
+    artifactType: "batch-repair-follow-up-plan",
+    status: "ready-to-run",
+    nextBestAction: "Run the first low-quota follow-up command.",
+    summary: { commands: 2, lowQuotaCommands: 1, agentWritingCommands: 1 },
+    source: { closureStatus: "blocked" },
+    commands: [
+      {
+        id: "repair-remaining-agent-writing",
+        canAutoRun: false,
+        canRunWithoutAgentWriting: false,
+        requiresAgentWriting: true,
+        requiresExplicitQuotaApproval: true,
+        command: { npmScript: "repair:batch", args: ["--allow-agent-writing", "--systems", "claim"] },
+      },
+      {
+        id: "repair-remaining-low-quota",
+        canAutoRun: true,
+        canRunWithoutAgentWriting: true,
+        requiresAgentWriting: false,
+        command: {
+          npmScript: "repair:batch",
+          args: ["--systems", "adp", "--queue", "evil.json", "--dry-run", "--continue-on-error"],
+        },
+      },
+    ],
+  };
+  const selected = selectNextFollowUpCommand(followUpPlan);
+  assert.equal(selected.command.id, "repair-remaining-low-quota");
+  assert.equal(selected.skipped[0].reason, "agent-writing-not-allowed");
+  assert.deepEqual(
+    buildRepairBatchChildArgs(selected.command, {
+      configPath: "config/systems.local.yaml",
+      concurrency: 4,
+    }),
+    [
+      "scripts/run-batch-repair-queue.js",
+      "--config",
+      "config/systems.local.yaml",
+      "--concurrency",
+      "4",
+      "--systems",
+      "adp",
+    ],
+  );
+  assert.equal(summarizeLoopStatus({ status: "needs-agent-writing" }, [], { maxRounds: 3 }).status, "needs-agent-writing");
+  assert.equal(
+    resolveFollowUpPath({ projectRoot: "D:/project", outputRoot: "D:/project/outputs" }, { plan: "outputs/_batch/custom.json" }),
+    path.resolve("D:/project", "outputs/_batch/custom.json"),
+  );
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "repair-follow-up-loop-"));
+  const configPath = path.join(dir, "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+    ].join("\n"),
+    "utf8",
+  );
+  const batchDir = path.join(dir, "outputs", "_batch");
+  fs.mkdirSync(batchDir, { recursive: true });
+  fs.writeFileSync(path.join(batchDir, "repair-follow-up-plan.json"), JSON.stringify(followUpPlan), "utf8");
+
+  const dryRunState = await runRepairFollowUpLoop({
+    args: { config: configPath, "dry-run": true },
+  });
+  assert.equal(dryRunState.status, "dry-run");
+  assert.equal(dryRunState.rounds.length, 1);
+  assert.equal(dryRunState.rounds[0].commandId, "repair-remaining-low-quota");
+  assert.equal(fs.existsSync(path.join(batchDir, "repair-follow-up-loop-state.json")), true);
+
+  let launchCount = 0;
+  const fakeSpawn = (command, args) => {
+    launchCount += 1;
+    assert.equal(command, process.execPath);
+    assert.ok(args.includes("--systems"));
+    assert.ok(args.includes("adp"));
+    fs.writeFileSync(
+      path.join(batchDir, "repair-follow-up-plan.json"),
+      JSON.stringify({
+        artifactType: "batch-repair-follow-up-plan",
+        status: "complete",
+        nextBestAction: "No repair follow-up is required.",
+        summary: { commands: 0, lowQuotaCommands: 0, agentWritingCommands: 0 },
+        source: { closureStatus: "passed" },
+        commands: [],
+      }),
+      "utf8",
+    );
+    const child = new EventEmitter();
+    child.pid = 2345;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    setImmediate(() => child.emit("close", 0, null));
+    return child;
+  };
+  fs.writeFileSync(path.join(batchDir, "repair-follow-up-plan.json"), JSON.stringify(followUpPlan), "utf8");
+  const runState = await runRepairFollowUpLoop({
+    args: { config: configPath, "max-rounds": 3 },
+    spawn: fakeSpawn,
+  });
+  assert.equal(runState.status, "complete");
+  assert.equal(runState.rounds.length, 1);
+  assert.equal(runState.finalPlan.status, "complete");
+  assert.equal(launchCount, 1);
+});
+
 test("dashboard supports batch pipeline command and active run snapshot", () => {
   const {
     buildActiveRun,
@@ -7448,6 +7574,16 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
     }),
     "utf8",
   );
+  fs.writeFileSync(
+    path.join(dir, "outputs", "_batch", "repair-follow-up-loop-state.json"),
+    JSON.stringify({
+      artifactType: "batch-repair-follow-up-loop-state",
+      status: "needs-agent-writing",
+      rounds: [],
+      finalPlan: { status: "needs-agent-writing" },
+    }),
+    "utf8",
+  );
   const snapshot = buildDashboardSnapshot({ configPath });
   assert.equal(snapshot.batch.status, "running");
   assert.equal(snapshot.activeRun.mode, "batch");
@@ -7460,9 +7596,11 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(snapshot.batchRepairRunState.status, "dry-run");
   assert.equal(snapshot.batchRepairClosure.status, "blocked");
   assert.equal(snapshot.batchRepairFollowUpPlan.status, "needs-agent-writing");
+  assert.equal(snapshot.batchRepairFollowUpLoopState.status, "needs-agent-writing");
   assert.equal(snapshot.batchRepairRunArtifacts.planMarkdown.exists, true);
   assert.equal(snapshot.batchRepairRunArtifacts.closureMarkdown.exists, true);
   assert.equal(snapshot.batchRepairRunArtifacts.followUpMarkdown.exists, true);
+  assert.equal(snapshot.batchRepairRunArtifacts.followUpLoopState.exists, true);
   assert.equal(snapshot.activeRun.repairFollowUp.status, "needs-agent-writing");
   assert.equal(snapshot.activeRun.repairQueue.summary.requiresAgentWriting, 1);
 });
@@ -10761,6 +10899,7 @@ test("package manifest whitelists only skill runtime assets", () => {
     "scripts/run-whitepaper-pipeline.js",
     "scripts/run-phase3b.js",
     "scripts/run-batch-repair-queue.js",
+    "scripts/run-repair-follow-up-loop.js",
     "scripts/run-local-e2e-smoke.js",
     "scripts/system-whitepaper.test.js",
     "scripts/local-dashboard/",
@@ -10824,6 +10963,7 @@ test("npm pack dry-run excludes private and process-only assets", () => {
     "scripts/run-whitepaper-batch.js",
     "scripts/run-whitepaper-pipeline.js",
     "scripts/run-batch-repair-queue.js",
+    "scripts/run-repair-follow-up-loop.js",
     "scripts/run-local-e2e-smoke.js",
     "scripts/system-whitepaper.test.js",
     "scripts/local-dashboard/server.js",
