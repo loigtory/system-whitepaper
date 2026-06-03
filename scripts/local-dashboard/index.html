@@ -591,6 +591,7 @@
         functionUniverse: "\u529f\u80fd\u5b87\u5b99",
         verifiedClaims: "\u53ef\u4fe1\u65ad\u8a00",
         factCheck: "\u4e8b\u5b9e\u6838\u9a8c",
+        coverageRepair: "\u81ea\u52a8\u8865\u5199\u8ba1\u5212",
         truthReadiness: "\u771f\u5b9e\u5ea6\u95e8\u7981",
         pendingReview: "\u5f85\u5ba1\u6838\u7a3f",
         final: "\u7ec8\u7a3f",
@@ -756,7 +757,7 @@
       }
 
       function artifactBadges(system) {
-        return ["operationGuide", "dataDictionary", "entityModel", "factCheck", "truthReadiness", "pendingReview", "final", "docx"]
+        return ["operationGuide", "dataDictionary", "entityModel", "factCheck", "coverageRepair", "truthReadiness", "pendingReview", "final", "docx"]
           .map((key) => [key, system.artifacts?.[key] || { exists: false }])
           .map(([key, artifact]) => {
             const label = artifactText[key] || key;
@@ -1148,6 +1149,16 @@
         const staleSources = readiness.staleSources || [];
         const writableCoverage = readiness.writableClaimCoverage || {};
         const missingClaimIds = writableCoverage.missingWritableClaimIds || [];
+        const repair = system.coverageRepair;
+        const repairStatus = repair
+          ? {
+              completed: "已自动补写",
+              running: "补写中",
+              failed: "补写失败",
+              planned: "已计划",
+              skipped: "已跳过",
+            }[repair.status] || repair.status || "-"
+          : "未触发";
         return `
           <section class="card">
             <h2>真实度门禁</h2>
@@ -1175,6 +1186,10 @@
               <div class="usage-item">
                 <div class="muted">缺失可写声明</div>
                 <div class="usage-value">${escapeHtml(String(writableCoverage.missingWritableClaimCount || 0))}</div>
+              </div>
+              <div class="usage-item">
+                <div class="muted">自动补写</div>
+                <div class="usage-value">${escapeHtml(repairStatus)}</div>
               </div>
             </div>
             ${
@@ -1213,6 +1228,16 @@
                 : ""
             }
             ${
+              repair
+                ? `<div class="usage-history">
+                    <span class="usage-history-item">自动补写分片：${escapeHtml(repair.narrativePart || "function-sections")}</span>
+                    <span class="usage-history-item">目标模块：${escapeHtml((repair.targetModules || []).join("，") || "-")}</span>
+                    <span class="usage-history-item">执行节点：${escapeHtml((repair.executedNodes || []).join(",") || "-")}</span>
+                    ${repair.error ? `<span class="usage-history-item">错误：${escapeHtml(repair.error)}</span>` : ""}
+                  </div>`
+                : ""
+            }
+            ${
               actions.length
                 ? `<div class="muted" style="margin-top: 10px">建议动作：${escapeHtml(
                     actions
@@ -1231,7 +1256,7 @@
           <section class="card">
             <h2>稿件产物</h2>
             <div class="artifact-row">
-              ${["operationGuide", "evidenceSummary", "dataDictionary", "entityModel", "verifiedClaims", "factCheck", "truthReadiness", "pendingReview", "final", "docx"]
+              ${["operationGuide", "evidenceSummary", "dataDictionary", "entityModel", "verifiedClaims", "factCheck", "coverageRepair", "truthReadiness", "pendingReview", "final", "docx"]
                 .map((key) => renderArtifactLabel(system, key, system.artifacts?.[key] || { exists: false }))
                 .join("")}
             </div>

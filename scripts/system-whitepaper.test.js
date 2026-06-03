@@ -4731,6 +4731,68 @@ test("dashboard snapshot exposes writable claim coverage gaps", () => {
   assert.deepEqual(coverage.missingWritableClaimIds, ["function:保单任务:任务详情"]);
 });
 
+test("dashboard snapshot exposes coverage repair plan", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
+  const { buildDashboardSnapshot } = require("./local-dashboard/server");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-coverage-repair-"));
+  const configPath = path.join(dir, "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://adp.example.test/",
+    ].join("\n"),
+    "utf8",
+  );
+  const output = path.join(dir, "outputs", "adp");
+  fs.mkdirSync(output, { recursive: true });
+  let state = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
+  state = updateNodeStatus(state, "fact-check", "success");
+  writePipelineState(path.join(output, "pipeline-state.json"), state);
+  fs.writeFileSync(
+    path.join(output, "coverage-repair-plan.json"),
+    JSON.stringify({
+      status: "completed",
+      reason: "missing-writable-claim-coverage",
+      shouldRepair: true,
+      narrativePart: "保单任务",
+      targetModules: ["保单任务"],
+      missingWritableClaimIds: ["function:保单任务:任务详情"],
+      missingWritableClaims: [
+        {
+          id: "function:保单任务:任务详情",
+          module: "保单任务",
+          function: "任务详情",
+          subject: "任务详情",
+        },
+      ],
+      executedNodes: ["narrative", "fact-check"],
+      fingerprint: "abc123",
+      createdAt: "2026-05-20T00:00:00.000Z",
+      updatedAt: "2026-05-20T00:01:00.000Z",
+    }),
+    "utf8",
+  );
+
+  const system = buildDashboardSnapshot({ configPath }).systems[0];
+
+  assert.equal(system.artifacts.coverageRepair.exists, true);
+  assert.equal(system.coverageRepair.status, "completed");
+  assert.equal(system.coverageRepair.narrativePart, "保单任务");
+  assert.deepEqual(system.coverageRepair.targetModules, ["保单任务"]);
+  assert.deepEqual(system.coverageRepair.executedNodes, ["narrative", "fact-check"]);
+  assert.deepEqual(system.coverageRepair.missingWritableClaimIds, ["function:保单任务:任务详情"]);
+  assert.equal(system.coverageRepair.missingWritableClaims[0].function, "任务详情");
+});
+
 test("dashboard snapshot regenerates missing docx for finalized system", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -5839,6 +5901,12 @@ test("dashboard frontend renders truth readiness gate summary", () => {
         claims: { label: "Claims", pass: true, scorePercent: 100 },
       },
     },
+    coverageRepair: {
+      status: "completed",
+      narrativePart: "保单任务",
+      targetModules: ["保单任务"],
+      executedNodes: ["narrative", "fact-check"],
+    },
   });
 
   assert.match(html, /真实度门禁/);
@@ -5848,6 +5916,10 @@ test("dashboard frontend renders truth readiness gate summary", () => {
   assert.match(html, /50%/);
   assert.match(html, /缺失可写声明/);
   assert.match(html, /function:保单任务:任务详情/);
+  assert.match(html, /自动补写/);
+  assert.match(html, /已自动补写/);
+  assert.match(html, /自动补写分片/);
+  assert.match(html, /保单任务/);
   assert.match(html, /无阻塞项/);
 });
 

@@ -121,6 +121,7 @@ Generate artifacts per system:
 - `function-universe.json`: UI + DB candidate universe for later verified claims; not final conclusions.
 - `verified-claims.json`: claim-level evidence and confidence boundary for narrative writing and fact checks.
 - `fact-check-report.json`: deterministic assertion and writable-claim coverage report for pending review/finalization gates.
+- `coverage-repair-plan.json`: audit record for bounded automatic narrative repair when writable-claim coverage is incomplete.
 - `truth-readiness-report.json`: final truth gate report; combines evidence quality, writable claims, fact checks, narrative quality, and optional redacted database support.
 - `whitepaper.pending-review.md`: Agent-written business-readable whitepaper for review.
 - `whitepaper.final.md`: final Markdown after approval.

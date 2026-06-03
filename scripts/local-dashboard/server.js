@@ -166,6 +166,7 @@ function buildArtifactSnapshot(systemOutput, state, system = {}) {
       path.join(systemOutput, artifacts.verifiedClaims || "verified-claims.json"),
     ),
     factCheck: fileInfo(path.join(systemOutput, artifacts.factCheck || "fact-check-report.json")),
+    coverageRepair: fileInfo(path.join(systemOutput, "coverage-repair-plan.json")),
     truthReadiness: fileInfo(
       path.join(systemOutput, artifacts.truthReadiness || "truth-readiness-report.json"),
     ),
@@ -225,6 +226,39 @@ function buildTruthReadinessSnapshot(systemOutput) {
         : [],
     },
     generatedAt: report.generatedAt || "",
+  };
+}
+
+function buildCoverageRepairSnapshot(systemOutput) {
+  const plan = readOptionalJsonObject(path.join(systemOutput, "coverage-repair-plan.json"));
+  if (!plan) return null;
+  const missingClaims = Array.isArray(plan.missingWritableClaims)
+    ? plan.missingWritableClaims
+    : [];
+  return {
+    status: plan.status || "",
+    reason: plan.reason || "",
+    shouldRepair: Boolean(plan.shouldRepair),
+    narrativePart: plan.narrativePart || "",
+    targetModules: Array.isArray(plan.targetModules) ? plan.targetModules.slice(0, 12) : [],
+    missingWritableClaimIds: Array.isArray(plan.missingWritableClaimIds)
+      ? plan.missingWritableClaimIds.slice(0, 20)
+      : [],
+    missingWritableClaimCount: Array.isArray(plan.missingWritableClaimIds)
+      ? plan.missingWritableClaimIds.length
+      : 0,
+    missingWritableClaims: missingClaims.slice(0, 12).map((claim) => ({
+      id: claim.id || "",
+      module: claim.module || "",
+      function: claim.function || "",
+      subject: claim.subject || "",
+    })),
+    metrics: plan.metrics || {},
+    fingerprint: plan.fingerprint || "",
+    executedNodes: Array.isArray(plan.executedNodes) ? plan.executedNodes : [],
+    error: plan.error || "",
+    createdAt: plan.createdAt || "",
+    updatedAt: plan.updatedAt || "",
   };
 }
 
@@ -731,6 +765,7 @@ function buildSystemDashboardItem(system, outputRoot, options = {}) {
     writeValidation: buildWriteValidationSnapshot(systemOutput),
     operationGuideGate: buildOperationGuideGateSnapshot(systemOutput),
     truthReadiness: buildTruthReadinessSnapshot(systemOutput),
+    coverageRepair: buildCoverageRepairSnapshot(systemOutput),
     evidence: buildEvidenceSnapshot(systemOutput),
     progress: buildProgress(state),
     currentNodeDurationMs: nodeDurationMs(currentNode),
