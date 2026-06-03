@@ -589,6 +589,7 @@
         functionUniverse: "\u529f\u80fd\u5b87\u5b99",
         verifiedClaims: "\u53ef\u4fe1\u65ad\u8a00",
         factCheck: "\u4e8b\u5b9e\u6838\u9a8c",
+        truthReadiness: "\u771f\u5b9e\u5ea6\u95e8\u7981",
         pendingReview: "\u5f85\u5ba1\u6838\u7a3f",
         final: "\u7ec8\u7a3f",
         docx: "Word 终稿",
@@ -609,6 +610,7 @@
         narrative: "\u751f\u6210\u5f85\u5ba1\u7a3f",
         "fact-check": "\u4e8b\u5b9e\u6838\u9a8c",
         quality: "\u8d28\u68c0",
+        "truth-readiness": "\u771f\u5b9e\u5ea6\u95e8\u7981",
         review: "\u5ba1\u6838",
         end: "End",
       };
@@ -751,7 +753,7 @@
       }
 
       function artifactBadges(system) {
-        return ["operationGuide", "pendingReview", "final", "docx"]
+        return ["operationGuide", "factCheck", "truthReadiness", "pendingReview", "final", "docx"]
           .map((key) => [key, system.artifacts?.[key] || { exists: false }])
           .map(([key, artifact]) => {
             const label = artifactText[key] || key;
@@ -1127,12 +1129,79 @@
         `;
       }
 
+      function renderTruthReadiness(system) {
+        const readiness = system.truthReadiness;
+        if (!readiness) {
+          return `
+            <section class="card">
+              <h2>真实度门禁</h2>
+              <div class="empty">执行真实度门禁节点后会生成 truth-readiness-report.json，汇总证据、断言、事实核验和叙事质量是否达到 95%+。</div>
+            </section>
+          `;
+        }
+        const gates = Object.entries(readiness.gates || {});
+        const blockers = readiness.blockers || [];
+        const actions = (readiness.improvementActions || []).slice(0, 8);
+        return `
+          <section class="card">
+            <h2>真实度门禁</h2>
+            <div class="usage-grid">
+              <div class="usage-item">
+                <div class="muted">真实度分数</div>
+                <div class="usage-value">${escapeHtml(String(readiness.scorePercent || 0))}%</div>
+              </div>
+              <div class="usage-item">
+                <div class="muted">目标阈值</div>
+                <div class="usage-value">${escapeHtml(String(readiness.thresholdPercent || 95))}%</div>
+              </div>
+              <div class="usage-item">
+                <div class="muted">可提交审核</div>
+                <div class="usage-value">${readiness.canSubmitReview ? "是" : "否"}</div>
+              </div>
+              <div class="usage-item">
+                <div class="muted">阻塞项</div>
+                <div class="usage-value">${escapeHtml(String(blockers.length))}</div>
+              </div>
+            </div>
+            ${
+              gates.length
+                ? `<div class="usage-history">${gates
+                    .map(([id, gate]) => {
+                      const status = gate.pass ? "success" : "failed";
+                      const label = gate.label || nodeText[id] || id;
+                      const score = gate.scorePercent === undefined ? "" : ` ${gate.scorePercent}%`;
+                      return `<span class="status ${status}">${escapeHtml(label)}${escapeHtml(score)}</span>`;
+                    })
+                    .join("")}</div>`
+                : ""
+            }
+            ${
+              blockers.length
+                ? `<div class="usage-history">${blockers
+                    .map((item) => `<span class="usage-history-item">${escapeHtml(`${item.severity || "P?"} ${item.id || ""}: ${item.message || ""}`)}</span>`)
+                    .join("")}</div>`
+                : `<div class="muted" style="margin-top: 10px">无阻塞项。</div>`
+            }
+            ${
+              actions.length
+                ? `<div class="muted" style="margin-top: 10px">建议动作：${escapeHtml(
+                    actions
+                      .map((item) => `${item.id || ""}${item.rerunNodes?.length ? `(${item.rerunNodes.join(",")})` : ""}`)
+                      .join("；"),
+                  )}</div>`
+                : ""
+            }
+            ${readiness.generatedAt ? `<div class="muted" style="margin-top: 10px">生成时间：${formatTime(readiness.generatedAt)}</div>` : ""}
+          </section>
+        `;
+      }
+
       function renderArtifacts(system) {
         return `
           <section class="card">
             <h2>稿件产物</h2>
             <div class="artifact-row">
-              ${["operationGuide", "pendingReview", "final", "docx"]
+              ${["operationGuide", "evidenceSummary", "verifiedClaims", "factCheck", "truthReadiness", "pendingReview", "final", "docx"]
                 .map((key) => renderArtifactLabel(system, key, system.artifacts?.[key] || { exists: false }))
                 .join("")}
             </div>
@@ -1508,6 +1577,7 @@
             <div class="muted" style="margin-top: 10px">失败或暂停节点可点击节点继续；审核节点到达后显示“已就绪”，点击节点弹出审核窗口。</div>
           </section>
           ${renderOperationGuideGate(system)}
+          ${renderTruthReadiness(system)}
           ${renderArtifacts(system)}
           ${renderEvidenceSection(system)}
           ${renderWriteValidation(system)}

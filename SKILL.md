@@ -49,6 +49,7 @@ The unattended pipeline is grouped into five business-visible phases:
    - Review rerun usage must remain auditable: `phase3b-usage.json` should explain whether the run was full, partial, or review-driven, which review scope triggered it, and whether split prompts were actually sent to the SDK.
    - Classify rejection comments narrowly: wording, description, and business-flow gaps are narrative rewrites; only missing screenshots, evidence, or collection failures trigger evidence refresh.
    - **质检**: run coverage and narrative checks; unresolved failures become re-run tasks or pending confirmations.
+   - **真实度门禁**: run `check-truth-readiness.js` to aggregate coverage, verified claims, fact-check, and narrative gates into `truth-readiness-report.json`; review submission requires `canSubmitReview=true` and score >= 95%.
 5. **审定**: the reviewer approves or rejects in the local dashboard. Approval creates `whitepaper.final.md` and Word output. Rejection must include comments; `run-review-decision.js` classifies the comment and writes `review-decision.json`; the Agent/LLM only executes the scoped narrative rewrite when required.
 
 ## Parallel Batch Model
@@ -71,6 +72,7 @@ Use the npm scripts as the stable entrypoints:
 - `npm run truth:universe -- --input outputs/<code>`: merge UI evidence summary and redacted database profile into `function-universe.json` candidates.
 - `npm run truth:claims -- --input outputs/<code>`: convert the function universe into `verified-claims.json` with confidence and writable/non-writable boundaries.
 - `npm run truth:fact-check -- --input outputs/<code>`: check `whitepaper.pending-review.md` against writable claims and block unsupported or weak body assertions.
+- `npm run truth:readiness -- --input outputs/<code>`: aggregate truth gates into `truth-readiness-report.json`; a non-passing report blocks review submission.
 - `npm run sync`: sync the system registry into `config/systems.local.yaml`.
 - `npm run pipeline`: run the unattended end-to-end pipeline for configured systems.
 - `npm run batch`: run the full whitepaper pipeline for all configured systems with 4 parallel workers; use `-- --systems <code1>,<code2>` to limit scope or `-- --concurrency <n>` to change worker count.
@@ -115,6 +117,7 @@ Generate artifacts per system:
 - `function-universe.json`: UI + DB candidate universe for later verified claims; not final conclusions.
 - `verified-claims.json`: claim-level evidence and confidence boundary for narrative writing and fact checks.
 - `fact-check-report.json`: deterministic claim coverage report for pending review/finalization gates.
+- `truth-readiness-report.json`: final truth gate report; combines evidence quality, writable claims, fact checks, narrative quality, and optional redacted database support.
 - `whitepaper.pending-review.md`: Agent-written business-readable whitepaper for review.
 - `whitepaper.final.md`: final Markdown after approval.
 - `{系统名称}_系统功能白皮书_{YYYYMMDD}.docx`: Word output after approval.
@@ -143,6 +146,7 @@ Before finalizing, verify:
 - Core conclusion traceability = 100%.
 - Deterministic business claims should come from `verified-claims.json`; weak claims must not be written as confirmed conclusions.
 - `fact-check-report.json` must have `canFinalize=true` before producing `whitepaper.final.md`.
+- `truth-readiness-report.json` must have `canSubmitReview=true` and score >= 95% before human review or final approval.
 - No duplicated function explanations.
 - No source-code, database, or internal implementation claims without browser evidence.
 
@@ -152,7 +156,7 @@ If any quality gate fails, do not finalize. Re-run, downgrade to pending confirm
 
 When review is rejected, comments are mandatory. `run-review-decision.js` inspects the comments and returns one structured decision:
 
-- `rerunNodes`: concrete nodes to re-run, usually `narrative,fact-check,quality` or `collect,inspect,summary,truth-universe,truth-claims,narrative,fact-check,quality`.
+- `rerunNodes`: concrete nodes to re-run, usually `narrative,fact-check,quality,truth-readiness` or `collect,inspect,summary,truth-universe,truth-claims,narrative,fact-check,quality,truth-readiness`.
 - `rewriteScope`: `overview-flow`, `function-sections`, `evidence-refresh`, or `narrative`.
 - `narrativePart`: scoped writer input such as `overview-flow`, `function-sections`, or a concrete module name.
 - `instructions`: what the next rewrite must fix.

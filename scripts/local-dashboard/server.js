@@ -159,6 +159,9 @@ function buildArtifactSnapshot(systemOutput, state, system = {}) {
       path.join(systemOutput, artifacts.verifiedClaims || "verified-claims.json"),
     ),
     factCheck: fileInfo(path.join(systemOutput, artifacts.factCheck || "fact-check-report.json")),
+    truthReadiness: fileInfo(
+      path.join(systemOutput, artifacts.truthReadiness || "truth-readiness-report.json"),
+    ),
     pendingReview: resolveArtifactFileInfo(systemOutput, {
       systemName: system.name || state?.name,
       internalName: artifacts.pendingReview || "whitepaper.pending-review.md",
@@ -183,6 +186,22 @@ function buildOperationGuideGateSnapshot(systemOutput) {
     canComposeGuide: Boolean(gate.canComposeGuide),
     failures: gate.failures || [],
     counts: gate.counts || {},
+  };
+}
+
+function buildTruthReadinessSnapshot(systemOutput) {
+  const report = readOptionalJsonObject(path.join(systemOutput, "truth-readiness-report.json"));
+  if (!report) return null;
+  return {
+    scorePercent: Number(report.scorePercent || 0),
+    threshold: Number(report.threshold || 0),
+    thresholdPercent: Number(report.thresholdPercent || Math.round(Number(report.threshold || 0) * 1000) / 10),
+    canSubmitReview: Boolean(report.canSubmitReview),
+    canFinalize: Boolean(report.canFinalize),
+    blockers: Array.isArray(report.blockers) ? report.blockers : [],
+    improvementActions: Array.isArray(report.improvementActions) ? report.improvementActions : [],
+    gates: report.gates && typeof report.gates === "object" && !Array.isArray(report.gates) ? report.gates : {},
+    generatedAt: report.generatedAt || "",
   };
 }
 
@@ -688,6 +707,7 @@ function buildSystemDashboardItem(system, outputRoot, options = {}) {
     phase3bUsageHistorySummary: buildPhase3bUsageHistorySummary(phase3bUsageHistory),
     writeValidation: buildWriteValidationSnapshot(systemOutput),
     operationGuideGate: buildOperationGuideGateSnapshot(systemOutput),
+    truthReadiness: buildTruthReadinessSnapshot(systemOutput),
     evidence: buildEvidenceSnapshot(systemOutput),
     progress: buildProgress(state),
     currentNodeDurationMs: nodeDurationMs(currentNode),
@@ -1510,6 +1530,7 @@ module.exports = {
   buildDashboardSnapshot,
   buildBatchPipelineCommand,
   buildEvidenceSnapshot,
+  buildTruthReadinessSnapshot,
   buildPipelineCommand,
   buildSystemDashboardItem,
   createDashboardServer,

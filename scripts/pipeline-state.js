@@ -25,6 +25,7 @@ const NODES = [
   { id: "narrative", phase: "compose", label: "写稿" },
   { id: "fact-check", phase: "compose", label: "事实核验" },
   { id: "quality", phase: "compose", label: "质检" },
+  { id: "truth-readiness", phase: "compose", label: "真实度门禁" },
   { id: "review", phase: "approve", label: "审阅" },
 ];
 
@@ -74,6 +75,7 @@ function createPipelineState(system = {}) {
       functionUniverse: "function-universe.json",
       verifiedClaims: "verified-claims.json",
       factCheck: "fact-check-report.json",
+      truthReadiness: "truth-readiness-report.json",
       pendingReview: "whitepaper.pending-review.md",
       final: "whitepaper.final.md",
       docx: "",
@@ -359,6 +361,11 @@ function factCheckComplete(systemOutput) {
   return Boolean(report?.canFinalize);
 }
 
+function truthReadinessComplete(systemOutput) {
+  const report = readJsonObjectSafe(path.join(systemOutput, "truth-readiness-report.json"));
+  return Boolean(report?.canSubmitReview);
+}
+
 function reconcilePipelineStateFromArtifacts(state, systemOutput) {
   if (!state || !systemOutput) return { state, changed: false };
   let next = clone(state);
@@ -404,6 +411,23 @@ function reconcilePipelineStateFromArtifacts(state, systemOutput) {
     factCheckComplete(systemOutput)
   ) {
     next = updateNodeStatus(next, "fact-check", "success");
+    changed = true;
+  }
+
+  if (
+    next.nodes?.["truth-readiness"]?.status === "running" &&
+    truthReadinessComplete(systemOutput)
+  ) {
+    next = updateNodeStatus(next, "truth-readiness", "success");
+    changed = true;
+  }
+
+  if (
+    ["success", "skipped"].includes(next.nodes?.quality?.status) &&
+    next.nodes?.["truth-readiness"]?.status === "pending" &&
+    truthReadinessComplete(systemOutput)
+  ) {
+    next = updateNodeStatus(next, "truth-readiness", "success");
     changed = true;
   }
 

@@ -99,6 +99,7 @@ function selectedNodes(args) {
       "narrative",
       "fact-check",
       "quality",
+      "truth-readiness",
     ];
   }
   return [
@@ -357,6 +358,16 @@ async function runPipelineNode(nodeId, context) {
     const evidenceQuality = runNodeScript(["scripts/check-quality.js", "--input", systemOutput]);
     const narrativeQuality = runNodeScript(["scripts/check-narrative.js", "--input", systemOutput]);
     return { evidenceQuality, narrativeQuality };
+  }
+  if (nodeId === "truth-readiness") {
+    return runNodeScript(
+      [
+        "scripts/check-truth-readiness.js",
+        "--input",
+        systemOutput,
+      ],
+      { cwd: projectRoot },
+    );
   }
   if (nodeId === "review") {
     return { skipped: true, reason: "review is handled by H5" };

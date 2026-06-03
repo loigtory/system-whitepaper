@@ -30,6 +30,12 @@ function appendNarrativeGuardNodes(nodes) {
     if (node === "narrative") {
       result.push("fact-check");
     }
+    if (node === "quality") {
+      result.push("truth-readiness");
+    }
+  }
+  if (result.some((node) => ["truth-claims", "narrative", "fact-check"].includes(node))) {
+    result.push("truth-readiness");
   }
   return unique(result);
 }

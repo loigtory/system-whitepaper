@@ -3476,7 +3476,9 @@ test("pipeline state initializes truth phase and guarded whitepaper nodes for ad
   assert.equal(state.nodes.draft.label, "底稿");
   assert.equal(state.nodes.summary.label, "摘要");
   assert.equal(state.nodes["fact-check"].label, "事实核验");
-  assert.equal(Object.keys(state.nodes).length, 16);
+  assert.equal(state.nodes["truth-readiness"].label, "真实度门禁");
+  assert.equal(state.artifacts.truthReadiness, "truth-readiness-report.json");
+  assert.equal(Object.keys(state.nodes).length, 17);
 });
 
 test("migratePipelineState backfills build-spec and compose-guide on legacy state", () => {
@@ -3501,6 +3503,7 @@ test("migratePipelineState backfills build-spec and compose-guide on legacy stat
   delete legacy.nodes["build-spec"];
   delete legacy.nodes["compose-guide"];
   delete legacy.nodes["fact-check"];
+  delete legacy.nodes["truth-readiness"];
   delete legacy.phases.truth;
   delete legacy.phases.compose;
 
@@ -3512,6 +3515,7 @@ test("migratePipelineState backfills build-spec and compose-guide on legacy stat
   assert.equal(state.nodes["build-spec"].label, "整理规格");
   assert.equal(state.nodes["compose-guide"].label, "操作指引");
   assert.equal(state.nodes["fact-check"].label, "事实核验");
+  assert.equal(state.nodes["truth-readiness"].label, "真实度门禁");
   assert.equal(state.nodes["db-profile"].status, "pending");
   assert.equal(state.nodes["build-spec"].status, "pending");
   assert.equal(state.phases.truth.label, "真相");
@@ -3649,6 +3653,11 @@ test("reconcilePipelineStateFromArtifacts clears stale narrative running when ar
   fs.writeFileSync(
     path.join(dir, "fact-check-report.json"),
     JSON.stringify({ canFinalize: true }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "truth-readiness-report.json"),
+    JSON.stringify({ canSubmitReview: true }),
     "utf8",
   );
 
@@ -3930,6 +3939,7 @@ test("review decision requires rejection comments and maps comments to rerun nod
     "narrative",
     "fact-check",
     "quality",
+    "truth-readiness",
   ];
 
   assert.throws(
@@ -3946,7 +3956,7 @@ test("review decision requires rejection comments and maps comments to rerun nod
   assert.deepEqual(decision.rerunNodes, evidenceRefreshNodes);
   assert.deepEqual(
     appendNarrativeGuardNodes(["summary", "truth-claims", "narrative", "fact-check", "quality"]),
-    ["summary", "truth-universe", "truth-claims", "narrative", "fact-check", "quality"],
+    ["summary", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
   );
 
   const legacyDecision = buildReviewDecision({
@@ -3970,7 +3980,7 @@ test("review decision targets narrative sections without evidence rerun for word
     comment: "系统定位不够升华，典型业务流程还是像点击步骤，业务看不懂",
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "overview-flow");
   assert.deepEqual(decision.targetSections, ["1", "4"]);
   assert.match(decision.instructions, /系统概览/);
@@ -3984,7 +3994,7 @@ test("review decision treats missing page business flow as narrative rewrite", (
     comment: "任务列表页面业务流程缺失，角色权限边界说明不全",
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "overview-flow");
   assert.deepEqual(decision.targetSections, ["1", "4"]);
   assert.equal(decision.narrativePart, "overview-flow");
@@ -3998,7 +4008,7 @@ test("review decision keeps unclear business flow wording as overview rewrite", 
     comment: "业务流程还是像点击步骤，业务表达看不懂",
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "overview-flow");
   assert.deepEqual(decision.targetSections, ["1", "4"]);
   assert.equal(decision.narrativePart, "overview-flow");
@@ -4022,7 +4032,7 @@ test("review decision narrows function rewrites to mentioned modules", () => {
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.deepEqual(decision.targetModules, ["AI任务"]);
   assert.equal(decision.narrativePart, "AI任务");
@@ -4045,7 +4055,7 @@ test("review decision keeps permission module wording as module rewrite", () => 
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.deepEqual(decision.targetModules, ["权限管理"]);
   assert.equal(decision.narrativePart, "权限管理");
@@ -4093,7 +4103,7 @@ test("review decision treats page wording feedback as function rewrite", () => {
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.deepEqual(decision.targetSections, ["2", "3"]);
   assert.deepEqual(decision.targetModules, ["AI任务"]);
@@ -4115,7 +4125,7 @@ test("review decision treats supplementing page wording as narrative rewrite", (
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.equal(decision.narrativePart, "AI任务");
 });
@@ -4135,7 +4145,7 @@ test("review decision treats supplementing business wording as narrative rewrite
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.equal(decision.narrativePart, "AI任务");
 });
@@ -4164,6 +4174,7 @@ test("review decision still refreshes evidence for missing pages and screenshots
     "narrative",
     "fact-check",
     "quality",
+    "truth-readiness",
   ]);
   assert.equal(decision.rewriteScope, "evidence-refresh");
   assert.deepEqual(decision.targetSections, []);
@@ -4195,6 +4206,7 @@ test("review decision refreshes evidence when supplement asks for screenshots", 
     "narrative",
     "fact-check",
     "quality",
+    "truth-readiness",
   ]);
   assert.equal(decision.rewriteScope, "evidence-refresh");
   assert.equal(decision.narrativePart, "");
@@ -4215,7 +4227,7 @@ test("review decision treats missing field description as narrative rewrite", ()
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.equal(decision.narrativePart, "AI任务");
 });
@@ -4244,6 +4256,7 @@ test("review decision still refreshes evidence when field evidence is missing", 
     "narrative",
     "fact-check",
     "quality",
+    "truth-readiness",
   ]);
   assert.equal(decision.rewriteScope, "evidence-refresh");
   assert.equal(decision.narrativePart, "");
@@ -4264,7 +4277,7 @@ test("review decision treats missing modal description as narrative rewrite", ()
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.equal(decision.narrativePart, "AI任务");
 });
@@ -4293,6 +4306,7 @@ test("review decision still refreshes evidence when modal screenshot is missing"
     "narrative",
     "fact-check",
     "quality",
+    "truth-readiness",
   ]);
   assert.equal(decision.rewriteScope, "evidence-refresh");
   assert.equal(decision.narrativePart, "");
@@ -4314,7 +4328,7 @@ test("review decision supports multi-module function rewrites", () => {
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.deepEqual(decision.targetModules, ["AI任务", "发布管理"]);
   assert.equal(decision.narrativePart, "AI任务,发布管理");
@@ -4391,7 +4405,7 @@ test("dashboard snapshot exposes review decision details", () => {
       decision: {
         status: "rejected",
         comment: "系统定位需要更业务化",
-        rerunNodes: ["narrative", "fact-check", "quality"],
+        rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
         rewriteScope: "overview-flow",
         targetSections: ["1", "4"],
         targetModules: [],
@@ -4405,7 +4419,7 @@ test("dashboard snapshot exposes review decision details", () => {
 
   const snapshot = buildDashboardSnapshot({ configPath });
   const decision = snapshot.systems[0].review.decision;
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "overview-flow");
   assert.equal(decision.narrativePart, "overview-flow");
   assert.match(decision.instructions, /系统概览/);
@@ -4455,6 +4469,7 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
     "narrative",
     "fact-check",
     "quality",
+    "truth-readiness",
     "review",
   ]) {
     adpState = updateNodeStatus(adpState, nodeId, nodeId === "validate-write" ? "skipped" : "success");
@@ -4468,6 +4483,11 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
   fs.writeFileSync(path.join(adpOutput, "function-universe.json"), "{}", "utf8");
   fs.writeFileSync(path.join(adpOutput, "verified-claims.json"), "{}", "utf8");
   fs.writeFileSync(path.join(adpOutput, "fact-check-report.json"), "{}", "utf8");
+  fs.writeFileSync(
+    path.join(adpOutput, "truth-readiness-report.json"),
+    JSON.stringify({ scorePercent: 96, canSubmitReview: true, canFinalize: true, gates: {} }),
+    "utf8",
+  );
 
   const snapshot = buildDashboardSnapshot({ configPath });
 
@@ -4478,13 +4498,16 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
     snapshot.systems.map((system) => system.code),
     ["adp", "claim"],
   );
-  assert.equal(snapshot.systems[0].progress.completed, 16);
+  assert.equal(snapshot.systems[0].progress.completed, 17);
   assert.equal(snapshot.systems[0].artifacts.final.exists, true);
   assert.equal(snapshot.systems[0].artifacts.docx.exists, true);
   assert.equal(snapshot.systems[0].artifacts.databaseProfile.exists, true);
   assert.equal(snapshot.systems[0].artifacts.functionUniverse.exists, true);
   assert.equal(snapshot.systems[0].artifacts.verifiedClaims.exists, true);
   assert.equal(snapshot.systems[0].artifacts.factCheck.exists, true);
+  assert.equal(snapshot.systems[0].artifacts.truthReadiness.exists, true);
+  assert.equal(snapshot.systems[0].truthReadiness.scorePercent, 96);
+  assert.equal(snapshot.systems[0].truthReadiness.canSubmitReview, true);
   assert.equal(snapshot.systems[0].currentPhase, "completed");
   assert.equal(snapshot.systems[0].currentNode, "end");
   assert.equal(snapshot.systems[1].overallStatus, "pending");
@@ -4531,6 +4554,7 @@ test("dashboard snapshot regenerates missing docx for finalized system", () => {
     "narrative",
     "fact-check",
     "quality",
+    "truth-readiness",
     "review",
   ]) {
     adpState = updateNodeStatus(adpState, nodeId, nodeId === "validate-write" ? "skipped" : "success");
@@ -4711,11 +4735,14 @@ test("dashboard snapshot marks manual review node as ready before approval", () 
     "narrative",
     "fact-check",
     "quality",
+    "truth-readiness",
   ]) {
     state = updateNodeStatus(
       state,
       nodeId,
-      ["validate-write", "draft", "summary", "narrative"].includes(nodeId) ? "skipped" : "success",
+      ["validate-write", "draft", "summary", "narrative", "truth-readiness"].includes(nodeId)
+        ? "skipped"
+        : "success",
     );
   }
   writePipelineState(path.join(output, "pipeline-state.json"), state);
@@ -4933,6 +4960,7 @@ test("dashboard snapshot ignores malformed optional json artifacts", () => {
     "evidence-summary.json",
     "evidence.json",
     "operation-guide-gate.json",
+    "truth-readiness-report.json",
   ]) {
     fs.writeFileSync(path.join(output, file), "{bad json", "utf8");
   }
@@ -4947,6 +4975,7 @@ test("dashboard snapshot ignores malformed optional json artifacts", () => {
   assert.equal(system.writeValidation, null);
   assert.equal(system.evidence, null);
   assert.equal(system.operationGuideGate, null);
+  assert.equal(system.truthReadiness, null);
 });
 
 test("dashboard snapshot ignores non-object optional json artifacts", () => {
@@ -4981,6 +5010,7 @@ test("dashboard snapshot ignores non-object optional json artifacts", () => {
   fs.writeFileSync(path.join(output, "evidence-summary.json"), "[]", "utf8");
   fs.writeFileSync(path.join(output, "evidence.json"), "\"invalid\"", "utf8");
   fs.writeFileSync(path.join(output, "operation-guide-gate.json"), "123", "utf8");
+  fs.writeFileSync(path.join(output, "truth-readiness-report.json"), "[]", "utf8");
 
   const snapshot = buildDashboardSnapshot({ configPath });
   const system = snapshot.systems[0];
@@ -4992,6 +5022,7 @@ test("dashboard snapshot ignores non-object optional json artifacts", () => {
   assert.equal(system.writeValidation, null);
   assert.equal(system.evidence, null);
   assert.equal(system.operationGuideGate, null);
+  assert.equal(system.truthReadiness, null);
 });
 
 test("dashboard snapshot tolerates malformed pipeline state", () => {
@@ -5512,7 +5543,7 @@ test("dashboard frontend renders truth pipeline phase and nodes", () => {
   const html = context.renderPipeline({
     code: "adp",
     overallStatus: "pending",
-    progress: { completed: 0, total: 16 },
+    progress: { completed: 0, total: 17 },
     phaseOrder: [
       { id: "prepare", label: "准备" },
       { id: "evidence", label: "取证" },
@@ -5532,6 +5563,7 @@ test("dashboard frontend renders truth pipeline phase and nodes", () => {
       { id: "narrative", phase: "compose" },
       { id: "fact-check", phase: "compose" },
       { id: "quality", phase: "compose" },
+      { id: "truth-readiness", phase: "compose" },
       { id: "review", phase: "approve" },
     ],
     nodes: {
@@ -5546,6 +5578,7 @@ test("dashboard frontend renders truth pipeline phase and nodes", () => {
       narrative: { status: "pending" },
       "fact-check": { status: "pending" },
       quality: { status: "pending" },
+      "truth-readiness": { status: "pending" },
       review: { status: "pending" },
     },
   });
@@ -5555,6 +5588,34 @@ test("dashboard frontend renders truth pipeline phase and nodes", () => {
   assert.match(html, /功能宇宙/);
   assert.match(html, /可信断言/);
   assert.match(html, /事实核验/);
+  assert.match(html, /真实度门禁/);
+});
+
+test("dashboard frontend renders truth readiness gate summary", () => {
+  const vm = require("node:vm");
+  const script = loadDashboardFrontendScript();
+  const context = createDashboardFrontendContext();
+
+  vm.runInNewContext(script, context, { filename: "local-dashboard/index.html" });
+  const html = context.renderTruthReadiness({
+    truthReadiness: {
+      scorePercent: 96,
+      thresholdPercent: 95,
+      canSubmitReview: true,
+      blockers: [],
+      improvementActions: [],
+      generatedAt: "2026-05-21T02:00:00.000Z",
+      gates: {
+        evidence: { label: "Evidence", pass: true, scorePercent: 100 },
+        claims: { label: "Claims", pass: true, scorePercent: 100 },
+      },
+    },
+  });
+
+  assert.match(html, /真实度门禁/);
+  assert.match(html, /96%/);
+  assert.match(html, /95%/);
+  assert.match(html, /无阻塞项/);
 });
 
 function createDashboardFrontendContext() {
@@ -6111,7 +6172,7 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
         currentPhase: "evidence",
         currentNode: "collect",
         nodes: {},
-        progress: { total: 16, completed: 2, percent: 13 },
+        progress: { total: 17, completed: 2, percent: 12 },
       },
       {
         code: "claim",
@@ -6120,7 +6181,7 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
         currentPhase: "prepare",
         currentNode: "sync",
         nodes: {},
-        progress: { total: 16, completed: 0, percent: 0 },
+        progress: { total: 17, completed: 0, percent: 0 },
       },
     ],
     {
@@ -6531,11 +6592,12 @@ test("dashboard rejected evidence refresh auto reruns evidence then full narrati
       "narrative",
       "fact-check",
       "quality",
+      "truth-readiness",
     ]);
     assert.equal(payload.rerunNarrativePart, "");
     assert.ok(
       payload.rerun.args.includes(
-        "collect,inspect,summary,truth-universe,truth-claims,narrative,fact-check,quality",
+        "collect,inspect,summary,truth-universe,truth-claims,narrative,fact-check,quality,truth-readiness",
       ),
     );
     assert.ok(payload.rerun.args.includes("--review-rerun"));
@@ -6571,6 +6633,7 @@ test("pipeline default node list uses operation guide path before whitepaper", (
     "narrative",
     "fact-check",
     "quality",
+    "truth-readiness",
   ]);
 });
 
@@ -8443,6 +8506,115 @@ test("run fact check writes report and requires verified claims object", () => {
   );
 });
 
+test("truth readiness passes only when evidence claims fact-check and narrative gates pass", () => {
+  const { buildTruthReadinessReport, normalizeThreshold } = require("./check-truth-readiness");
+  const artifacts = {
+    quality: {
+      file: "quality-report.json",
+      status: "ok",
+      value: {
+        canFinalize: true,
+        menuCoverage: 1,
+        corePageScreenshotCoverage: 1,
+        coreFunctionClassificationCoverage: 1,
+        writeOperationSafetyCompliance: 1,
+        unverifiedContentLabeling: 1,
+        coreConclusionTraceability: 1,
+        failures: [],
+      },
+    },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: {
+        rules: { lowConfidenceNotWritable: true, databaseOnlyNotConfirmed: true },
+        metrics: {
+          claimCount: 2,
+          writableClaimCount: 1,
+          confirmedCount: 1,
+          inferredCount: 0,
+          weakCount: 0,
+        },
+        writableClaimIds: ["function:保单任务:任务列表"],
+      },
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: {
+        canFinalize: true,
+        failures: [],
+        metrics: { claimCount: 1, checkedAssertions: 1, supportedAssertions: 1, supportedRatio: 1 },
+      },
+    },
+    narrative: {
+      file: "narrative-quality-report.json",
+      status: "ok",
+      value: { canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } },
+    },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(normalizeThreshold(95), 0.95);
+  assert.equal(report.scorePercent, 100);
+  assert.equal(report.canSubmitReview, true);
+  assert.equal(report.gates.database.available, false);
+  assert.ok(report.improvementActions.some((item) => item.id === "database.optional-profile"));
+});
+
+test("truth readiness blocks missing writable claims and writes report", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-readiness-"));
+  fs.writeFileSync(
+    path.join(dir, "quality-report.json"),
+    JSON.stringify({
+      canFinalize: true,
+      menuCoverage: 1,
+      corePageScreenshotCoverage: 1,
+      coreFunctionClassificationCoverage: 1,
+      writeOperationSafetyCompliance: 1,
+      unverifiedContentLabeling: 1,
+      coreConclusionTraceability: 1,
+      failures: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "verified-claims.json"),
+    JSON.stringify({
+      rules: { lowConfidenceNotWritable: true, databaseOnlyNotConfirmed: true },
+      metrics: { claimCount: 1, writableClaimCount: 0, confirmedCount: 1, inferredCount: 0 },
+      writableClaimIds: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "fact-check-report.json"),
+    JSON.stringify({
+      canFinalize: true,
+      failures: [],
+      metrics: { checkedAssertions: 1, supportedAssertions: 1, supportedRatio: 1 },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "narrative-quality-report.json"),
+    JSON.stringify({ canSubmitReview: true, failures: [], counts: { chars: 2000, evidencePages: 1 } }),
+    "utf8",
+  );
+
+  const report = runTruthReadinessCheck({ inputDir: dir });
+
+  assert.equal(fs.existsSync(path.join(dir, "truth-readiness-report.json")), true);
+  assert.equal(report.canSubmitReview, false);
+  assert.ok(report.blockers.some((item) => item.id === "claims.missing-writable"));
+  assert.ok(report.blockers.some((item) => item.rerunNodes.includes("truth-readiness")));
+});
+
 test("package manifest whitelists only skill runtime assets", () => {
   const fs = require("node:fs");
   const path = require("node:path");
@@ -8469,6 +8641,7 @@ test("package manifest whitelists only skill runtime assets", () => {
     "examples/",
     "scripts/build-function-universe.js",
     "scripts/build-verified-claims.js",
+    "scripts/check-truth-readiness.js",
     "scripts/fact-check-whitepaper.js",
     "scripts/system-whitepaper-lib.js",
     "scripts/collect-database-profile.js",
@@ -8530,6 +8703,7 @@ test("npm pack dry-run excludes private and process-only assets", () => {
     "docs/narrative-guide.md",
     "scripts/build-function-universe.js",
     "scripts/build-verified-claims.js",
+    "scripts/check-truth-readiness.js",
     "scripts/fact-check-whitepaper.js",
     "scripts/system-whitepaper-lib.js",
     "scripts/collect-database-profile.js",
@@ -8610,6 +8784,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
       "agents/openai.yaml",
       "scripts/build-function-universe.js",
       "scripts/build-verified-claims.js",
+      "scripts/check-truth-readiness.js",
       "scripts/fact-check-whitepaper.js",
       "scripts/system-whitepaper-lib.js",
       "scripts/collect-database-profile.js",
@@ -8635,6 +8810,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
         [
           'require("./scripts/build-function-universe");',
           'require("./scripts/build-verified-claims");',
+          'require("./scripts/check-truth-readiness");',
           'require("./scripts/fact-check-whitepaper");',
           'require("./scripts/system-whitepaper-lib");',
           'require("./scripts/collect-database-profile");',
