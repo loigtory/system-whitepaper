@@ -4,13 +4,16 @@ require("./narrative/ensure-dispose-symbols").ensureDisposeSymbols();
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 const {
   normalizeAuthPaths,
   parseArgs,
   parseSystemsConfig,
+  readOptionalJsonObject,
   resolveConfigRelativePath,
   resolveCollectProfileOptions,
+  writeJson,
 } = require("./system-whitepaper-lib");
 const { verifyExistingHuntianSession } = require("./refresh-huntian-cookie");
 const {
@@ -147,6 +150,131 @@ function buildCollectNodeArgs(context) {
 function resolveNodeMaxAttempts(nodeId, args = {}) {
   if (args.retries !== undefined) return Number(args.retries);
   return nodeId === "narrative" ? 1 : 3;
+}
+
+function stableHash(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+}
+
+function normalizeList(value) {
+  const source = Array.isArray(value) ? value : [];
+  return Array.from(new Set(source.map((item) => String(item || "").trim()).filter(Boolean)));
+}
+
+function inferModuleFromClaimId(claimId) {
+  const parts = String(claimId || "").split(":");
+  return parts[0] === "function" && parts[1] ? parts[1].trim() : "";
+}
+
+function buildCoverageRepairPlan(input = {}) {
+  const factCheckReport = input.factCheckReport || {};
+  const verifiedClaims = input.verifiedClaims || {};
+  const missingWritableClaimIds = normalizeList(factCheckReport.missingWritableClaimIds);
+  if (!missingWritableClaimIds.length) {
+    return {
+      artifactType: "coverage-repair-plan",
+      version: 1,
+      shouldRepair: false,
+      status: "skipped",
+      reason: "no-missing-writable-claims",
+      missingWritableClaimIds: [],
+    };
+  }
+
+  const claims = Array.isArray(verifiedClaims.claims) ? verifiedClaims.claims : [];
+  const claimById = new Map(claims.map((claim) => [claim.id, claim]));
+  const missingWritableClaims = missingWritableClaimIds.map((id) => {
+    const claim = claimById.get(id) || {};
+    return {
+      id,
+      module: String(claim.module || inferModuleFromClaimId(id) || "").trim(),
+      function: String(claim.function || "").trim(),
+      subject: String(claim.subject || "").trim(),
+      entity: String(claim.entity || "").trim(),
+      status: String(claim.status || "").trim(),
+      confidence: String(claim.confidence || "").trim(),
+      text: String(claim.text || "").trim(),
+    };
+  });
+  const targetModules = normalizeList(
+    missingWritableClaims.map((claim) => claim.module || inferModuleFromClaimId(claim.id)),
+  );
+  const narrativePart = targetModules.length ? targetModules.join(",") : "function-sections";
+  const metrics = factCheckReport.metrics || {};
+  const fingerprint = stableHash({
+    missingWritableClaimIds,
+    narrativePart,
+    writableClaimCoverageRatio: metrics.writableClaimCoverageRatio ?? null,
+    minWritableClaimCoverage: metrics.minWritableClaimCoverage ?? null,
+  });
+
+  return {
+    artifactType: "coverage-repair-plan",
+    version: 1,
+    shouldRepair: true,
+    status: "planned",
+    reason: "missing-writable-claim-coverage",
+    systemCode: input.systemCode || "",
+    fingerprint,
+    sourceArtifacts: {
+      factCheck: "fact-check-report.json",
+      verifiedClaims: "verified-claims.json",
+    },
+    rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+    executedNodes: [],
+    narrativePart,
+    targetModules,
+    missingWritableClaimIds,
+    missingWritableClaims,
+    metrics: {
+      writableClaimCount: Number(metrics.writableClaimCount || 0),
+      coveredWritableClaimCount: Number(metrics.coveredWritableClaimCount || 0),
+      missingWritableClaimCount: Number(
+        metrics.missingWritableClaimCount || missingWritableClaimIds.length,
+      ),
+      writableClaimCoverageRatio: Number(metrics.writableClaimCoverageRatio || 0),
+      minWritableClaimCoverage: Number(metrics.minWritableClaimCoverage || 0),
+    },
+    createdAt: input.now || new Date().toISOString(),
+  };
+}
+
+function loadCoverageRepairPlanInputs(systemOutput) {
+  return {
+    factCheckReport: readOptionalJsonObject(path.join(systemOutput, "fact-check-report.json"), {}),
+    verifiedClaims: readOptionalJsonObject(path.join(systemOutput, "verified-claims.json"), {}),
+  };
+}
+
+function readFactCheckReportStamp(systemOutput) {
+  const reportPath = path.join(systemOutput, "fact-check-report.json");
+  try {
+    const stat = fs.statSync(reportPath);
+    return {
+      exists: true,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+    };
+  } catch {
+    return { exists: false, mtimeMs: 0, size: 0 };
+  }
+}
+
+function hasNewFactCheckReport(systemOutput, beforeStamp) {
+  const after = readFactCheckReportStamp(systemOutput);
+  if (!after.exists) return false;
+  if (!beforeStamp?.exists) return true;
+  return after.mtimeMs !== beforeStamp.mtimeMs || after.size !== beforeStamp.size;
+}
+
+function writeCoverageRepairPlan(systemOutput, plan, updates = {}) {
+  const next = {
+    ...plan,
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+  writeJson(path.join(systemOutput, "coverage-repair-plan.json"), next);
+  return next;
 }
 
 function ensureState(systemOutput, system, forceNew) {
@@ -389,6 +517,83 @@ async function runPipelineNode(nodeId, context) {
   throw new Error(`Unsupported pipeline node: ${nodeId}`);
 }
 
+async function runPipelineNodeWithState(nodeId, context, stateContext = {}) {
+  const { attemptedCoverageRepairFingerprints } = stateContext;
+  const executeNode =
+    typeof stateContext.runPipelineNode === "function"
+      ? stateContext.runPipelineNode
+      : runPipelineNode;
+  const factCheckReportStamp =
+    nodeId === "fact-check" ? readFactCheckReportStamp(context.systemOutput) : null;
+  try {
+    return await executeNode(nodeId, context);
+  } catch (error) {
+    if (
+      nodeId !== "fact-check" ||
+      context.args["no-coverage-repair"] ||
+      !attemptedCoverageRepairFingerprints
+    ) {
+      throw error;
+    }
+
+    if (!hasNewFactCheckReport(context.systemOutput, factCheckReportStamp)) {
+      throw error;
+    }
+
+    const inputs = loadCoverageRepairPlanInputs(context.systemOutput);
+    const plan = buildCoverageRepairPlan({
+      ...inputs,
+      systemCode: context.system.code,
+    });
+    if (!plan.shouldRepair) throw error;
+    if (attemptedCoverageRepairFingerprints.has(plan.fingerprint)) {
+      writeCoverageRepairPlan(context.systemOutput, plan, {
+        status: "failed",
+        reason: "coverage-repair-already-attempted",
+        error: error.message,
+      });
+      throw error;
+    }
+
+    attemptedCoverageRepairFingerprints.add(plan.fingerprint);
+    writeCoverageRepairPlan(context.systemOutput, plan, {
+      status: "running",
+      executedNodes: ["narrative"],
+    });
+    try {
+      await executeNode("narrative", {
+        ...context,
+        args: {
+          ...context.args,
+          "narrative-part": plan.narrativePart,
+          part: plan.narrativePart,
+          "review-rerun": true,
+        },
+      });
+      const factCheckResult = await executeNode("fact-check", context);
+      writeCoverageRepairPlan(context.systemOutput, plan, {
+        status: "completed",
+        executedNodes: ["narrative", "fact-check"],
+      });
+      return {
+        coverageRepair: {
+          fingerprint: plan.fingerprint,
+          narrativePart: plan.narrativePart,
+          missingWritableClaimIds: plan.missingWritableClaimIds,
+        },
+        factCheck: factCheckResult,
+      };
+    } catch (repairError) {
+      writeCoverageRepairPlan(context.systemOutput, plan, {
+        status: "failed",
+        executedNodes: ["narrative", "fact-check"],
+        error: repairError.message,
+      });
+      throw repairError;
+    }
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const configPath = args.config || "config/systems.local.yaml";
@@ -412,6 +617,7 @@ async function main() {
   let state = initialState;
   const nodesToRun = selectedNodes(args);
   const batchStateOptions = { disabled: Boolean(args["no-batch-state"]) };
+  const attemptedCoverageRepairFingerprints = new Set();
 
   if (args.nodes && args.reset) {
     for (const node of NODES) {
@@ -428,7 +634,10 @@ async function main() {
     const result = await runNodeWithRetry(
       state,
       nodeId,
-      () => runPipelineNode(nodeId, pipelineContext),
+      () =>
+        runPipelineNodeWithState(nodeId, pipelineContext, {
+          attemptedCoverageRepairFingerprints,
+        }),
       {
         maxAttempts,
         onStateChange: (nextState) => {
@@ -473,9 +682,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildCoverageRepairPlan,
   buildCollectNodeArgs,
   loadSystem,
   resolveNodeMaxAttempts,
+  runPipelineNodeWithState,
   runPipelineNode,
   selectedNodes,
   writeBatchState,

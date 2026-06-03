@@ -6909,6 +6909,53 @@ test("pipeline uses single automatic attempt for narrative by default", () => {
   assert.equal(resolveNodeMaxAttempts("narrative", { retries: 2 }), 2);
 });
 
+test("pipeline maps missing writable claims to scoped coverage repair narrative part", () => {
+  const { buildCoverageRepairPlan } = require("./run-whitepaper-pipeline");
+
+  const plan = buildCoverageRepairPlan({
+    systemCode: "adp",
+    now: "2026-05-20T00:00:00.000Z",
+    factCheckReport: {
+      missingWritableClaimIds: [
+        "function:保单任务:任务详情",
+        "function:发布管理:发布列表",
+      ],
+      metrics: {
+        writableClaimCount: 3,
+        coveredWritableClaimCount: 1,
+        missingWritableClaimCount: 2,
+        writableClaimCoverageRatio: 1 / 3,
+        minWritableClaimCoverage: 0.8,
+      },
+    },
+    verifiedClaims: {
+      claims: [
+        {
+          id: "function:保单任务:任务详情",
+          module: "保单任务",
+          function: "任务详情",
+          subject: "任务详情",
+          writable: true,
+        },
+        {
+          id: "function:发布管理:发布列表",
+          module: "发布管理",
+          function: "发布列表",
+          subject: "发布列表",
+          writable: true,
+        },
+      ],
+    },
+  });
+
+  assert.equal(plan.shouldRepair, true);
+  assert.equal(plan.narrativePart, "保单任务,发布管理");
+  assert.deepEqual(plan.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(plan.targetModules, ["保单任务", "发布管理"]);
+  assert.equal(plan.missingWritableClaims[0].function, "任务详情");
+  assert.match(plan.fingerprint, /^[0-9a-f]{16}$/);
+});
+
 test("pipeline collect node does not resume when reset starts a fresh run", () => {
   const { buildCollectNodeArgs } = require("./run-whitepaper-pipeline");
   const collectArgs = buildCollectNodeArgs({
@@ -7032,6 +7079,155 @@ test("pipeline truth nodes build claims and fact-check artifacts", async () => {
   assert.equal(fs.existsSync(path.join(systemOutput, "verified-claims.json")), true);
   const report = JSON.parse(fs.readFileSync(path.join(systemOutput, "fact-check-report.json"), "utf8"));
   assert.equal(report.canFinalize, true);
+});
+
+test("pipeline auto repairs writable claim coverage once during fact check", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runFactCheck } = require("./fact-check-whitepaper");
+  const { runPipelineNodeWithState } = require("./run-whitepaper-pipeline");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-coverage-repair-"));
+  const projectRoot = path.resolve(__dirname, "..");
+  const systemOutput = path.join(tempRoot, "outputs", "adp");
+  fs.mkdirSync(systemOutput, { recursive: true });
+  const context = {
+    args: {},
+    config: {},
+    configPath: path.join(tempRoot, "systems.local.yaml"),
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    systemOutput,
+    projectRoot,
+  };
+  fs.writeFileSync(
+    path.join(systemOutput, "verified-claims.json"),
+    JSON.stringify({
+      artifactType: "verified-claims",
+      claims: [
+        {
+          id: "function:保单任务:任务列表",
+          type: "function",
+          module: "保单任务",
+          function: "任务列表",
+          subject: "任务列表",
+          status: "confirmed",
+          confidence: "high",
+          writable: true,
+        },
+        {
+          id: "function:保单任务:任务详情",
+          type: "function",
+          module: "保单任务",
+          function: "任务详情",
+          subject: "任务详情",
+          status: "confirmed",
+          confidence: "high",
+          writable: true,
+        },
+      ],
+      writableClaimIds: ["function:保单任务:任务列表", "function:保单任务:任务详情"],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "whitepaper.pending-review.md"),
+    [
+      "# AI保单数据闭环平台功能白皮书",
+      "保单任务模块提供任务列表。[claim:function:保单任务:任务列表]",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const repairedNarrativeParts = [];
+  const result = await runPipelineNodeWithState("fact-check", context, {
+    attemptedCoverageRepairFingerprints: new Set(),
+    runPipelineNode: async (nodeId, nodeContext) => {
+      if (nodeId === "fact-check") {
+        const report = runFactCheck({ inputDir: nodeContext.systemOutput });
+        if (!report.canFinalize) throw new Error("fact-check failed");
+        return report;
+      }
+      if (nodeId === "narrative") {
+        repairedNarrativeParts.push(nodeContext.args["narrative-part"]);
+        fs.appendFileSync(
+          path.join(nodeContext.systemOutput, "whitepaper.pending-review.md"),
+          "\n保单任务模块还提供任务详情能力。[claim:function:保单任务:任务详情]\n",
+          "utf8",
+        );
+        return { status: "completed" };
+      }
+      throw new Error(`unexpected node: ${nodeId}`);
+    },
+  });
+
+  const repairPlan = JSON.parse(
+    fs.readFileSync(path.join(systemOutput, "coverage-repair-plan.json"), "utf8"),
+  );
+  const factCheckReport = JSON.parse(
+    fs.readFileSync(path.join(systemOutput, "fact-check-report.json"), "utf8"),
+  );
+  assert.equal(result.coverageRepair.narrativePart, "保单任务");
+  assert.deepEqual(repairedNarrativeParts, ["保单任务"]);
+  assert.equal(repairPlan.status, "completed");
+  assert.deepEqual(repairPlan.executedNodes, ["narrative", "fact-check"]);
+  assert.deepEqual(repairPlan.missingWritableClaimIds, ["function:保单任务:任务详情"]);
+  assert.equal(factCheckReport.canFinalize, true);
+  assert.deepEqual(factCheckReport.missingWritableClaimIds, []);
+});
+
+test("pipeline does not repair fact check failures from stale reports", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runPipelineNodeWithState } = require("./run-whitepaper-pipeline");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-stale-coverage-report-"));
+  const systemOutput = path.join(tempRoot, "outputs", "adp");
+  fs.mkdirSync(systemOutput, { recursive: true });
+  fs.writeFileSync(
+    path.join(systemOutput, "fact-check-report.json"),
+    JSON.stringify({
+      canFinalize: false,
+      missingWritableClaimIds: ["function:保单任务:任务详情"],
+      metrics: { writableClaimCoverageRatio: 0.5, minWritableClaimCoverage: 0.8 },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "verified-claims.json"),
+    JSON.stringify({
+      claims: [{ id: "function:保单任务:任务详情", module: "保单任务", writable: true }],
+    }),
+    "utf8",
+  );
+  const oldTime = new Date(Date.now() - 60_000);
+  fs.utimesSync(path.join(systemOutput, "fact-check-report.json"), oldTime, oldTime);
+  let narrativeRuns = 0;
+
+  await assert.rejects(
+    () =>
+      runPipelineNodeWithState(
+        "fact-check",
+        {
+          args: {},
+          config: {},
+          configPath: path.join(tempRoot, "systems.local.yaml"),
+          system: { code: "adp", name: "AI保单数据闭环平台" },
+          systemOutput,
+          projectRoot: path.resolve(__dirname, ".."),
+        },
+        {
+          attemptedCoverageRepairFingerprints: new Set(),
+          runPipelineNode: async (nodeId) => {
+            if (nodeId === "narrative") narrativeRuns += 1;
+            throw new Error("verified claims malformed");
+          },
+        },
+      ),
+    /verified claims malformed/,
+  );
+
+  assert.equal(narrativeRuns, 0);
+  assert.equal(fs.existsSync(path.join(systemOutput, "coverage-repair-plan.json")), false);
 });
 
 test("visible DOM menu candidates are converted to clickable menu records", () => {
