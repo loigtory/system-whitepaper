@@ -506,6 +506,10 @@ async function runPipelineNode(nodeId, context) {
       "scripts/check-truth-readiness.js",
       "--input",
       systemOutput,
+      "--system-code",
+      system.code,
+      "--system-name",
+      system.name || "",
     ];
     if (databaseProfileEnabled(system)) {
       readinessArgs.push("--require-database-evidence");

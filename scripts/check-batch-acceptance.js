@@ -123,7 +123,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
   let missingWritableClaimCount = null;
   let writableClaimCoverageRatio = null;
   let minWritableClaimCoverage = null;
-  let databaseEvidenceAvailable = isValidDatabaseProfile(databaseProfile);
+  let databaseEvidenceAvailable = isValidDatabaseProfile(databaseProfile, { code });
 
   if (!truth) {
     blockers.push(
@@ -201,7 +201,9 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
         }),
       );
     }
-    databaseEvidenceAvailable = Boolean(truth.gates?.database?.profileAvailable || isValidDatabaseProfile(databaseProfile));
+    databaseEvidenceAvailable = Boolean(
+      truth.gates?.database?.profileAvailable || isValidDatabaseProfile(databaseProfile, { code }),
+    );
   }
 
   if (!whitepaperExists) {
@@ -221,7 +223,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
     );
   }
 
-  if (databaseProfileConfigured && !isValidDatabaseProfile(databaseProfile)) {
+  if (databaseProfileConfigured && !isValidDatabaseProfile(databaseProfile, { code })) {
     blockers.push(
       blocker("database.profile-missing", "databaseProfile.enabled=true but no redacted database evidence is available.", {
         systemCode: code,

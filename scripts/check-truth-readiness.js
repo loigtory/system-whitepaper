@@ -342,11 +342,24 @@ function buildNarrativeGate(artifact) {
   };
 }
 
-function isValidDatabaseProfile(value) {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value) && value.artifactType === "database-profile");
+function normalizeSystemCode(value) {
+  return String(value || "").trim();
 }
 
-function buildDatabaseGate(artifacts) {
+function databaseProfileSystemCode(value = {}) {
+  return normalizeSystemCode(value?.system?.code);
+}
+
+function isValidDatabaseProfile(value, expectedSystem = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.artifactType !== "database-profile") {
+    return false;
+  }
+  const expectedCode = normalizeSystemCode(expectedSystem.code || expectedSystem.systemCode);
+  if (!expectedCode) return true;
+  return databaseProfileSystemCode(value) === expectedCode;
+}
+
+function buildDatabaseGate(artifacts, options = {}) {
   const profile = artifacts.databaseProfile || {
     status: "missing",
     file: OPTIONAL_ARTIFACTS.databaseProfile,
@@ -376,7 +389,12 @@ function buildDatabaseGate(artifacts) {
   const relationCount = Number(entityModel.metrics?.relationCount || coverage.entityRelationCount || 0);
   const columnCount = Number(dataDictionary.metrics?.columnCount || 0);
   const sampleBackedEntityCount = Number(entityModel.metrics?.sampleBackedEntityCount || 0);
-  const profileAvailable = profile.status === "ok" && isValidDatabaseProfile(profile.value);
+  const expectedSystem = options.expectedSystem || options.system || {};
+  const expectedSystemCode = normalizeSystemCode(expectedSystem.code || options.systemCode);
+  const profileArtifactValid = profile.status === "ok" && isValidDatabaseProfile(profile.value);
+  const profileSystemCode = databaseProfileSystemCode(profile.value || {});
+  const profileSystemMatches = !expectedSystemCode || (profileArtifactValid && profileSystemCode === expectedSystemCode);
+  const profileAvailable = profile.status === "ok" && isValidDatabaseProfile(profile.value, { code: expectedSystemCode });
   const available = profileAvailable || entityCount > 0 || columnCount > 0;
   return {
     id: "database",
@@ -384,6 +402,8 @@ function buildDatabaseGate(artifacts) {
     pass: true,
     available,
     profileAvailable,
+    profileArtifactValid,
+    profileSystemMatches,
     score: available ? 1 : 0,
     scorePercent: available ? 100 : 0,
     metrics: {
@@ -394,6 +414,8 @@ function buildDatabaseGate(artifacts) {
       sampleBackedEntityCount,
       databaseProfileStatus: profile.status,
       databaseProfileArtifactType: profile.value?.artifactType || "",
+      databaseProfileSystemCode: profileSystemCode,
+      expectedSystemCode,
       dataDictionaryStatus: dataDictionaryArtifact.status,
       entityModelStatus: entityModelArtifact.status,
     },
@@ -475,12 +497,22 @@ function buildDatabaseRequirementGate(gate = {}, options = {}) {
   const required = normalizeBoolean(options.requireDatabaseEvidence);
   const profileAvailable = gate.profileAvailable === true;
   const pass = !required || profileAvailable;
+  const failures = [];
+  if (required && !profileAvailable) {
+    const expectedCode = gate.metrics?.expectedSystemCode || "";
+    const actualCode = gate.metrics?.databaseProfileSystemCode || "";
+    if (gate.profileArtifactValid && expectedCode && actualCode !== expectedCode) {
+      failures.push(`database-profile.json belongs to ${actualCode || "unknown"}, expected ${expectedCode}.`);
+    } else {
+      failures.push("Valid redacted database-profile.json is required but missing.");
+    }
+  }
   return {
     ...gate,
     required,
     pass,
     profileAvailable,
-    failures: required && !profileAvailable ? ["Valid redacted database-profile.json is required but missing."] : [],
+    failures,
     warnings:
       required || gate.available
         ? []
@@ -490,11 +522,15 @@ function buildDatabaseRequirementGate(gate = {}, options = {}) {
 
 function collectDatabaseRequirementBlockers(gates, options = {}) {
   if (!normalizeBoolean(options.requireDatabaseEvidence) || gates.database.profileAvailable) return [];
+  const expectedCode = gates.database.metrics?.expectedSystemCode || "";
+  const actualCode = gates.database.metrics?.databaseProfileSystemCode || "";
   return [
     blocker(
       "database.required-profile-missing",
       "P0",
-      "databaseProfile.enabled=true but no redacted database evidence is available.",
+      gates.database.profileArtifactValid && expectedCode && actualCode !== expectedCode
+        ? `databaseProfile.enabled=true but database-profile.json belongs to ${actualCode || "unknown"}, expected ${expectedCode}.`
+        : "databaseProfile.enabled=true but no redacted database evidence is available.",
       ["db-profile", "db-model", "truth-universe", "truth-claims", "truth-readiness"],
     ),
   ];
@@ -540,7 +576,7 @@ function buildImprovementActions(gates, blockers) {
 function buildTruthReadinessReport(input = {}) {
   const threshold = normalizeThreshold(input.threshold);
   const artifacts = input.artifacts || {};
-  const databaseGate = buildDatabaseRequirementGate(buildDatabaseGate(artifacts), input);
+  const databaseGate = buildDatabaseRequirementGate(buildDatabaseGate(artifacts, input), input);
   const gates = {
     evidence: buildEvidenceGate(artifacts.quality || { status: "missing", file: REQUIRED_ARTIFACTS.quality }),
     claims: buildClaimsGate(artifacts.claims || { status: "missing", file: REQUIRED_ARTIFACTS.claims }),
@@ -595,10 +631,15 @@ function buildTruthReadinessReport(input = {}) {
 function runTruthReadinessCheck(options = {}) {
   const inputDir = path.resolve(String(options.inputDir || options.input || "."));
   const artifacts = loadReadinessInputs(inputDir);
+  const expectedSystem = options.expectedSystem || {
+    code: options.systemCode || options.system,
+    name: options.systemName,
+  };
   const report = buildTruthReadinessReport({
     artifacts,
     threshold: options.threshold,
     requireDatabaseEvidence: options.requireDatabaseEvidence,
+    expectedSystem,
   });
   const outputPath = options.outputPath || path.join(inputDir, "truth-readiness-report.json");
   writeJson(outputPath, report);
@@ -615,6 +656,8 @@ function main() {
     outputPath: args.output,
     threshold: args.threshold,
     requireDatabaseEvidence: args["require-database-evidence"],
+    systemCode: args["system-code"] || args.system,
+    systemName: args["system-name"],
   });
   const outputPath = args.output || path.join(path.resolve(args.input), "truth-readiness-report.json");
   console.log(`Truth readiness report written: ${outputPath}`);

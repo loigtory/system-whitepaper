@@ -7472,7 +7472,7 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   );
   fs.writeFileSync(
     path.join(systemOutput, "database-profile.json"),
-    JSON.stringify({ artifactType: "database-profile", tables: [], safety: { secretRedacted: true } }),
+    JSON.stringify({ artifactType: "database-profile", system: { code: "adp" }, tables: [], safety: { secretRedacted: true } }),
     "utf8",
   );
   fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
@@ -7575,7 +7575,25 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
 
   fs.writeFileSync(
     path.join(systemOutput, "database-profile.json"),
-    JSON.stringify({ artifactType: "database-profile", tables: [], safety: { secretRedacted: true } }),
+    JSON.stringify({ artifactType: "database-profile", system: { code: "other" }, tables: [], safety: { secretRedacted: true } }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(systemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      ...JSON.parse(fs.readFileSync(path.join(systemOutput, "truth-readiness-report.json"), "utf8")),
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(systemOutput)),
+    }),
+    "utf8",
+  );
+  const wrongSystemDatabaseProfile = buildBatchAcceptanceReport({ args: { config: configPath } });
+  assert.equal(wrongSystemDatabaseProfile.status, "blocked");
+  assert.equal(wrongSystemDatabaseProfile.systems[0].databaseEvidenceAvailable, false);
+  assert.ok(wrongSystemDatabaseProfile.blockers.some((item) => item.id === "database.profile-missing"));
+
+  fs.writeFileSync(
+    path.join(systemOutput, "database-profile.json"),
+    JSON.stringify({ artifactType: "database-profile", system: { code: "adp" }, tables: [], safety: { secretRedacted: true } }),
     "utf8",
   );
   fs.writeFileSync(
@@ -12057,6 +12075,7 @@ test("truth readiness requires real database profile when database evidence is m
     artifacts,
     threshold: 95,
     requireDatabaseEvidence: true,
+    expectedSystem: { code: "adp" },
   });
   assert.equal(requiredReport.gates.database.available, true);
   assert.equal(requiredReport.gates.database.profileAvailable, false);
@@ -12064,17 +12083,36 @@ test("truth readiness requires real database profile when database evidence is m
   assert.equal(requiredReport.canSubmitReview, false);
   assert.ok(requiredReport.blockers.some((item) => item.id === "database.required-profile-missing"));
 
+  const wrongSystemProfileReport = buildTruthReadinessReport({
+    artifacts: {
+      ...artifacts,
+      databaseProfile: {
+        file: "database-profile.json",
+        status: "ok",
+        value: { artifactType: "database-profile", system: { code: "other" }, tables: [] },
+      },
+    },
+    threshold: 95,
+    requireDatabaseEvidence: true,
+    expectedSystem: { code: "adp" },
+  });
+  assert.equal(wrongSystemProfileReport.gates.database.profileArtifactValid, true);
+  assert.equal(wrongSystemProfileReport.gates.database.profileAvailable, false);
+  assert.equal(wrongSystemProfileReport.canSubmitReview, false);
+  assert.match(wrongSystemProfileReport.gates.database.failures.join("\n"), /belongs to other, expected adp/);
+
   const validProfileReport = buildTruthReadinessReport({
     artifacts: {
       ...artifacts,
       databaseProfile: {
         file: "database-profile.json",
         status: "ok",
-        value: { artifactType: "database-profile", tables: [] },
+        value: { artifactType: "database-profile", system: { code: "adp" }, tables: [] },
       },
     },
     threshold: 95,
     requireDatabaseEvidence: true,
+    expectedSystem: { code: "adp" },
   });
   assert.equal(validProfileReport.gates.database.profileAvailable, true);
   assert.equal(validProfileReport.canSubmitReview, true);
