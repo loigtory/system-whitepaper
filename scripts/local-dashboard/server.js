@@ -13,6 +13,7 @@ const {
   resolveConfigRelativePath,
   resolveWhitepaperFileName,
   resolveWhitepaperPendingReviewFileName,
+  finalizeWhitepaperMarkdown,
   syncWhitepaperNamedArtifacts,
 } = require("../system-whitepaper-lib");
 const {
@@ -32,7 +33,7 @@ const {
   killProjectPipelineProcesses,
   listProjectPipelinePids,
 } = require("./process-control");
-const { runReviewDecision } = require("../run-review-decision");
+const { assertApprovalTruthReadiness, runReviewDecision } = require("../run-review-decision");
 const { findStaleReadinessSources } = require("../check-truth-readiness");
 const { validateFinalDocx } = require("../check-delivery-readiness");
 const { isCursorSdkConfigured, resolveNarrativeProvider } = require("../narrative/resolve-provider");
@@ -108,9 +109,45 @@ function resolveFinalMarkdownPath(systemOutput, state, system = {}) {
   return "";
 }
 
+function assertDashboardDocxAllowed(systemOutput, state = {}, system = {}) {
+  const reviewApproved =
+    state.overallStatus === "finalized" || state.review?.status === "approved";
+  if (!reviewApproved) {
+    throw new Error("Word download requires approved review state.");
+  }
+  const pendingPath = path.join(systemOutput, "whitepaper.pending-review.md");
+  const finalPath = path.join(systemOutput, "whitepaper.final.md");
+  if (!fs.existsSync(pendingPath) || !fs.existsSync(finalPath)) {
+    throw new Error("Word download requires both pending-review and final whitepaper Markdown.");
+  }
+  const pendingMarkdown = fs.readFileSync(pendingPath, "utf8");
+  const finalMarkdown = fs.readFileSync(finalPath, "utf8");
+  const expectedFinal = finalizeWhitepaperMarkdown(pendingMarkdown, {
+    systemName: system.name || state.name || "",
+  });
+  if (finalMarkdown !== expectedFinal) {
+    throw new Error("Word download requires final Markdown to match the approved pending-review Markdown.");
+  }
+  assertApprovalTruthReadiness(systemOutput, {
+    state,
+    systemCode: system.code || state.code || "",
+    systemName: system.name || state.name || "",
+  });
+}
+
+function dashboardDocxAllowed(systemOutput, state = {}, system = {}) {
+  try {
+    assertDashboardDocxAllowed(systemOutput, state, system);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function ensureDocxArtifact(systemOutput, state, system = {}) {
   let docxPath = resolveDocxArtifact(systemOutput, state.artifacts?.docx);
   const mdPath = resolveFinalMarkdownPath(systemOutput, state, system);
+  if (!dashboardDocxAllowed(systemOutput, state, system)) return "";
   if (docxPath && fs.existsSync(docxPath)) {
     if (!mdPath) return docxPath;
     const docxState = {
@@ -122,9 +159,6 @@ function ensureDocxArtifact(systemOutput, state, system = {}) {
     };
     if (validateFinalDocx(systemOutput, docxState, mdPath).valid) return docxPath;
   }
-  const reviewApproved =
-    state.overallStatus === "finalized" || state.review?.status === "approved";
-  if (!reviewApproved) return docxPath || "";
   if (!mdPath) return docxPath || "";
   const { exportWhitepaperWord } = require("../export-whitepaper-word");
   return exportWhitepaperWord({

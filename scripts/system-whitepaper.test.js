@@ -4987,7 +4987,7 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
   );
   assert.equal(snapshot.systems[0].progress.completed, 18);
   assert.equal(snapshot.systems[0].artifacts.final.exists, true);
-  assert.equal(snapshot.systems[0].artifacts.docx.exists, true);
+  assert.equal(snapshot.systems[0].artifacts.docx.exists, false);
   assert.equal(snapshot.systems[0].artifacts.databaseProfile.exists, true);
   assert.equal(snapshot.systems[0].artifacts.dataDictionary.exists, false);
   assert.equal(snapshot.systems[0].artifacts.entityModel.exists, false);
@@ -5181,6 +5181,7 @@ test("dashboard snapshot regenerates missing docx for finalized system", () => {
   const path = require("node:path");
   const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
   const { buildDashboardSnapshot } = require("./local-dashboard/server");
+  const { finalizeWhitepaperMarkdown } = require("./system-whitepaper-lib");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-docx-regen-"));
   const configPath = path.join(dir, "systems.local.yaml");
@@ -5199,6 +5200,8 @@ test("dashboard snapshot regenerates missing docx for finalized system", () => {
 
   const adpOutput = path.join(dir, "outputs", "adp");
   fs.mkdirSync(adpOutput, { recursive: true });
+  fs.writeFileSync(path.join(adpOutput, "whitepaper.pending-review.md"), passingUiOnlyNarrativeMarkdown(), "utf8");
+  writePassingTruthArtifacts(adpOutput, { databaseProfile: false });
   let adpState = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
   for (const nodeId of [
     "sync",
@@ -5227,12 +5230,9 @@ test("dashboard snapshot regenerates missing docx for finalized system", () => {
   writePipelineState(path.join(adpOutput, "pipeline-state.json"), adpState);
   fs.writeFileSync(
     path.join(adpOutput, "whitepaper.final.md"),
-    "# AI保单数据闭环平台功能白皮书\n\n## 1. 系统概览\n",
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(adpOutput, "evidence-summary.json"),
-    JSON.stringify({ system: { name: "AI保单数据闭环平台", collectedAt: "2026-05-21T08:00:00.000Z" } }),
+    finalizeWhitepaperMarkdown(fs.readFileSync(path.join(adpOutput, "whitepaper.pending-review.md"), "utf8"), {
+      systemName: "AI保单数据闭环平台",
+    }),
     "utf8",
   );
 
@@ -5250,6 +5250,7 @@ test("dashboard snapshot regenerates stale docx for finalized system", () => {
   const path = require("node:path");
   const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
   const { buildDashboardSnapshot } = require("./local-dashboard/server");
+  const { finalizeWhitepaperMarkdown } = require("./system-whitepaper-lib");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-docx-stale-"));
   const configPath = path.join(dir, "systems.local.yaml");
@@ -5268,6 +5269,8 @@ test("dashboard snapshot regenerates stale docx for finalized system", () => {
 
   const adpOutput = path.join(dir, "outputs", "adp");
   fs.mkdirSync(adpOutput, { recursive: true });
+  fs.writeFileSync(path.join(adpOutput, "whitepaper.pending-review.md"), passingUiOnlyNarrativeMarkdown(), "utf8");
+  writePassingTruthArtifacts(adpOutput, { databaseProfile: false });
   let adpState = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
   for (const nodeId of [
     "sync",
@@ -5302,15 +5305,12 @@ test("dashboard snapshot regenerates stale docx for finalized system", () => {
   writePipelineState(path.join(adpOutput, "pipeline-state.json"), adpState);
   fs.writeFileSync(
     path.join(adpOutput, "whitepaper.final.md"),
-    "# AI保单数据闭环平台功能白皮书\n\n## 1. 系统概览\n当前最终稿。",
+    finalizeWhitepaperMarkdown(fs.readFileSync(path.join(adpOutput, "whitepaper.pending-review.md"), "utf8"), {
+      systemName: "AI保单数据闭环平台",
+    }),
     "utf8",
   );
   fs.writeFileSync(path.join(adpOutput, "stale-old.docx"), "PK\x03\x04stale-docx", "utf8");
-  fs.writeFileSync(
-    path.join(adpOutput, "evidence-summary.json"),
-    JSON.stringify({ system: { name: "AI保单数据闭环平台", collectedAt: "2026-05-21T08:00:00.000Z" } }),
-    "utf8",
-  );
 
   const snapshot = buildDashboardSnapshot({ configPath });
   const docx = snapshot.systems[0].artifacts.docx;
@@ -11449,6 +11449,7 @@ test("dashboard download route serves docx artifact", async () => {
   const path = require("node:path");
   const http = require("node:http");
   const { createDashboardServer } = require("./local-dashboard/server");
+  const { finalizeWhitepaperMarkdown } = require("./system-whitepaper-lib");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-download-"));
   const configPath = path.join(dir, "systems.local.yaml");
@@ -11469,8 +11470,16 @@ test("dashboard download route serves docx artifact", async () => {
   const docxPath = path.join(output, "AI保单数据闭环平台_系统功能白皮书_20260524.docx");
   fs.writeFileSync(docxPath, "PK\x03\x04stale-docx", "utf8");
   fs.writeFileSync(
+    path.join(output, "whitepaper.pending-review.md"),
+    passingUiOnlyNarrativeMarkdown(),
+    "utf8",
+  );
+  writePassingTruthArtifacts(output, { databaseProfile: false });
+  fs.writeFileSync(
     path.join(output, "whitepaper.final.md"),
-    "# AI保单数据闭环平台功能白皮书\n\n## 1. 系统概览\n下载接口应返回当前 final 重新导出的 Word。",
+    finalizeWhitepaperMarkdown(fs.readFileSync(path.join(output, "whitepaper.pending-review.md"), "utf8"), {
+      systemName: "AI保单数据闭环平台",
+    }),
     "utf8",
   );
   fs.writeFileSync(
@@ -11490,9 +11499,8 @@ test("dashboard download route serves docx artifact", async () => {
   const server = createDashboardServer({ configPath });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
-
-  try {
-    const response = await new Promise((resolve, reject) => {
+  const downloadDocx = () =>
+    new Promise((resolve, reject) => {
       http
         .get(`http://127.0.0.1:${port}/api/download?system=adp&artifact=docx`, (res) => {
           const chunks = [];
@@ -11508,6 +11516,8 @@ test("dashboard download route serves docx artifact", async () => {
         .on("error", reject);
     });
 
+  try {
+    const response = await downloadDocx();
     assert.equal(response.statusCode, 200);
     assert.match(String(response.headers["content-disposition"] || ""), /attachment/i);
     assert.equal(response.body.subarray(0, 2).toString("utf8"), "PK");
@@ -11515,12 +11525,21 @@ test("dashboard download route serves docx artifact", async () => {
     assert.equal(fs.existsSync(`${path.join(output, path.basename(docxPath))}.manifest.json`), false);
     const generated = fs.readdirSync(output).find((file) => file.endsWith(".docx.manifest.json"));
     assert.ok(generated);
+
+    fs.appendFileSync(
+      path.join(output, "whitepaper.final.md"),
+      "\n\n## 手工篡改的终稿内容\n这里模拟看板生成 Word 后终稿被绕过待审稿修改。",
+      "utf8",
+    );
+    const blocked = await downloadDocx();
+    assert.equal(blocked.statusCode, 400);
+    assert.match(blocked.body.toString("utf8"), /Artifact not found: docx/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
 });
 
-test("dashboard download route tolerates malformed pipeline state", async () => {
+test("dashboard download route blocks docx without valid approval state", async () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
@@ -11571,9 +11590,8 @@ test("dashboard download route tolerates malformed pipeline state", async () => 
         .on("error", reject);
     });
 
-    assert.equal(response.statusCode, 200);
-    assert.match(String(response.headers["content-disposition"] || ""), /attachment/i);
-    assert.equal(response.body.subarray(0, 2).toString("utf8"), "PK");
+    assert.equal(response.statusCode, 400);
+    assert.match(response.body.toString("utf8"), /Artifact not found: docx/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
