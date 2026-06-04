@@ -8338,6 +8338,20 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "acceptance-report.json")), true);
   assert.match(renderBatchAcceptanceMarkdown(accepted), /Batch Acceptance Report/);
 
+  const acceptedRunState = JSON.parse(fs.readFileSync(path.join(outputRoot, "_batch", "run-state.json"), "utf8"));
+  fs.writeFileSync(
+    path.join(outputRoot, "_batch", "run-state.json"),
+    JSON.stringify({
+      ...acceptedRunState,
+      systems: [{ code: "adp", status: "skipped", runStatus: "completed" }],
+    }),
+    "utf8",
+  );
+  const skippedRunState = buildBatchAcceptanceReport({ args: { config: configPath } });
+  assert.equal(skippedRunState.status, "blocked");
+  assert.ok(skippedRunState.blockers.some((item) => item.id === "batch.run-state-system-skipped"));
+  fs.writeFileSync(path.join(outputRoot, "_batch", "run-state.json"), JSON.stringify(acceptedRunState), "utf8");
+
   const acceptedClosureArtifact = JSON.parse(fs.readFileSync(repairClosurePath, "utf8"));
   fs.writeFileSync(
     repairClosurePath,
@@ -9223,6 +9237,32 @@ test("real run readiness unifies preflight and final delivery state", () => {
   assert.equal(fs.existsSync(artifacts.jsonPath), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "real-run-readiness-report.md")), true);
 
+  const skippedBatchReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    batchRunState: {
+      ...completedBatchRunState,
+      systems: [
+        {
+          ...completedBatchRunState.systems[0],
+          status: "skipped",
+          runStatus: "completed",
+        },
+      ],
+    },
+    acceptanceReport,
+    deliveryReport,
+  });
+  assert.equal(skippedBatchReady.status, "in-progress");
+  assert.equal(skippedBatchReady.canDeliver, false);
+  assert.ok(skippedBatchReady.warnings.some((item) => item.id === "batch.run-state-not-terminal"));
+
   const runningBatchRunState = {
     ...completedBatchRunState,
     status: "running",
@@ -9457,10 +9497,9 @@ test("real run readiness unifies preflight and final delivery state", () => {
 
   const dbSecretPath = path.join(dir, "secrets", "db", "adp.json");
   fs.mkdirSync(path.dirname(dbSecretPath), { recursive: true });
-  const dbMetadataPath = path.join(dir, "fixtures", "db-metadata.json");
-  fs.mkdirSync(path.dirname(dbMetadataPath), { recursive: true });
+  const dbMetadataPath = path.join(dir, "secrets", "db", "adp-metadata.json");
   fs.writeFileSync(dbMetadataPath, JSON.stringify({ tables: [] }), "utf8");
-  fs.writeFileSync(dbSecretPath, JSON.stringify({ readOnly: true, metadataFile: "fixtures/db-metadata.json" }), "utf8");
+  fs.writeFileSync(dbSecretPath, JSON.stringify({ readOnly: true, metadataFile: "secrets/db/adp-metadata.json" }), "utf8");
   const dbContext = {
     ...context,
     config: {
@@ -9490,6 +9529,24 @@ test("real run readiness unifies preflight and final delivery state", () => {
   });
   assert.equal(dbReady.status, "ready-to-run");
   assert.equal(dbReady.summary.databaseEnabled, 1);
+
+  const unsafeMetadataDir = path.join(dir, "fixtures");
+  fs.mkdirSync(unsafeMetadataDir, { recursive: true });
+  fs.writeFileSync(path.join(unsafeMetadataDir, "db-metadata.json"), JSON.stringify({ tables: [] }), "utf8");
+  fs.writeFileSync(dbSecretPath, JSON.stringify({ readOnly: true, metadataFile: "fixtures/db-metadata.json" }), "utf8");
+  const unsafeMetadataReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context: dbContext,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+  });
+  assert.equal(unsafeMetadataReady.status, "blocked");
+  assert.ok(unsafeMetadataReady.blockers.some((item) => item.id === "database.metadata-path-unsafe"));
+  fs.writeFileSync(dbSecretPath, JSON.stringify({ readOnly: true, metadataFile: "secrets/db/adp-metadata.json" }), "utf8");
 
   const connectorReady = buildRealRunReadinessReport({
     args: { systems: "adp" },
@@ -12560,6 +12617,7 @@ test("doctor validates enabled database profile secret under private secrets", (
     JSON.stringify({ type: "mysql", host: "127.0.0.1", user: "readonly", password: "secret" }),
     "utf8",
   );
+  fs.writeFileSync(path.join(projectRoot, "secrets", "db", "adp-metadata.json"), JSON.stringify({ tables: [] }), "utf8");
   fs.writeFileSync(
     path.join(projectRoot, "config", "systems.local.yaml"),
     [
@@ -12587,8 +12645,48 @@ test("doctor validates enabled database profile secret under private secrets", (
   const warningIds = report.warnings.map((item) => item.id);
 
   assert.equal(report.ok, true);
-  assert.ok(warningIds.includes("system.database-metadata-file-missing"));
   assert.ok(warningIds.includes("system.database-sample-data-enabled"));
+});
+
+test("doctor rejects database profile secret and metadata outside private secrets", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runDoctor } = require("./doctor");
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "system-whitepaper-doctor-db-private-"));
+  fs.mkdirSync(path.join(projectRoot, "config"), { recursive: true });
+  fs.mkdirSync(path.join(projectRoot, "outputs", "adp"), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, "outputs", "adp", "db.json"), JSON.stringify({ readOnly: true }), "utf8");
+  fs.writeFileSync(path.join(projectRoot, "outputs", "adp", "metadata.json"), JSON.stringify({ tables: [] }), "utf8");
+  fs.writeFileSync(path.join(projectRoot, "secrets-token.txt"), "test-token-value", "utf8");
+  fs.writeFileSync(
+    path.join(projectRoot, "config", "systems.local.yaml"),
+    [
+      "auth:",
+      "  tokenFile: ./secrets-token.txt",
+      "runtime:",
+      "  environment: test",
+      "  outputDir: ./outputs",
+      "  testDataPrefix: AI_AUTO_TEST_",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+      "    databaseProfile:",
+      "      enabled: true",
+      "      secretFile: ./outputs/adp/db.json",
+      "      metadataFile: ./outputs/adp/metadata.json",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const report = runDoctor({ projectRoot });
+  const failureIds = report.failures.map((item) => item.id);
+
+  assert.equal(report.ok, false);
+  assert.ok(failureIds.includes("system.database-secret-path-unsafe"));
+  assert.ok(failureIds.includes("system.database-metadata-path-unsafe"));
 });
 
 test("collect database profile writes redacted schema evidence from private metadata", async () => {
@@ -12653,6 +12751,33 @@ test("collect database profile writes redacted schema evidence from private meta
                 tags: ["normal", "11010519491231002X"],
               },
             },
+            {
+              id: 2,
+              customer_phone: "13700137000",
+              status: "INIT",
+              payload: {
+                contact: { mobile: "13700137000", email: "second@example.com" },
+                tags: ["normal"],
+              },
+            },
+            {
+              id: 3,
+              customer_phone: "13600136000",
+              status: "DONE",
+              payload: {
+                contact: { mobile: "13600136000", email: "third@example.com" },
+                tags: ["normal"],
+              },
+            },
+            {
+              id: 4,
+              customer_phone: "13500135000",
+              status: "DONE",
+              payload: {
+                contact: { mobile: "13500135000", email: "fourth@example.com" },
+                tags: ["normal"],
+              },
+            },
           ],
         },
       ],
@@ -12673,7 +12798,7 @@ test("collect database profile writes redacted schema evidence from private meta
       "      secretFile: ./secrets/db/adp.json",
       "      includeSchemas:",
       "        - adp_test",
-      "      sampleRows: 1",
+      "      sampleRows: 5",
       "      allowSampleData: true",
       "",
     ].join("\n"),
@@ -12688,6 +12813,7 @@ test("collect database profile writes redacted schema evidence from private meta
   assert.equal(fs.existsSync(outputPath), true);
   assert.equal(profile.source.secret.password, "[redacted]");
   assert.equal(profile.source.secret.host, "[redacted]");
+  assert.equal(profile.tables[0].sampleRows.length, 3);
   assert.equal(profile.tables[0].sampleRows[0].customer_phone, "1***0");
   assert.equal(profile.tables[0].sampleRows[0].payload.contact.mobile, "1***0");
   assert.equal(profile.tables[0].sampleRows[0].payload.contact.email, "o***m");
@@ -12722,6 +12848,44 @@ test("collect database profile writes redacted schema evidence from private meta
       value: "1***0",
       payload: { 手机: "1***0", keep: "ok" },
     },
+  );
+});
+
+test("collect database profile rejects private database files outside secrets db", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { collectDatabaseProfile } = require("./collect-database-profile");
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "system-whitepaper-db-private-path-"));
+  fs.mkdirSync(path.join(projectRoot, "config"), { recursive: true });
+  fs.mkdirSync(path.join(projectRoot, "outputs", "adp"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, "outputs", "adp", "db.json"),
+    JSON.stringify({ metadataFile: "./outputs/adp/metadata.json" }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(projectRoot, "outputs", "adp", "metadata.json"), JSON.stringify({ tables: [] }), "utf8");
+  const configPath = path.join(projectRoot, "config", "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: ./outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+      "    databaseProfile:",
+      "      enabled: true",
+      "      secretFile: ./outputs/adp/db.json",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  await assert.rejects(
+    () => collectDatabaseProfile({ config: configPath, system: "adp" }),
+    /databaseProfile\.secretFile must be secrets\/db\/adp\.json/,
   );
 });
 

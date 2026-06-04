@@ -19,7 +19,8 @@ const OPTIONAL_DRIVER_MODULES = {
   postgres: "pg",
   postgresql: "pg",
 };
-const MAX_CONNECTOR_SAMPLE_ROWS = 3;
+const MAX_DATABASE_PROFILE_SAMPLE_ROWS = 3;
+const MAX_CONNECTOR_SAMPLE_ROWS = MAX_DATABASE_PROFILE_SAMPLE_ROWS;
 const MAX_CONNECTOR_SAMPLE_TABLES = 50;
 const MAX_CONNECTOR_SAMPLE_COLUMNS = 20;
 const SENSITIVE_VALUE_PATTERN = /\b1[3-9]\d{9}\b|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\b(?:\d{15}|\d{17}[0-9X])\b/i;
@@ -213,6 +214,13 @@ function resolveConnectorSampleLimit(profileConfig = {}) {
   const requested = Number(profileConfig.sampleRows || 0);
   if (!Number.isFinite(requested) || requested <= 0) return 0;
   return Math.min(Math.floor(requested), MAX_CONNECTOR_SAMPLE_ROWS);
+}
+
+function resolveDatabaseProfileSampleLimit(profileConfig = {}) {
+  if (!profileConfig.allowSampleData) return 0;
+  const requested = Number(profileConfig.sampleRows || 0);
+  if (!Number.isFinite(requested) || requested <= 0) return 0;
+  return Math.min(Math.floor(requested), MAX_DATABASE_PROFILE_SAMPLE_ROWS);
 }
 
 function resolveConnectorSampleTableLimit(profileConfig = {}) {
@@ -427,7 +435,10 @@ function buildEntityCandidates(tables = []) {
 function normalizeDatabaseProfile(input = {}, context = {}) {
   const options = {
     allowSampleData: Boolean(context.allowSampleData),
-    sampleRows: Math.max(0, Number(context.sampleRows ?? 0)),
+    sampleRows: Math.min(
+      MAX_DATABASE_PROFILE_SAMPLE_ROWS,
+      Math.max(0, Number(context.sampleRows ?? 0)),
+    ),
   };
   const tables = Array.isArray(input.tables)
     ? input.tables.map((table) => normalizeTable(table, options))
@@ -475,6 +486,70 @@ function resolveDatabaseProfileConfig(system = {}, configDir) {
   };
 }
 
+function normalizeComparablePath(value) {
+  if (!value) return "";
+  const normalized = path.resolve(String(value)).replace(/\\/g, "/");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function sameResolvedPath(left, right) {
+  return Boolean(
+    normalizeComparablePath(left) &&
+      normalizeComparablePath(left) === normalizeComparablePath(right),
+  );
+}
+
+function isPathInsideDirectory(filePath, directoryPath) {
+  const resolvedFile = path.resolve(String(filePath || ""));
+  const resolvedDirectory = path.resolve(String(directoryPath || ""));
+  const relative = path.relative(resolvedDirectory, resolvedFile);
+  return Boolean(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function allowUnsafeExternalDbPaths(options = {}) {
+  return Boolean(
+    options.unsafeAllowExternalDbPaths ||
+      options["unsafe-allow-external-db-paths"] ||
+      options.allowExternalDbPaths,
+  );
+}
+
+function resolvePrivateDatabaseSecretsDir(configDir) {
+  return resolveConfigRelativePath(configDir, "secrets/db");
+}
+
+function resolveExpectedDatabaseSecretPath(system = {}, configDir) {
+  const code = String(system.code || system.systemCode || "").trim();
+  if (!code) return "";
+  return path.join(resolvePrivateDatabaseSecretsDir(configDir), `${code}.json`);
+}
+
+function assertPrivateDatabaseSecretPath(system = {}, configDir, profileConfig = {}, options = {}) {
+  const secretFile = profileConfig.secretFile || "";
+  if (!secretFile || allowUnsafeExternalDbPaths(options)) return secretFile;
+  const expectedPath = resolveExpectedDatabaseSecretPath(system, configDir);
+  if (!sameResolvedPath(secretFile, expectedPath)) {
+    throw new Error(
+      `databaseProfile.secretFile must be secrets/db/${system.code}.json for system ${system.code}; actual=${secretFile}`,
+    );
+  }
+  return secretFile;
+}
+
+function assertPrivateDatabaseMetadataPath(system = {}, configDir, metadataFile, options = {}) {
+  if (!metadataFile || allowUnsafeExternalDbPaths(options)) {
+    return metadataFile ? resolveConfigRelativePath(configDir, metadataFile) : "";
+  }
+  const metadataPath = resolveConfigRelativePath(configDir, metadataFile);
+  const secretsDir = resolvePrivateDatabaseSecretsDir(configDir);
+  if (!isPathInsideDirectory(metadataPath, secretsDir)) {
+    throw new Error(
+      `database metadata file for system ${system.code} must stay under secrets/db/: actual=${metadataPath}`,
+    );
+  }
+  return metadataPath;
+}
+
 async function collectDatabaseProfile(options = {}) {
   const configPath = path.resolve(String(options.config || "config/systems.local.yaml"));
   const configDir = path.dirname(configPath);
@@ -490,6 +565,7 @@ async function collectDatabaseProfile(options = {}) {
   if (!profileConfig.secretFile) {
     throw new Error(`databaseProfile.secretFile is required for system: ${systemCode}`);
   }
+  assertPrivateDatabaseSecretPath(system, configDir, profileConfig, options);
   const secret = readRequiredJsonObject(profileConfig.secretFile, {
     label: "Database secret",
   });
@@ -506,7 +582,7 @@ async function collectDatabaseProfile(options = {}) {
         "Database metadata file is required unless connector mode is enabled.",
       );
     }
-    const metadataPath = resolveConfigRelativePath(configDir, metadataFile);
+    const metadataPath = assertPrivateDatabaseMetadataPath(system, configDir, metadataFile, options);
     metadata = readRequiredJsonObject(metadataPath, {
       label: "Database metadata",
     });
@@ -523,7 +599,7 @@ async function collectDatabaseProfile(options = {}) {
     mode,
     includeSchemas: profileConfig.includeSchemas,
     allowSampleData: profileConfig.allowSampleData,
-    sampleRows: mode === "connector" ? resolveConnectorSampleLimit(profileConfig) : profileConfig.sampleRows,
+    sampleRows: resolveDatabaseProfileSampleLimit(profileConfig),
   });
   writeJson(outputPath, profile);
   return { outputPath, profile };
@@ -549,12 +625,18 @@ if (require.main === module) {
 
 module.exports = {
   assertReadOnlyConnector,
+  assertPrivateDatabaseMetadataPath,
+  assertPrivateDatabaseSecretPath,
   collectDatabaseProfile,
   collectMetadataViaConnector,
   groupColumnsByTable,
+  MAX_DATABASE_PROFILE_SAMPLE_ROWS,
   normalizeDatabaseProfile,
   resolveIncludeSchemas,
   resolveDatabaseProfileConfig,
+  resolveDatabaseProfileSampleLimit,
+  resolveExpectedDatabaseSecretPath,
+  resolvePrivateDatabaseSecretsDir,
   sanitizeSampleRow,
   sanitizeSecret,
 };

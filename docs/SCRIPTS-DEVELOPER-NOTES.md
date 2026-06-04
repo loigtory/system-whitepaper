@@ -61,7 +61,7 @@ node scripts/sync-systems-registry.js --config config/systems.local.yaml --expor
 ## 建议命令
 
 ```bash
-npm run pipeline -- --system contract --provider manual --reset
+npm run pipeline -- --system contract --with-whitepaper --provider manual --reset
 npm run batch
 npm run truth:readiness -- --system contract
 npm run batch:acceptance
@@ -290,7 +290,7 @@ npx playwright install chromium
 ## run-phase3b.js 职责
 
 - 执行 **成稿 · 写稿** 节点。
-- 读取系统配置，生成 `narrative-brief.md`，并把压缩后的 `evidence-summary` 与 quality 摘要 inline 到 Agent 提示词。
+- 读取系统配置，生成 `narrative-brief.md`，并把压缩后的 `evidence-summary`、quality 摘要、`verified-claims.json` 和 writable-claim gap inline 到 Agent 提示词。
 - `cursor-sdk` 默认把 Agent 工作目录限制在 `outputs/{code}/`，避免探索脚本、依赖、完整 `evidence.json`、截图二进制或其他系统产物。
 - 同时生成 `whitepaper.skeleton.md`、`phase3b-prompts/overview-flow-prompt.md` 和按模块拆分的 `phase3b-prompts/module-*-prompt.md`；分片输出写入 `narrative-fragments/*.md` 后会自动组装为 `whitepaper.pending-review.md`。
 - 支持局部写稿：`--narrative-part overview-flow` 只重写 §1/§2/§4/§5/§6；`--narrative-part function-sections` 重写全部模块分片；`--narrative-part 模块名` 只重写该模块的 §2 模块概览条目和 §3 模块小节；多个模块可用 `,`、`，` 或 `、` 分隔。`cursor-sdk` 会只发送选中的分片 prompt，并用现有 `narrative-fragments.md` 保留未重写章节和其他模块。
@@ -313,19 +313,20 @@ npx playwright install chromium
 ## run-whitepaper-pipeline.js 职责
 
 - 串行执行系统白皮书链路节点，并写入 H5 可读取的状态文件。
+- 完整白皮书交付链路必须带 `--with-whitepaper`；不带该参数只适合局部证据、规格或质量节点调试，不能视为可交付白皮书流程。
 - 状态文件：
   - 系统级：`outputs/{code}/pipeline-state.json`
   - 批级：`outputs/_batch/run-state.json`
 - 支持节点子集执行，例如只跑已实现的成稿节点：
 
 ```powershell
-node scripts/run-whitepaper-pipeline.js --config config/systems.local.yaml --system adp --nodes draft,summary,narrative --provider manual --reset
+node scripts/run-whitepaper-pipeline.js --config config/systems.local.yaml --system adp --with-whitepaper --nodes draft,summary,narrative --provider manual --reset
 ```
 
 - `--nodes` 可用逗号指定小步 ID；未选择的小步在 `--reset` 时会标记为 `skipped`，但 `review` 保持 `pending`。
 - 单节点默认自动重试 3 次；`narrative` 写稿节点默认 1 次，避免 Cursor token 因自动重试放大；可用 `--retries N` 覆盖。
 - `--reset` 表示全新采集：`collect` 节点不会带 `--resume`，会从系统首页开始取证。
-- 当前系统间仍为串行；后续 H5 将读取上述 JSON 展示 **准备 / 取证 / 成稿 / 审定** 阶段。
+- 单系统 pipeline 串行执行；多系统由 `run-whitepaper-batch.js` 默认 4 worker 并行。H5 读取上述 JSON 展示 **准备 / 取证 / 真相 / 成稿 / 审定** 阶段。
 
 ADP 真实联调记录：
 

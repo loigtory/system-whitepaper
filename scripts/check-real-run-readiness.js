@@ -9,7 +9,11 @@ const {
   resolveConfigRelativePath,
   writeJson,
 } = require("./system-whitepaper-lib");
-const { resolveDatabaseProfileConfig } = require("./collect-database-profile");
+const {
+  assertPrivateDatabaseMetadataPath,
+  assertPrivateDatabaseSecretPath,
+  resolveDatabaseProfileConfig,
+} = require("./collect-database-profile");
 const { runDoctor } = require("./doctor");
 const {
   assertValidTruthReadinessReportArtifact,
@@ -129,24 +133,49 @@ function buildSystemPreparation(system = {}, context = {}) {
     const databaseProfile = resolveDatabaseProfileConfig(system, context.configDir);
     const secretFile = databaseProfile.secretFile || "";
     let databaseSecret = null;
-    if (!secretFile || !fs.existsSync(secretFile)) {
+    let secretPathAllowed = true;
+    if (!secretFile) {
       blockers.push(issue("database.secret-missing", "databaseProfile.enabled=true but the private database secret is missing.", { systemCode: code }));
     } else {
       try {
-        databaseSecret = JSON.parse(fs.readFileSync(secretFile, "utf8"));
-        if (!databaseSecret || typeof databaseSecret !== "object" || Array.isArray(databaseSecret)) {
-          throw new Error("not object");
+        assertPrivateDatabaseSecretPath(system, context.configDir, databaseProfile);
+      } catch (error) {
+        secretPathAllowed = false;
+        blockers.push(issue("database.secret-path-unsafe", error.message, { systemCode: code }));
+      }
+    }
+    if (secretFile && secretPathAllowed) {
+      if (!fs.existsSync(secretFile)) {
+        blockers.push(issue("database.secret-missing", "databaseProfile.enabled=true but the private database secret is missing.", { systemCode: code }));
+      } else {
+        try {
+          databaseSecret = JSON.parse(fs.readFileSync(secretFile, "utf8"));
+          if (!databaseSecret || typeof databaseSecret !== "object" || Array.isArray(databaseSecret)) {
+            throw new Error("not object");
+          }
+        } catch {
+          blockers.push(issue("database.secret-malformed", "Database secret file must be a valid JSON object.", { systemCode: code }));
         }
-      } catch {
-        blockers.push(issue("database.secret-malformed", "Database secret file must be a valid JSON object.", { systemCode: code }));
       }
     }
     if (databaseProfile.mode === "connector" && databaseProfile.readOnly !== true && databaseSecret?.readOnly !== true) {
       blockers.push(issue("database.connector-not-readonly", "databaseProfile.mode=connector requires databaseProfile.readOnly=true or secret readOnly=true.", { systemCode: code }));
     }
     const metadataFile = databaseProfile.metadataFile || databaseSecret?.metadataFile || "";
-    if (databaseProfile.mode !== "connector" && (!metadataFile || !fs.existsSync(resolveConfigRelativePath(context.configDir, metadataFile)))) {
-      blockers.push(issue("database.metadata-missing", "Database metadata file is required for non-connector database evidence.", { systemCode: code }));
+    if (databaseProfile.mode !== "connector") {
+      let metadataPath = "";
+      if (!metadataFile) {
+        blockers.push(issue("database.metadata-missing", "Database metadata file is required for non-connector database evidence.", { systemCode: code }));
+      } else {
+        try {
+          metadataPath = assertPrivateDatabaseMetadataPath(system, context.configDir, metadataFile);
+        } catch (error) {
+          blockers.push(issue("database.metadata-path-unsafe", error.message, { systemCode: code }));
+        }
+      }
+      if (metadataPath && !fs.existsSync(metadataPath)) {
+        blockers.push(issue("database.metadata-missing", "Database metadata file is required for non-connector database evidence.", { systemCode: code }));
+      }
     }
   } else {
     warnings.push(warning("database.not-enabled", "Database evidence is not enabled; real run will rely on UI evidence only.", { systemCode: code }));
@@ -397,7 +426,7 @@ function bindDeliveryToBatchRunState(deliveryReport, runState, selectedCodes = [
     }
     const runStatus = String(item.runStatus || "");
     const status = String(item.status || "");
-    if (runStatus !== "completed" || !["success", "review-pending", "finalized", "skipped"].includes(status)) {
+    if (runStatus !== "completed" || !["success", "review-pending", "finalized"].includes(status)) {
       invalid.push(`${code}:${runStatus || "unknown"}/${status || "unknown"}`);
     }
   }

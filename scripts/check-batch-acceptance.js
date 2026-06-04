@@ -525,14 +525,21 @@ function buildBatchArtifactAcceptance(context = {}, systems = [], options = {}) 
         blockers.push(blocker("batch.run-state-system-missing", `Batch run-state is missing target system ${code}.`, { systemCode: code }));
         continue;
       }
-      if (item.runStatus !== "completed" || !ACCEPTED_SYSTEM_STATUSES.has(String(item.status || ""))) {
+      if (String(item.status || "") === "skipped") {
+        blockers.push(blocker("batch.run-state-system-skipped", `Batch run-state marks ${code} as skipped; skipped systems are not deliverable.`, { systemCode: code }));
+      } else if (item.runStatus !== "completed" || !ACCEPTED_SYSTEM_STATUSES.has(String(item.status || ""))) {
         blockers.push(blocker("batch.run-state-system-incomplete", `Batch run-state does not mark ${code} complete.`, { systemCode: code }));
       }
     }
     if (!ACCEPTED_BATCH_STATUSES.has(String(batchState.status || ""))) {
       const targetSystemsDone = [...targetCodes].every((code) => {
         const item = byCode.get(code);
-        return item && item.runStatus === "completed" && ACCEPTED_SYSTEM_STATUSES.has(String(item.status || ""));
+        return (
+          item &&
+          item.runStatus === "completed" &&
+          String(item.status || "") !== "skipped" &&
+          ACCEPTED_SYSTEM_STATUSES.has(String(item.status || ""))
+        );
       });
       if (targetSystemsDone) {
         warnings.push(warning("batch.global-status-not-success", `Batch status is ${batchState.status || "unknown"}, but target systems are complete.`));
