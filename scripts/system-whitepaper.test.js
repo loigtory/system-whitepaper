@@ -6906,6 +6906,203 @@ test("agent isolation strict mode rejects missing worktree, dirty coordinator, a
   assert.ok(warningIds.includes("worker.handoff-tests-missing"));
 });
 
+test("agent worktree preparation dry-runs isolated git worktree and output directory commands", () => {
+  const path = require("node:path");
+  const { buildAgentWorktreePreparation } = require("./prepare-agent-worktrees");
+  const git = (args) => {
+    const command = args.join(" ");
+    if (command === "worktree list --porcelain") {
+      return [
+        "worktree D:/repo/system-whitepaper",
+        "HEAD aaa",
+        "branch refs/heads/main",
+        "",
+      ].join("\n");
+    }
+    if (command === "-C d:/repo/system-whitepaper status --short") return "";
+    return "";
+  };
+  const report = buildAgentWorktreePreparation(
+    {
+      artifactType: "agent-isolation-plan",
+      version: 1,
+      expectedWorkers: 4,
+      coordinator: {
+        id: "main",
+        worktree: "D:/repo/system-whitepaper",
+        branch: "main",
+      },
+      mergePolicy: {
+        coordinatorOnlyMerge: true,
+        reviewRequired: true,
+      },
+      workers: [
+        {
+          id: "dashboard",
+          worktree: "D:/repo/system-whitepaper-dashboard",
+          branch: "codex/dashboard-progress",
+          outputDir: "outputs/agent-dashboard",
+          handoffReport: "outputs/agent-dashboard/handoff.json",
+          writeScope: ["scripts/local-dashboard/"],
+        },
+        {
+          id: "readiness",
+          worktree: "D:/repo/system-whitepaper-readiness",
+          branch: "codex/readiness-gates",
+          outputDir: "outputs/agent-readiness",
+          handoffReport: "outputs/agent-readiness/handoff.json",
+          writeScope: ["scripts/check-real-run-readiness.js"],
+        },
+        {
+          id: "batch-stop",
+          worktree: "D:/repo/system-whitepaper-batch-stop",
+          branch: "codex/batch-stop-state",
+          outputDir: "outputs/agent-batch-stop",
+          handoffReport: "outputs/agent-batch-stop/handoff.json",
+          writeScope: ["scripts/run-whitepaper-batch.js"],
+        },
+        {
+          id: "auditor",
+          readOnly: true,
+          worktree: "D:/repo/system-whitepaper-auditor",
+        },
+      ],
+    },
+    {
+      expectedWorkers: 4,
+      git,
+      branchExists: (branch) => branch === "codex/readiness-gates",
+      pathExists: () => false,
+    },
+  );
+
+  assert.equal(report.ok, true);
+  assert.equal(report.apply, false);
+  assert.equal(report.summary.gitCommands, 4);
+  assert.equal(report.summary.mkdirCommands, 3);
+  assert.deepEqual(report.commands[0], {
+    workerId: "dashboard",
+    tool: "git",
+    args: ["worktree", "add", "-b", "codex/dashboard-progress", path.resolve("D:/repo/system-whitepaper-dashboard"), "HEAD"],
+    note: "create writable worker worktree and branch",
+  });
+  assert.deepEqual(report.commands[2], {
+    workerId: "readiness",
+    tool: "git",
+    args: ["worktree", "add", path.resolve("D:/repo/system-whitepaper-readiness"), "codex/readiness-gates"],
+    note: "create writable worker worktree from existing branch",
+  });
+  assert.deepEqual(report.commands[6], {
+    workerId: "auditor",
+    tool: "git",
+    args: ["worktree", "add", "--detach", path.resolve("D:/repo/system-whitepaper-auditor"), "HEAD"],
+    note: "create read-only worker worktree",
+  });
+});
+
+test("agent worktree preparation blocks existing unregistered paths and checked-out branches", () => {
+  const path = require("node:path");
+  const { buildAgentWorktreePreparation } = require("./prepare-agent-worktrees");
+  const git = (args) => {
+    const command = args.join(" ");
+    if (command === "worktree list --porcelain") {
+      return [
+        "worktree D:/repo/system-whitepaper",
+        "HEAD aaa",
+        "branch refs/heads/main",
+        "",
+        "worktree D:/repo/other",
+        "HEAD bbb",
+        "branch refs/heads/codex/readiness-gates",
+        "",
+      ].join("\n");
+    }
+    if (command === "-C d:/repo/system-whitepaper status --short") return "";
+    return "";
+  };
+  const report = buildAgentWorktreePreparation(
+    {
+      artifactType: "agent-isolation-plan",
+      version: 1,
+      expectedWorkers: 2,
+      coordinator: {
+        id: "main",
+        worktree: "D:/repo/system-whitepaper",
+        branch: "main",
+      },
+      mergePolicy: {
+        coordinatorOnlyMerge: true,
+        reviewRequired: true,
+      },
+      workers: [
+        {
+          id: "dashboard",
+          worktree: "D:/repo/system-whitepaper-dashboard",
+          branch: "codex/dashboard-progress",
+          outputDir: "outputs/agent-dashboard",
+          handoffReport: "outputs/agent-dashboard/handoff.json",
+          writeScope: ["scripts/local-dashboard/"],
+        },
+        {
+          id: "readiness",
+          worktree: "D:/repo/system-whitepaper-readiness",
+          branch: "codex/readiness-gates",
+          outputDir: "outputs/agent-readiness",
+          handoffReport: "outputs/agent-readiness/handoff.json",
+          writeScope: ["scripts/check-real-run-readiness.js"],
+        },
+      ],
+    },
+    {
+      expectedWorkers: 2,
+      git,
+      pathExists: (targetPath) => targetPath === path.resolve("D:/repo/system-whitepaper-dashboard"),
+    },
+  );
+  const violationIds = report.violations.map((item) => item.id);
+
+  assert.equal(report.ok, false);
+  assert.ok(violationIds.includes("worker.worktree-path-exists"));
+  assert.ok(violationIds.includes("worker.branch-already-checked-out"));
+});
+
+test("agent worktree preparation apply executes git commands and mkdirs in report order", () => {
+  const { applyAgentWorktreePreparation } = require("./prepare-agent-worktrees");
+  const calls = [];
+  const applied = applyAgentWorktreePreparation(
+    {
+      ok: true,
+      commands: [
+        {
+          workerId: "dashboard",
+          tool: "git",
+          args: ["worktree", "add", "-b", "codex/dashboard-progress", "D:/repo/system-whitepaper-dashboard", "HEAD"],
+        },
+        {
+          workerId: "dashboard",
+          tool: "mkdir",
+          path: "D:/repo/system-whitepaper-dashboard/outputs/agent-dashboard",
+        },
+      ],
+    },
+    {
+      git: (args) => {
+        calls.push(["git", args]);
+        return "";
+      },
+      mkdir: (targetPath) => {
+        calls.push(["mkdir", targetPath]);
+      },
+    },
+  );
+
+  assert.equal(applied.length, 2);
+  assert.deepEqual(calls, [
+    ["git", ["worktree", "add", "-b", "codex/dashboard-progress", "D:/repo/system-whitepaper-dashboard", "HEAD"]],
+    ["mkdir", "D:/repo/system-whitepaper-dashboard/outputs/agent-dashboard"],
+  ]);
+});
+
 function createDashboardFrontendContext() {
   return {
     console,
@@ -17123,6 +17320,7 @@ test("package manifest whitelists only skill runtime assets", () => {
     "scripts/collect-database-profile.js",
     "scripts/doctor.js",
     "scripts/init-local-config.js",
+    "scripts/prepare-agent-worktrees.js",
     "scripts/run-whitepaper-batch.js",
     "scripts/run-whitepaper-pipeline.js",
     "scripts/run-phase3b.js",
