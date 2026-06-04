@@ -13794,6 +13794,138 @@ test("collect database profile supports private read-only connector adapter", as
   );
 });
 
+test("collect database profile reuses same database profile cache by default", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { collectDatabaseProfile } = require("./collect-database-profile");
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "system-whitepaper-db-cache-"));
+  fs.mkdirSync(path.join(projectRoot, "config"), { recursive: true });
+  fs.mkdirSync(path.join(projectRoot, "secrets", "db"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, "secrets", "db", "adp.json"),
+    JSON.stringify({
+      type: "mysql",
+      database: "adp_test",
+      user: "readonly",
+      password: "secret",
+      readOnly: true,
+    }),
+    "utf8",
+  );
+  const configPath = path.join(projectRoot, "config", "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: ./outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+      "    databaseProfile:",
+      "      enabled: true",
+      "      mode: connector",
+      "      secretFile: ./secrets/db/adp.json",
+      "      includeSchemas:",
+      "        - adp_test",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  let calls = 0;
+  const adapter = async () => {
+    calls += 1;
+    return {
+      databaseType: "mysql",
+      tables: [
+        {
+          schema: "adp_test",
+          name: "policy_task",
+          comment: "保单任务",
+          columns: [{ name: "id", type: "bigint", comment: "主键" }],
+        },
+      ],
+    };
+  };
+
+  const first = await collectDatabaseProfile({ config: configPath, system: "adp", adapter });
+  const second = await collectDatabaseProfile({
+    config: configPath,
+    system: "adp",
+    adapter: async () => {
+      throw new Error("adapter should not run on cache hit");
+    },
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(first.reused, false);
+  assert.equal(second.reused, true);
+  assert.equal(second.cacheStatus.reason, "cache-hit");
+  assert.equal(second.profile.source.cache.sha256, first.profile.source.cache.sha256);
+});
+
+test("collect database profile refresh flag bypasses same database cache", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { collectDatabaseProfile } = require("./collect-database-profile");
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "system-whitepaper-db-refresh-"));
+  fs.mkdirSync(path.join(projectRoot, "config"), { recursive: true });
+  fs.mkdirSync(path.join(projectRoot, "secrets", "db"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, "secrets", "db", "adp.json"),
+    JSON.stringify({ type: "mysql", database: "adp_test", user: "readonly", password: "secret", readOnly: true }),
+    "utf8",
+  );
+  const configPath = path.join(projectRoot, "config", "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: ./outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+      "    databaseProfile:",
+      "      enabled: true",
+      "      mode: connector",
+      "      secretFile: ./secrets/db/adp.json",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  let calls = 0;
+  const adapter = async () => {
+    calls += 1;
+    return {
+      databaseType: "mysql",
+      tables: [
+        {
+          schema: "adp_test",
+          name: `policy_task_${calls}`,
+          comment: "保单任务",
+          columns: [{ name: "id", type: "bigint", comment: "主键" }],
+        },
+      ],
+    };
+  };
+
+  await collectDatabaseProfile({ config: configPath, system: "adp", adapter });
+  const refreshed = await collectDatabaseProfile({
+    config: configPath,
+    system: "adp",
+    adapter,
+    "refresh-database-profile": true,
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(refreshed.reused, false);
+  assert.equal(refreshed.cacheStatus.reason, "forced-refresh");
+  assert.equal(refreshed.profile.tables[0].name, "policy_task_2");
+});
+
 test("collect database profile connector samples non-sensitive columns only", async () => {
   const { collectMetadataViaConnector } = require("./collect-database-profile");
   const executed = [];

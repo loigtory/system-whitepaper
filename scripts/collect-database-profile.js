@@ -2,8 +2,10 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const {
   parseArgs,
+  readOptionalJsonObject,
   parseSystemsConfig,
   readRequiredJsonObject,
   resolveConfigRelativePath,
@@ -26,6 +28,7 @@ const MAX_CONNECTOR_SAMPLE_COLUMNS = 20;
 const SENSITIVE_VALUE_PATTERN = /\b1[3-9]\d{9}\b|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\b(?:\d{15}|\d{17}[0-9X])\b/i;
 const SENSITIVE_CONTEXT_PATTERN = /(customer|client|user|username)/i;
 const SENSITIVE_LOCALE_PATTERN = /(\u59d3\u540d|\u624b\u673a|\u7535\u8bdd|\u90ae\u7bb1|\u8bc1\u4ef6|\u8eab\u4efd\u8bc1|\u94f6\u884c\u5361|\u5730\u5740|\u5ba2\u6237|\u7528\u6237|\u8d26\u53f7|\u8d26\u6237)/u;
+const DATABASE_PROFILE_CACHE_VERSION = 1;
 
 function isSensitiveDataText(text) {
   return SENSITIVE_DATA_PATTERN.test(text) || SENSITIVE_CONTEXT_PATTERN.test(text) || SENSITIVE_LOCALE_PATTERN.test(text);
@@ -89,6 +92,33 @@ function sanitizeSecret(secret = {}) {
     sanitized[key] = sanitizeSecretValue(key, value);
   }
   return sanitized;
+}
+
+function sha256Json(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function fileFingerprint(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return { exists: false, size: 0, mtimeMs: null, sha256: "" };
+  }
+  const buffer = fs.readFileSync(filePath);
+  const stat = fs.statSync(filePath);
+  return {
+    exists: true,
+    size: stat.size,
+    mtimeMs: Math.round(stat.mtimeMs),
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+function fileContentFingerprint(filePath) {
+  const fingerprint = fileFingerprint(filePath);
+  return {
+    exists: fingerprint.exists,
+    size: fingerprint.size,
+    sha256: fingerprint.sha256,
+  };
 }
 
 function normalizeConnectorType(value) {
@@ -227,6 +257,86 @@ function resolveConnectorSampleTableLimit(profileConfig = {}) {
   const requested = Number(profileConfig.sampleTables || 0);
   if (!Number.isFinite(requested) || requested <= 0) return MAX_CONNECTOR_SAMPLE_TABLES;
   return Math.min(Math.floor(requested), MAX_CONNECTOR_SAMPLE_TABLES);
+}
+
+function normalizeCacheList(value) {
+  return Array.isArray(value)
+    ? value.map((item) => String(item || "").trim()).filter(Boolean).sort()
+    : [];
+}
+
+function normalizeConnectorSecretIdentityPayload(secret = {}, profileConfig = {}) {
+  return {
+    type: normalizeConnectorType(secret.type || secret.databaseType || profileConfig.type),
+    driver: String(secret.driver || "").trim(),
+    host: String(secret.host || "").trim(),
+    port: String(secret.port || "").trim(),
+    user: String(secret.user || secret.username || "").trim(),
+    database: String(secret.database || secret.db || "").trim(),
+    db: String(secret.db || "").trim(),
+    readOnly: secret.readOnly === true || profileConfig.readOnly === true,
+  };
+}
+
+function buildConnectorIdentityHash(secret = {}, profileConfig = {}) {
+  return sha256Json(normalizeConnectorSecretIdentityPayload(secret, profileConfig));
+}
+
+function buildDatabaseProfileCacheKey(input = {}) {
+  const profileConfig = input.profileConfig || {};
+  const secret = input.secret || {};
+  const metadataPath = input.metadataPath || "";
+  const useConnector = Boolean(input.useConnector);
+  const payload = {
+    version: DATABASE_PROFILE_CACHE_VERSION,
+    systemCode: String(input.system?.code || "").trim(),
+    mode: useConnector ? "connector" : "metadata-file",
+    includeSchemas: normalizeCacheList(profileConfig.includeSchemas),
+    allowSampleData: Boolean(profileConfig.allowSampleData),
+    sampleRows: resolveDatabaseProfileSampleLimit(profileConfig),
+    sampleTables: resolveConnectorSampleTableLimit(profileConfig),
+    source: useConnector
+      ? {
+          connector: {
+            type: normalizeConnectorType(secret.type || secret.databaseType || profileConfig.type),
+            driver: String(secret.driver || "").trim(),
+            readOnly: secret.readOnly === true || profileConfig.readOnly === true,
+            identityHash: buildConnectorIdentityHash(secret, profileConfig),
+          },
+        }
+      : {
+          metadataFile: path.basename(metadataPath || ""),
+          metadataFingerprint: fileContentFingerprint(metadataPath),
+        },
+  };
+  return {
+    version: DATABASE_PROFILE_CACHE_VERSION,
+    sha256: sha256Json(payload),
+    input: payload,
+  };
+}
+
+function forceDatabaseProfileRefresh(options = {}) {
+  return Boolean(
+    options.refresh ||
+      options["refresh-database-profile"] ||
+      options["force-refresh"] ||
+      options["force-database-profile"],
+  );
+}
+
+function resolveDatabaseProfileCacheStatus(existingProfile = {}, cacheKey = {}) {
+  if (!existingProfile || typeof existingProfile !== "object" || Array.isArray(existingProfile)) {
+    return { reusable: false, reason: "missing-profile" };
+  }
+  if (existingProfile.artifactType !== "database-profile") {
+    return { reusable: false, reason: "invalid-artifact-type" };
+  }
+  const existingCache = existingProfile.source?.cache || {};
+  if (!existingCache.sha256) return { reusable: false, reason: "missing-cache-key" };
+  if (existingCache.version !== cacheKey.version) return { reusable: false, reason: "cache-version-changed" };
+  if (existingCache.sha256 !== cacheKey.sha256) return { reusable: false, reason: "cache-key-changed" };
+  return { reusable: true, reason: "cache-hit" };
 }
 
 function isSensitiveSampleColumn(column = {}) {
@@ -458,6 +568,7 @@ function normalizeDatabaseProfile(input = {}, context = {}) {
       databaseType: input.databaseType || context.secret?.type || "",
       includeSchemas: context.includeSchemas || [],
       sampleDataIncluded: options.allowSampleData,
+      cache: context.cacheKey || null,
       secret: context.mode === "connector" ? redactConnectionSource(context.secret || {}) : sanitizeSecret(context.secret || {}),
     },
     tables,
@@ -571,6 +682,33 @@ async function collectDatabaseProfile(options = {}) {
   });
   const metadataFile = options.metadata || profileConfig.metadataFile || secret.metadataFile;
   const useConnector = Boolean(options.connector || profileConfig.mode === "connector" || (!metadataFile && options.adapter));
+  const metadataPath = !useConnector && metadataFile
+    ? assertPrivateDatabaseMetadataPath(system, configDir, metadataFile, options)
+    : "";
+  const outputRoot = resolveConfigRelativePath(
+    configDir,
+    options.output || config.runtime?.outputDir || "./outputs",
+  );
+  const outputPath = path.join(outputRoot, system.code, "database-profile.json");
+  const cacheKey = buildDatabaseProfileCacheKey({
+    system,
+    profileConfig,
+    secret,
+    metadataPath,
+    useConnector,
+  });
+  const existingProfile = readOptionalJsonObject(outputPath, null);
+  const cacheStatus = forceDatabaseProfileRefresh(options)
+    ? { reusable: false, reason: "forced-refresh" }
+    : resolveDatabaseProfileCacheStatus(existingProfile, cacheKey);
+  if (cacheStatus.reusable) {
+    return {
+      outputPath,
+      profile: existingProfile,
+      reused: true,
+      cacheStatus,
+    };
+  }
   let metadata = null;
   let mode = "metadata-file";
   if (useConnector) {
@@ -582,17 +720,11 @@ async function collectDatabaseProfile(options = {}) {
         "Database metadata file is required unless connector mode is enabled.",
       );
     }
-    const metadataPath = assertPrivateDatabaseMetadataPath(system, configDir, metadataFile, options);
     metadata = readRequiredJsonObject(metadataPath, {
       label: "Database metadata",
     });
   }
 
-  const outputRoot = resolveConfigRelativePath(
-    configDir,
-    options.output || config.runtime?.outputDir || "./outputs",
-  );
-  const outputPath = path.join(outputRoot, system.code, "database-profile.json");
   const profile = normalizeDatabaseProfile(metadata, {
     system,
     secret,
@@ -600,9 +732,10 @@ async function collectDatabaseProfile(options = {}) {
     includeSchemas: profileConfig.includeSchemas,
     allowSampleData: profileConfig.allowSampleData,
     sampleRows: resolveDatabaseProfileSampleLimit(profileConfig),
+    cacheKey,
   });
   writeJson(outputPath, profile);
-  return { outputPath, profile };
+  return { outputPath, profile, reused: false, cacheStatus };
 }
 
 async function main() {
@@ -613,7 +746,11 @@ async function main() {
     );
   }
   const result = await collectDatabaseProfile(args);
-  console.log(`Database profile written: ${result.outputPath}`);
+  if (result.reused) {
+    console.log(`Database profile reused: ${result.outputPath}`);
+  } else {
+    console.log(`Database profile written: ${result.outputPath}`);
+  }
 }
 
 if (require.main === module) {
@@ -627,11 +764,15 @@ module.exports = {
   assertReadOnlyConnector,
   assertPrivateDatabaseMetadataPath,
   assertPrivateDatabaseSecretPath,
+  buildDatabaseProfileCacheKey,
   collectDatabaseProfile,
   collectMetadataViaConnector,
+  DATABASE_PROFILE_CACHE_VERSION,
+  forceDatabaseProfileRefresh,
   groupColumnsByTable,
   MAX_DATABASE_PROFILE_SAMPLE_ROWS,
   normalizeDatabaseProfile,
+  resolveDatabaseProfileCacheStatus,
   resolveIncludeSchemas,
   resolveDatabaseProfileConfig,
   resolveDatabaseProfileSampleLimit,

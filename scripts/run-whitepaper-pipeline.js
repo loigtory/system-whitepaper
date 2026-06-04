@@ -384,16 +384,15 @@ async function runPipelineNode(nodeId, context) {
     if (!databaseProfileEnabled(system)) {
       return { skipped: true, reason: "databaseProfile.disabled" };
     }
-    return runNodeScript(
-      [
-        "scripts/collect-database-profile.js",
-        "--config",
-        configPath,
-        "--system",
-        system.code,
-      ],
-      { cwd: projectRoot },
-    );
+    const dbProfileArgs = [
+      "scripts/collect-database-profile.js",
+      "--config",
+      configPath,
+      "--system",
+      system.code,
+    ];
+    if (args["refresh-database-profile"]) dbProfileArgs.push("--refresh-database-profile");
+    return runNodeScript(dbProfileArgs, { cwd: projectRoot });
   }
   if (nodeId === "db-model") {
     if (!databaseProfileEnabled(system)) {
