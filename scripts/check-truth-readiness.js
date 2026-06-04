@@ -7,6 +7,7 @@ const { parseArgs, writeJson } = require("./system-whitepaper-lib");
 const {
   assertValidFactCheckReportArtifact,
   assertValidVerifiedClaimsArtifact,
+  buildFactCheckReport,
 } = require("./fact-check-whitepaper");
 const { assertValidNarrativeQualityReportArtifact } = require("./check-narrative");
 const { assertValidQualityReportArtifact } = require("./check-quality");
@@ -108,6 +109,10 @@ function sameStringSet(left = [], right = []) {
   const a = normalize(left);
   const b = normalize(right);
   return a.length === b.length && a.every((item, index) => item === b[index]);
+}
+
+function numbersMatch(left, right, epsilon = 0.000001) {
+  return Math.abs(Number(left || 0) - Number(right || 0)) <= epsilon;
 }
 
 function artifactKeyText(value) {
@@ -858,6 +863,59 @@ function validateFactCheckAgainstCurrentClaims(value = {}, claimsArtifact = {}) 
   return failures;
 }
 
+function validateFactCheckAgainstCurrentMarkdown(value = {}, artifacts = {}) {
+  const failures = [];
+  const pendingReview = artifacts.pendingReview || {};
+  const claimsArtifact = artifacts.claims || {};
+  if (pendingReview.status !== "ok" || claimsArtifact.status !== "ok") return failures;
+  if (!pendingReview.path || !fs.existsSync(pendingReview.path)) return failures;
+  const metrics = value.metrics || {};
+  let recomputed;
+  try {
+    recomputed = buildFactCheckReport({
+      markdown: fs.readFileSync(pendingReview.path, "utf8"),
+      claimsArtifact: claimsArtifact.value,
+      minWritableClaimCoverage: metrics.minWritableClaimCoverage,
+    });
+  } catch (error) {
+    failures.push(
+      `fact-check-report.json could not be recomputed from current whitepaper.pending-review.md: ${error.message}`,
+    );
+    return failures;
+  }
+  if (!sameStringSet(value.coveredWritableClaimIds || [], recomputed.coveredWritableClaimIds || [])) {
+    failures.push(
+      "fact-check-report.json coveredWritableClaimIds must match deterministic fact-check recomputation from current whitepaper.pending-review.md.",
+    );
+  }
+  if (!sameStringSet(value.missingWritableClaimIds || [], recomputed.missingWritableClaimIds || [])) {
+    failures.push(
+      "fact-check-report.json missingWritableClaimIds must match deterministic fact-check recomputation from current whitepaper.pending-review.md.",
+    );
+  }
+  const recomputedMetrics = recomputed.metrics || {};
+  for (const key of [
+    "checkedAssertions",
+    "supportedAssertions",
+    "supportedRatio",
+    "coveredWritableClaimCount",
+    "missingWritableClaimCount",
+    "writableClaimCoverageRatio",
+  ]) {
+    if (!numbersMatch(metrics[key], recomputedMetrics[key])) {
+      failures.push(
+        `fact-check-report.json metrics.${key} must match deterministic fact-check recomputation from current whitepaper.pending-review.md.`,
+      );
+    }
+  }
+  if (value.canFinalize === true && recomputed.canFinalize !== true) {
+    failures.push(
+      "fact-check-report.json canFinalize=true must match deterministic fact-check recomputation from current whitepaper.pending-review.md.",
+    );
+  }
+  return failures;
+}
+
 function buildFactCheckGate(artifact, artifacts = {}) {
   const value = artifact.value || {};
   const contractFailures = [];
@@ -868,6 +926,7 @@ function buildFactCheckGate(artifact, artifacts = {}) {
       contractFailures.push(error.message);
     }
     contractFailures.push(...validateFactCheckAgainstCurrentClaims(value, artifacts.claims));
+    contractFailures.push(...validateFactCheckAgainstCurrentMarkdown(value, artifacts));
   }
   const artifactContractValid = artifact.status === "ok" && contractFailures.length === 0;
   const metrics = value.metrics || {};
