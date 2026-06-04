@@ -296,6 +296,15 @@ function buildFunctionUniverseFromDir(inputDir, options = {}) {
   return { outputPath, artifact };
 }
 
+module.exports = {
+  buildFunctionUniverseArtifact,
+  buildFunctionUniverseFromDir,
+  buildSourceArtifacts,
+  fingerprintFile,
+  readOptionalExistingJsonObject,
+  scoreFunctionEntityMatch,
+};
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.input) {
@@ -318,12 +327,3 @@ if (require.main === module) {
     process.exit(1);
   }
 }
-
-module.exports = {
-  buildFunctionUniverseArtifact,
-  buildFunctionUniverseFromDir,
-  buildSourceArtifacts,
-  fingerprintFile,
-  readOptionalExistingJsonObject,
-  scoreFunctionEntityMatch,
-};

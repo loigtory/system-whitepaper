@@ -531,6 +531,7 @@ function buildLineageGate(artifacts = {}) {
     const failure = lineageMismatch(key, artifact, current, ownerFile);
     if (failure) failures.push(failure);
   }
+  failures.push(...validateFunctionUniverseAgainstCurrentSources(artifacts.functionUniverse?.value || {}, artifacts));
   return {
     id: "lineage",
     label: "Truth artifact source lineage",
@@ -883,6 +884,91 @@ function verifiedClaimsProjection(value = {}) {
     metrics: value.metrics || {},
     rules: value.rules || {},
   };
+}
+
+function sortByStableKey(items = [], keyFn = (item) => stableJson(item)) {
+  return [...items].sort((left, right) => String(keyFn(left)).localeCompare(String(keyFn(right))));
+}
+
+function functionUniverseProjection(value = {}) {
+  return {
+    system: value.system || null,
+    modules: sortByStableKey(Array.isArray(value.modules) ? value.modules : [], (item) => item.name || ""),
+    functions: sortByStableKey(
+      Array.isArray(value.functions) ? value.functions : [],
+      (item) => `${item.module || ""}::${item.name || ""}::${item.menuPath || ""}`,
+    ),
+    entities: sortByStableKey(
+      Array.isArray(value.entities) ? value.entities : [],
+      (item) => `${item.table || ""}::${item.name || item.entity || ""}`,
+    ),
+    links: sortByStableKey(
+      Array.isArray(value.links) ? value.links : [],
+      (item) => `${item.module || ""}::${item.function || ""}::${item.table || ""}::${item.entity || ""}`,
+    ),
+    entityRelations: sortByStableKey(
+      Array.isArray(value.entityRelations) ? value.entityRelations : [],
+      (item) => `${item.from || ""}::${item.to || ""}::${item.type || ""}::${(item.columns || []).join(",")}`,
+    ),
+    coverage: value.coverage || {},
+    rules: value.rules || {},
+  };
+}
+
+function currentOptionalJsonSource(artifact = {}, fileName) {
+  if (!artifact?.fingerprint?.exists) return {};
+  if (artifact.status !== "ok") {
+    throw new Error(`${fileName} is ${artifact.status}${artifact.error ? `: ${artifact.error}` : ""}`);
+  }
+  return artifact.value || {};
+}
+
+function findFunctionUniverseSourceMismatches(artifacts = {}) {
+  const functionUniverse = artifacts.functionUniverse || {};
+  if (functionUniverse.status !== "ok" || !functionUniverse.fingerprint?.exists) return [];
+  const checks = [
+    ["evidenceSummary", artifacts.evidenceSummary, "function-universe.json"],
+    ["databaseProfile", artifacts.databaseProfile, "function-universe.json"],
+    ["entityModel", artifacts.entityModel, "function-universe.json"],
+  ];
+  const failures = [];
+  for (const [key, current, ownerFile] of checks) {
+    const recorded = functionUniverse?.value?.sourceArtifacts?.[key];
+    const recordedSourceExists = normalizeSourceFingerprint(recorded || {}).exists;
+    if (!recorded && !current?.fingerprint?.exists) continue;
+    if (!recordedSourceExists && !current?.fingerprint?.exists) continue;
+    const failure = lineageMismatch(key, functionUniverse, current, ownerFile);
+    if (failure) failures.push(failure);
+  }
+  return failures;
+}
+
+function validateFunctionUniverseAgainstCurrentSources(value = {}, artifacts = {}) {
+  const failures = [];
+  const functionUniverse = artifacts.functionUniverse || {};
+  if (functionUniverse.status !== "ok" || !functionUniverse.fingerprint?.exists) return failures;
+  if (findFunctionUniverseSourceMismatches(artifacts).length) return failures;
+  const evidenceSummary = artifacts.evidenceSummary || {};
+  if (evidenceSummary.status !== "ok" || !evidenceSummary.fingerprint?.exists) {
+    failures.push("function-universe.json could not be recomputed because current evidence-summary.json is missing or invalid.");
+    return failures;
+  }
+  let recomputed;
+  try {
+    const { buildFunctionUniverseArtifact } = require("./build-function-universe");
+    recomputed = buildFunctionUniverseArtifact({
+      evidenceSummary: evidenceSummary.value || {},
+      databaseProfile: currentOptionalJsonSource(artifacts.databaseProfile, "database-profile.json"),
+      entityModel: currentOptionalJsonSource(artifacts.entityModel, "entity-model.json"),
+    });
+  } catch (error) {
+    failures.push(`function-universe.json could not be recomputed from current evidence-summary/database inputs: ${error.message}`);
+    return failures;
+  }
+  if (stableJson(functionUniverseProjection(value)) !== stableJson(functionUniverseProjection(recomputed))) {
+    failures.push("function-universe.json must match deterministic function-universe recomputation from current evidence-summary/database inputs.");
+  }
+  return failures;
 }
 
 function validateClaimsAgainstCurrentFunctionUniverse(value = {}, artifacts = {}) {

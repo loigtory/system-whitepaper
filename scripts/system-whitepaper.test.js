@@ -268,7 +268,10 @@ function writePassingTruthArtifacts(dir, options = {}) {
     buildReadinessSourceArtifacts,
     loadReadinessInputs,
   } = require("./check-truth-readiness");
-  const { buildSourceArtifacts: buildUniverseSourceArtifacts } = require("./build-function-universe");
+  const {
+    buildFunctionUniverseArtifact,
+    buildSourceArtifacts: buildUniverseSourceArtifacts,
+  } = require("./build-function-universe");
   const {
     buildSourceArtifacts: buildClaimSourceArtifacts,
     buildVerifiedClaimsArtifact,
@@ -329,92 +332,53 @@ function writePassingTruthArtifacts(dir, options = {}) {
       "utf8",
     );
   }
-  const functionUniversePath = path.join(dir, "function-universe.json");
-  const defaultFunctionUniverse = {
-    artifactType: "function-universe",
-    version: 1,
-    generatedAt: "2026-06-03T00:00:00.000Z",
+  const dataDictionaryPath = path.join(dir, "data-dictionary.json");
+  const entityModelPath = path.join(dir, "entity-model.json");
+  if (options.databaseProfile === false) {
+    for (const filePath of [databaseProfilePath, dataDictionaryPath, entityModelPath]) {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+  }
+  const evidenceSummaryPath = path.join(dir, "evidence-summary.json");
+  const evidenceSummary = {
     system: { code: options.systemCode || "adp", name: options.systemName || "AI保单数据闭环平台" },
-    modules: [{ name: fixtureClaim.module, sources: [{ type: "ui-module", id: fixtureClaim.module, label: fixtureClaim.module }] }],
+    modules: [
+      {
+        name: fixtureClaim.module,
+        entry: `${fixtureClaim.module} > ${fixtureClaim.function}`,
+      },
+    ],
     functions: [
       {
-        id: fixtureClaim.id,
-        name: fixtureClaim.function,
         module: fixtureClaim.module,
-        confidence: "high",
+        name: fixtureClaim.function,
         menuPath: `${fixtureClaim.module} > ${fixtureClaim.function}`,
         actions: ["查询"],
         queryFields: [fixtureClaim.function],
         tableColumns: [fixtureClaim.function],
-        sources: [
-          { type: "ui-function", id: fixtureClaim.id, label: fixtureClaim.function },
-          { type: "screenshot", id: `${fixtureClaim.id}:screenshot`, label: `${fixtureClaim.function}.png` },
+        screenshots: [
+          { id: `${fixtureClaim.id}:screenshot`, file: `${fixtureClaim.function}.png` },
         ],
       },
     ],
-    entities: [],
-    links: [],
-    entityRelations: [],
-    coverage: {
-      moduleCount: 1,
-      functionCount: 1,
-      entityCount: 0,
-      linkedFunctionCount: 0,
-      entityRelationCount: 0,
-    },
-    rules: {
-      noConclusion: true,
-      purpose: "Candidate universe for later verified-claims generation; not final business claims.",
-    },
   };
-  let functionUniverse = defaultFunctionUniverse;
-  try {
-    const existing = fs.existsSync(functionUniversePath)
-      ? JSON.parse(fs.readFileSync(functionUniversePath, "utf8"))
-      : null;
-    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-      functionUniverse = {
-        ...defaultFunctionUniverse,
-        ...existing,
-        modules: Array.isArray(existing.modules) && existing.modules.length ? existing.modules : defaultFunctionUniverse.modules,
-        functions: Array.isArray(existing.functions) && existing.functions.length ? existing.functions : defaultFunctionUniverse.functions,
-      };
-    }
-  } catch {
-    functionUniverse = defaultFunctionUniverse;
-  }
-  fs.writeFileSync(
-    functionUniversePath,
-    JSON.stringify({
-      ...functionUniverse,
-      version: Number(functionUniverse.version || 1),
-      generatedAt: functionUniverse.generatedAt || "2026-06-03T00:00:00.000Z",
-      modules: Array.isArray(functionUniverse.modules) ? functionUniverse.modules : [],
-      functions: Array.isArray(functionUniverse.functions) ? functionUniverse.functions : [],
-      entities: Array.isArray(functionUniverse.entities) ? functionUniverse.entities : [],
-      links: Array.isArray(functionUniverse.links) ? functionUniverse.links : [],
-      entityRelations: Array.isArray(functionUniverse.entityRelations) ? functionUniverse.entityRelations : [],
-      coverage: {
-        moduleCount: Array.isArray(functionUniverse.modules) ? functionUniverse.modules.length : 0,
-        functionCount: Array.isArray(functionUniverse.functions) ? functionUniverse.functions.length : 0,
-        entityCount: Array.isArray(functionUniverse.entities) ? functionUniverse.entities.length : 0,
-        linkedFunctionCount: Array.isArray(functionUniverse.links)
-          ? new Set(functionUniverse.links.map((item) => `${item.module || ""}::${item.function || ""}`)).size
-          : 0,
-        entityRelationCount: Array.isArray(functionUniverse.entityRelations) ? functionUniverse.entityRelations.length : 0,
-      },
-      rules: {
-        ...(functionUniverse.rules || {}),
-        noConclusion: true,
-      },
-      sourceArtifacts: buildUniverseSourceArtifacts({
-        evidenceSummary: path.join(dir, "evidence-summary.json"),
-        databaseProfile: databaseProfilePath,
-        entityModel: path.join(dir, "entity-model.json"),
-      }),
+  fs.writeFileSync(evidenceSummaryPath, JSON.stringify(evidenceSummary), "utf8");
+  const functionUniversePath = path.join(dir, "function-universe.json");
+  const readOptionalJson = (filePath) => fs.existsSync(filePath)
+    ? JSON.parse(fs.readFileSync(filePath, "utf8"))
+    : {};
+  const functionUniverse = buildFunctionUniverseArtifact({
+    evidenceSummary,
+    databaseProfile: readOptionalJson(databaseProfilePath),
+    entityModel: readOptionalJson(entityModelPath),
+    sourceArtifacts: buildUniverseSourceArtifacts({
+      evidenceSummary: evidenceSummaryPath,
+      databaseProfile: databaseProfilePath,
+      entityModel: entityModelPath,
     }),
-    "utf8",
-  );
+    generatedAt: "2026-06-03T00:00:00.000Z",
+  });
+  fs.writeFileSync(functionUniversePath, JSON.stringify(functionUniverse), "utf8");
   const verifiedClaims = buildVerifiedClaimsArtifact({
     functionUniverse: JSON.parse(fs.readFileSync(functionUniversePath, "utf8")),
     sourceArtifacts: buildClaimSourceArtifacts({ functionUniversePath }),
@@ -14253,6 +14217,79 @@ test("truth readiness rejects stale database truth lineage", () => {
   assert.equal(stale.gates.lineage.pass, false);
   assert.ok(stale.gates.lineage.failures.some((item) => /database-profile\.json/.test(item)));
   assert.ok(stale.blockers.some((item) => item.id === "truth.lineage-stale"));
+});
+
+test("truth readiness rejects forged function universe against current sources", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    buildSourceArtifacts: buildClaimSourceArtifacts,
+    buildVerifiedClaimsArtifact,
+  } = require("./build-verified-claims");
+  const { runFactCheck } = require("./fact-check-whitepaper");
+  const { runNarrativeCheck } = require("./check-narrative");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-forged-universe-current-sources-"));
+  writePassingTruthArtifacts(dir, { databaseProfile: false });
+  const functionUniversePath = path.join(dir, "function-universe.json");
+  const forged = JSON.parse(fs.readFileSync(functionUniversePath, "utf8"));
+  forged.modules.push({
+    name: "赔付管理",
+    entry: "赔付管理 > 赔付审核台账",
+    summaryHint: "",
+    sources: [{ type: "ui-module", id: "赔付管理 > 赔付审核台账", label: "赔付管理" }],
+  });
+  forged.functions.push({
+    name: "赔付审核台账",
+    module: "赔付管理",
+    menuPath: "赔付管理 > 赔付审核台账",
+    actions: ["查询"],
+    queryFields: ["赔付审核台账"],
+    tableColumns: ["赔付审核台账", "审核状态"],
+    screenshots: [{ id: "pay-ledger-shot", file: "screenshots/pay-ledger.png" }],
+    evidenceStrength: "medium",
+    sources: [
+      { type: "ui-function", id: "赔付管理 > 赔付审核台账", label: "赔付审核台账" },
+      { type: "screenshot", id: "pay-ledger-shot", label: "screenshots/pay-ledger.png" },
+    ],
+  });
+  forged.coverage = {
+    moduleCount: forged.modules.length,
+    functionCount: forged.functions.length,
+    entityCount: forged.entities.length,
+    linkedFunctionCount: new Set(forged.links.map((item) => `${item.module || ""}::${item.function || ""}`)).size,
+    entityRelationCount: forged.entityRelations.length,
+  };
+  fs.writeFileSync(functionUniversePath, JSON.stringify(forged), "utf8");
+  const verifiedClaims = buildVerifiedClaimsArtifact({
+    functionUniverse: forged,
+    sourceArtifacts: buildClaimSourceArtifacts({ functionUniversePath }),
+    generatedAt: "2026-06-03T00:00:30.000Z",
+  });
+  fs.writeFileSync(path.join(dir, "verified-claims.json"), JSON.stringify(verifiedClaims), "utf8");
+  const writableClaimLines = verifiedClaims.claims
+    .filter((claim) => claim.writable)
+    .map((claim) => `${claim.module || claim.subject || ""} ${claim.subject || claim.function || claim.entity || ""} [claim:${claim.id}]`);
+  fs.writeFileSync(
+    path.join(dir, "whitepaper.pending-review.md"),
+    [passingUiOnlyNarrativeMarkdown(), "", "## 5. 已验证声明索引", ...writableClaimLines].join("\n"),
+    "utf8",
+  );
+  runFactCheck({ inputDir: dir });
+  runNarrativeCheck({ inputDir: dir });
+
+  const report = runTruthReadinessCheck({ inputDir: dir });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.claims.pass, true);
+  assert.equal(report.gates.lineage.pass, false);
+  assert.ok(
+    report.gates.lineage.failures.some((item) =>
+      /deterministic function-universe recomputation from current evidence-summary\/database inputs/.test(item),
+    ),
+  );
+  assert.ok(report.blockers.some((item) => item.id === "truth.lineage-stale"));
 });
 
 test("truth readiness passes only when evidence claims fact-check and narrative gates pass", () => {
