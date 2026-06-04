@@ -9,7 +9,10 @@ const {
   assertValidVerifiedClaimsArtifact,
   buildFactCheckReport,
 } = require("./fact-check-whitepaper");
-const { assertValidNarrativeQualityReportArtifact } = require("./check-narrative");
+const {
+  assertValidNarrativeQualityReportArtifact,
+  buildNarrativeQualityReport,
+} = require("./check-narrative");
 const { assertValidQualityReportArtifact } = require("./check-quality");
 const {
   assertValidOperationGuideGateArtifact,
@@ -994,7 +997,49 @@ function buildFactCheckFreshnessGate(gate, artifacts = {}) {
   };
 }
 
-function buildNarrativeGate(artifact) {
+function validateNarrativeAgainstCurrentMarkdown(value = {}, artifacts = {}) {
+  const failures = [];
+  const pendingReview = artifacts.pendingReview || {};
+  if (pendingReview.status !== "ok" || !pendingReview.path || !fs.existsSync(pendingReview.path)) return failures;
+  if (findStaleNarrativeSources(artifacts).length) return failures;
+  let recomputed;
+  try {
+    recomputed = buildNarrativeQualityReport({
+      markdown: fs.readFileSync(pendingReview.path, "utf8"),
+      evidenceSummary: artifacts.evidenceSummary?.status === "ok" ? artifacts.evidenceSummary.value : {},
+    });
+  } catch (error) {
+    failures.push(
+      `narrative-quality-report.json could not be recomputed from current whitepaper.pending-review.md: ${error.message}`,
+    );
+    return failures;
+  }
+  const counts = value.counts || {};
+  const recomputedCounts = recomputed.counts || {};
+  if (!numbersMatch(counts.chars, recomputedCounts.chars)) {
+    failures.push(
+      "narrative-quality-report.json counts.chars must match deterministic narrative quality recomputation from current whitepaper.pending-review.md.",
+    );
+  }
+  if (!numbersMatch(counts.evidencePages, recomputedCounts.evidencePages)) {
+    failures.push(
+      "narrative-quality-report.json counts.evidencePages must match deterministic narrative quality recomputation from current evidence-summary.json.",
+    );
+  }
+  if (value.canSubmitReview === true && recomputed.canSubmitReview !== true) {
+    failures.push(
+      "narrative-quality-report.json canSubmitReview=true must match deterministic narrative quality recomputation from current whitepaper.pending-review.md.",
+    );
+  }
+  if (!sameStringSet(value.failures || [], recomputed.failures || [])) {
+    failures.push(
+      "narrative-quality-report.json failures must match deterministic narrative quality recomputation from current whitepaper.pending-review.md.",
+    );
+  }
+  return failures;
+}
+
+function buildNarrativeGate(artifact, artifacts = {}) {
   const value = artifact.value || {};
   const contractFailures = [];
   if (artifact.status === "ok") {
@@ -1003,6 +1048,7 @@ function buildNarrativeGate(artifact) {
     } catch (error) {
       contractFailures.push(error.message);
     }
+    contractFailures.push(...validateNarrativeAgainstCurrentMarkdown(value, artifacts));
   }
   const artifactContractValid = artifact.status === "ok" && contractFailures.length === 0;
   const chars = Number(value.counts?.chars || 0);
@@ -1545,6 +1591,7 @@ function buildTruthReadinessReport(input = {}) {
     narrative: buildNarrativeFreshnessGate(
       buildNarrativeGate(
         artifacts.narrative || { status: "missing", file: REQUIRED_ARTIFACTS.narrative },
+        artifacts,
       ),
       artifacts,
     ),

@@ -88,11 +88,61 @@ function buildFixtureWritableClaimFromMarkdown(markdown) {
   };
 }
 
+function passingNarrativeMarkdown() {
+  return [
+    "# AI保单数据闭环平台功能白皮书",
+    "",
+    "## 1. 系统定位",
+    "AI保单数据闭环平台用于支撑保单数据闭环管理，围绕保单任务的查询、跟踪和状态核对形成统一工作入口。",
+    "系统定位说明覆盖业务目标、使用场景、数据处理边界和页面证据来源，便于后续审阅时区分已验证结论与待确认事项。",
+    "",
+    "## 2. 核心功能说明",
+    "保单任务模块提供任务列表，用于查看保单任务、任务状态和处理进展。页面证据显示该模块以列表查询为主，适合归纳为只读核对与任务跟踪能力。",
+    "功能总结只写入当前证据能够支撑的内容，不把数据库字段或弱推理直接写成确定结论。",
+    "用途总结聚焦已观察到的页面能力：一是帮助业务人员快速定位保单任务，二是辅助核对任务处理状态，三是为后续人工处理或问题排查提供页面入口。",
+    "如果后续数据库画像显示存在任务表、状态字段或保单关联字段，这些内容只能作为解释业务对象的辅助证据，不能替代浏览器页面证据直接证明审批、写入或自动流转能力。",
+    "",
+    "## 3. 典型业务流程",
+    "典型业务流程为：业务人员进入保单任务菜单，按保单任务条件查询任务列表，查看任务状态，并基于页面展示结果进行后续处理判断。",
+    "流程说明依据菜单、页面和截图证据组织，未被浏览器证据覆盖的审批、写入或自动处理能力保持为待确认。",
+    "当页面只提供列表和查询证据时，白皮书只描述查询、查看和核对流程；当页面后续补充详情页、弹窗或操作按钮证据后，才能把更深层的处理步骤写入业务流程。",
+    "该规则保证白皮书的业务流程来自证据链，而不是根据模块名称或数据库字段进行过度推断。",
+    "",
+    "## 4. 证据边界",
+    "本次取证包含菜单、页面截图和任务列表证据；未覆盖的数据库关系、隐藏接口和后台自动流转不作为最终确认结论。",
+    "白皮书生成过程需要保留证据边界说明，明确哪些功能是页面直接证明，哪些只是库表或名称上的合理推理，哪些仍需要后续补充取证。",
+  ].join("\n");
+}
+
+function passingUiOnlyNarrativeMarkdown() {
+  return [
+    "# AI保单数据闭环平台功能白皮书",
+    "",
+    "## 1. 系统定位",
+    "AI保单数据闭环平台面向保单任务的页面化管理场景，当前证据能够确认的核心入口是保单任务菜单和任务列表页面。",
+    "系统定位聚焦页面已观察到的查询、查看和核对能力，不把后台库表、隐藏逻辑或未打开的页面推断成已经确认的业务功能。",
+    "",
+    "## 2. 核心功能说明",
+    "保单任务模块提供任务列表，用于承接保单任务的页面查询和结果查看。白皮书只把任务列表写成页面可见功能，并把用途限定在定位任务、查看列表结果、辅助业务人员继续处理这三个方向。",
+    "功能总结依据菜单名称、页面入口和已采集截图组织，不写入未被页面证据覆盖的编辑、审批、自动流转或批量处理结论。",
+    "用途总结强调该页面为业务人员提供统一入口：先进入保单任务菜单，再打开任务列表，再基于页面展示的结果判断下一步是否需要补充取证或人工处理。",
+    "",
+    "## 3. 典型业务流程",
+    "典型业务流程为：业务人员进入保单任务菜单，打开任务列表页面，按页面提供的查询入口检索任务，查看列表结果，并根据页面可见信息进行后续业务判断。",
+    "流程说明只覆盖浏览器取证已经看到的页面路径；如果后续需要写入详情查看、弹窗处理或提交动作，必须先补充对应截图、按钮证据和安全操作记录。",
+    "该流程写法保证白皮书的业务流程来自证据链，而不是根据系统名称、菜单名称或后台资料进行过度外推。",
+    "",
+    "## 4. 证据边界",
+    "本次取证能够支撑菜单入口、页面存在性、任务列表用途和只读核对场景。未覆盖的页面、按钮、自动处理规则和跨模块流转均保持为待确认事项。",
+    "白皮书生成时必须保留证据边界：页面直接证明的内容可以写为确认结论，辅助资料只能用于解释业务对象，缺少页面证据的能力不得写成确定功能。",
+  ].join("\n");
+}
+
 function writePassingTruthReadinessReport(dir, overrides = {}) {
   const fs = require("node:fs");
   const path = require("node:path");
   const { runFactCheck } = require("./fact-check-whitepaper");
-  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
+  const { runNarrativeCheck } = require("./check-narrative");
   const {
     buildReadinessSourceArtifacts,
     loadReadinessInputs,
@@ -131,7 +181,7 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
       operationGuideGatePath: path.join(dir, "operation-guide-gate.json"),
     }),
   });
-  writeTextIfMissing("whitepaper.pending-review.md", "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。");
+  writeTextIfMissing("whitepaper.pending-review.md", passingNarrativeMarkdown());
   const fixtureClaim = buildFixtureWritableClaimFromMarkdown(
     fs.readFileSync(path.join(dir, "whitepaper.pending-review.md"), "utf8"),
   );
@@ -164,17 +214,7 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
     writableClaimIds: [fixtureClaim.id],
   });
   if (!fs.existsSync(path.join(dir, "fact-check-report.json"))) runFactCheck({ inputDir: dir });
-  writeJsonIfMissing("narrative-quality-report.json", {
-    artifactType: "narrative-quality-report",
-    version: 1,
-    canSubmitReview: true,
-    failures: [],
-    counts: { chars: 2000, evidencePages: 1 },
-    sourceArtifacts: buildNarrativeSourceArtifacts({
-      markdownPath: path.join(dir, "whitepaper.pending-review.md"),
-      evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
-    }),
-  });
+  if (!fs.existsSync(path.join(dir, "narrative-quality-report.json"))) runNarrativeCheck({ inputDir: dir });
   const baseGates = {
     evidence: { pass: true, scorePercent: 100 },
     claims: { pass: true, scorePercent: 100 },
@@ -222,7 +262,7 @@ function writePassingTruthArtifacts(dir, options = {}) {
   const fs = require("node:fs");
   const path = require("node:path");
   const { runFactCheck } = require("./fact-check-whitepaper");
-  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
+  const { runNarrativeCheck } = require("./check-narrative");
   const {
     buildTruthReadinessReport,
     buildReadinessSourceArtifacts,
@@ -266,7 +306,7 @@ function writePassingTruthArtifacts(dir, options = {}) {
   if (!fs.existsSync(path.join(dir, "whitepaper.pending-review.md"))) {
     fs.writeFileSync(
       path.join(dir, "whitepaper.pending-review.md"),
-      "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。",
+      passingNarrativeMarkdown(),
       "utf8",
     );
   }
@@ -401,21 +441,7 @@ function writePassingTruthArtifacts(dir, options = {}) {
     "utf8",
   );
   runFactCheck({ inputDir: dir });
-  fs.writeFileSync(
-    path.join(dir, "narrative-quality-report.json"),
-    JSON.stringify({
-      artifactType: "narrative-quality-report",
-      version: 1,
-      canSubmitReview: true,
-      failures: [],
-      counts: { chars: 2000, evidencePages: 1 },
-      sourceArtifacts: buildNarrativeSourceArtifacts({
-        markdownPath: path.join(dir, "whitepaper.pending-review.md"),
-        evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
-      }),
-    }),
-    "utf8",
-  );
+  runNarrativeCheck({ inputDir: dir });
   const report = buildTruthReadinessReport({
     artifacts: loadReadinessInputs(dir),
     threshold: 0.95,
@@ -8179,8 +8205,8 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
     renderBatchAcceptanceMarkdown,
     runBatchAcceptanceCheck,
   } = require("./check-batch-acceptance");
-  const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
-  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
+  const { buildFactCheckSourceArtifacts, runFactCheck } = require("./fact-check-whitepaper");
+  const { runNarrativeCheck } = require("./check-narrative");
   const { buildReadinessSourceArtifacts, loadReadinessInputs } = require("./check-truth-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "batch-acceptance-"));
   const outputRoot = path.join(dir, "outputs");
@@ -8224,50 +8250,11 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   );
   fs.writeFileSync(
     path.join(systemOutput, "whitepaper.pending-review.md"),
-    [
-      "# AI保单数据闭环平台功能白皮书",
-      "",
-      "保单任务模块提供任务列表能力。[claim:function:保单任务:任务列表]",
-    ].join("\n"),
+    passingUiOnlyNarrativeMarkdown(),
     "utf8",
   );
-  fs.writeFileSync(
-    path.join(systemOutput, "fact-check-report.json"),
-    JSON.stringify({
-      artifactType: "fact-check-report",
-      version: 1,
-      canFinalize: true,
-      failures: [],
-      coveredWritableClaimIds: ["function:保单任务:任务列表"],
-      missingWritableClaimIds: [],
-      metrics: {
-        claimCount: 1,
-        writableClaimCount: 1,
-        checkedAssertions: 1,
-        supportedAssertions: 1,
-        supportedRatio: 1,
-        coveredWritableClaimCount: 1,
-        missingWritableClaimCount: 0,
-        writableClaimCoverageRatio: 1,
-        minWritableClaimCoverage: 0.8,
-      },
-      sourceArtifacts: buildFactCheckSourceArtifacts({
-        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
-        claimsPath: path.join(systemOutput, "verified-claims.json"),
-      }),
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(systemOutput, "narrative-quality-report.json"),
-    JSON.stringify(narrativeQualityReportFixture({
-      sourceArtifacts: buildNarrativeSourceArtifacts({
-        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
-        evidenceSummaryPath: path.join(systemOutput, "evidence-summary.json"),
-      }),
-    })),
-    "utf8",
-  );
+  runFactCheck({ inputDir: systemOutput });
+  runNarrativeCheck({ inputDir: systemOutput });
   fs.writeFileSync(
     path.join(systemOutput, "database-profile.json"),
     JSON.stringify({ artifactType: "database-profile", system: { code: "adp" }, tables: [], safety: { secretRedacted: true } }),
@@ -8516,19 +8503,11 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
 
   fs.writeFileSync(
     path.join(systemOutput, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。",
+    passingUiOnlyNarrativeMarkdown(),
     "utf8",
   );
-  fs.writeFileSync(
-    path.join(systemOutput, "narrative-quality-report.json"),
-    JSON.stringify(narrativeQualityReportFixture({
-      sourceArtifacts: buildNarrativeSourceArtifacts({
-        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
-        evidenceSummaryPath: path.join(systemOutput, "evidence-summary.json"),
-      }),
-    })),
-    "utf8",
-  );
+  runFactCheck({ inputDir: systemOutput });
+  runNarrativeCheck({ inputDir: systemOutput });
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
     JSON.stringify({
@@ -8586,39 +8565,13 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   );
   const currentGateFailed = buildBatchAcceptanceReport({ args: { config: configPath } });
   assert.equal(currentGateFailed.status, "blocked");
-  assert.equal(currentGateFailed.systems[0].scorePercent, 75);
+  assert.equal(currentGateFailed.systems[0].scorePercent, 72);
   assert.equal(currentGateFailed.systems[0].canSubmitReview, false);
   assert.ok(currentGateFailed.blockers.some((item) => item.id === "truth-readiness.current-gate-failed"));
   assert.ok(currentGateFailed.blockers.some((item) => item.id === "fact-check.writable-coverage"));
   assert.ok(currentGateFailed.blockers.some((item) => item.id === "fact-check.missing-writable-claims"));
 
-  fs.writeFileSync(
-    path.join(systemOutput, "fact-check-report.json"),
-    JSON.stringify({
-      artifactType: "fact-check-report",
-      version: 1,
-      canFinalize: true,
-      failures: [],
-      coveredWritableClaimIds: ["function:保单任务:任务列表"],
-      missingWritableClaimIds: [],
-      metrics: {
-        claimCount: 1,
-        writableClaimCount: 1,
-        checkedAssertions: 1,
-        supportedAssertions: 1,
-        supportedRatio: 1,
-        coveredWritableClaimCount: 1,
-        missingWritableClaimCount: 0,
-        writableClaimCoverageRatio: 1,
-        minWritableClaimCoverage: 0.8,
-      },
-      sourceArtifacts: buildFactCheckSourceArtifacts({
-        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
-        claimsPath: path.join(systemOutput, "verified-claims.json"),
-      }),
-    }),
-    "utf8",
-  );
+  runFactCheck({ inputDir: systemOutput });
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
     JSON.stringify(truthReadinessReportFixture(systemOutput, {
@@ -8690,7 +8643,7 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   writePipelineState(path.join(systemOutput, "pipeline-state.json"), state);
   fs.writeFileSync(
     path.join(systemOutput, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。",
+    passingNarrativeMarkdown(),
     "utf8",
   );
   writePassingTruthArtifacts(systemOutput, { requireDatabaseEvidence: true });
@@ -8818,7 +8771,7 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.ok(missingWhitepaper.blockers.some((item) => item.id === "delivery.whitepaper-missing"));
   fs.writeFileSync(
     path.join(systemOutput, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。",
+    passingNarrativeMarkdown(),
     "utf8",
   );
 
@@ -8895,7 +8848,7 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   const currentGateFailed = buildDeliveryReadinessReport({ acceptanceReport });
   assert.equal(currentGateFailed.status, "blocked");
   assert.equal(currentGateFailed.canDeliver, false);
-  assert.equal(currentGateFailed.systems[0].scorePercent, 75);
+  assert.equal(currentGateFailed.systems[0].scorePercent, 72);
   assert.equal(currentGateFailed.systems[0].canSubmitReview, false);
   assert.ok(currentGateFailed.blockers.some((item) => item.id === "delivery.current-truth-gate-failed"));
   writePassingTruthArtifacts(systemOutput, { requireDatabaseEvidence: true });
@@ -9014,7 +8967,7 @@ test("real run readiness unifies preflight and final delivery state", () => {
   fs.writeFileSync(path.join(systemOutput, "function-universe.json"), JSON.stringify({ functions: [] }), "utf8");
   fs.writeFileSync(
     path.join(systemOutput, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。",
+    passingUiOnlyNarrativeMarkdown(),
     "utf8",
   );
   writePassingTruthArtifacts(systemOutput, { databaseProfile: false });
@@ -9255,7 +9208,7 @@ test("real run readiness unifies preflight and final delivery state", () => {
   );
   fs.writeFileSync(
     path.join(systemOutput, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。",
+    passingNarrativeMarkdown(),
     "utf8",
   );
 
@@ -9281,7 +9234,7 @@ test("real run readiness unifies preflight and final delivery state", () => {
   );
   fs.writeFileSync(
     path.join(systemOutput, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。",
+    passingNarrativeMarkdown(),
     "utf8",
   );
 
@@ -10490,8 +10443,7 @@ test("pipeline truth nodes build claims and fact-check artifacts", async () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
-  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
+  const { runNarrativeCheck } = require("./check-narrative");
   const { runPipelineNode } = require("./run-whitepaper-pipeline");
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-truth-"));
   const projectRoot = path.resolve(__dirname, "..");
@@ -10536,12 +10488,7 @@ test("pipeline truth nodes build claims and fact-check artifacts", async () => {
   );
   fs.writeFileSync(
     path.join(systemOutput, "whitepaper.pending-review.md"),
-    [
-      "# AI保单数据闭环平台功能白皮书",
-      "### 任务列表",
-      "保单任务模块提供任务列表，用于查看保单任务。",
-      "",
-    ].join("\n"),
+    passingUiOnlyNarrativeMarkdown(),
     "utf8",
   );
 
@@ -10592,16 +10539,7 @@ test("pipeline truth nodes build claims and fact-check artifacts", async () => {
   await runPipelineNode("truth-claims", context);
   await runPipelineNode("fact-check", context);
   writeQualityReportFixture(systemOutput);
-  fs.writeFileSync(
-    path.join(systemOutput, "narrative-quality-report.json"),
-    JSON.stringify(narrativeQualityReportFixture({
-      sourceArtifacts: buildNarrativeSourceArtifacts({
-        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
-        evidenceSummaryPath: path.join(systemOutput, "evidence-summary.json"),
-      }),
-    })),
-    "utf8",
-  );
+  runNarrativeCheck({ inputDir: systemOutput });
   await runPipelineNode("truth-readiness", context);
 
   assert.equal(fs.existsSync(path.join(systemOutput, "data-dictionary.json")), true);
@@ -10620,8 +10558,8 @@ test("pipeline truth-readiness requires database evidence when databaseProfile i
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
-  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
+  const { runFactCheck } = require("./fact-check-whitepaper");
+  const { runNarrativeCheck } = require("./check-narrative");
   const { runPipelineNode } = require("./run-whitepaper-pipeline");
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-truth-db-required-"));
   const projectRoot = path.resolve(__dirname, "..");
@@ -10636,7 +10574,7 @@ test("pipeline truth-readiness requires database evidence when databaseProfile i
     projectRoot,
   };
   writeQualityReportFixture(systemOutput);
-  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
+  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), passingUiOnlyNarrativeMarkdown(), "utf8");
   fs.writeFileSync(
     path.join(systemOutput, "verified-claims.json"),
     JSON.stringify(verifiedClaimsFixture([
@@ -10650,26 +10588,8 @@ test("pipeline truth-readiness requires database evidence when databaseProfile i
     ])),
     "utf8",
   );
-  fs.writeFileSync(
-    path.join(systemOutput, "fact-check-report.json"),
-    JSON.stringify(factCheckReportFixture({
-      sourceArtifacts: buildFactCheckSourceArtifacts({
-        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
-        claimsPath: path.join(systemOutput, "verified-claims.json"),
-      }),
-    })),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(systemOutput, "narrative-quality-report.json"),
-    JSON.stringify(narrativeQualityReportFixture({
-      sourceArtifacts: buildNarrativeSourceArtifacts({
-        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
-        evidenceSummaryPath: path.join(systemOutput, "evidence-summary.json"),
-      }),
-    })),
-    "utf8",
-  );
+  runFactCheck({ inputDir: systemOutput });
+  runNarrativeCheck({ inputDir: systemOutput });
 
   await assert.rejects(
     () => runPipelineNode("truth-readiness", context),
@@ -10899,7 +10819,7 @@ test("approved review creates final markdown and word output", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "review-word-adp-"));
   fs.writeFileSync(
     path.join(dir, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\n支撑保单数据闭环管理。",
+    passingNarrativeMarkdown().replace("# AI保单数据闭环平台功能白皮书", "# AI保单数据闭环平台功能白皮书（待审核）"),
     "utf8",
   );
   writePassingTruthReadinessReport(dir);
@@ -10930,7 +10850,7 @@ test("approved review requires passing truth readiness gate", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "review-truth-gate-"));
   fs.writeFileSync(
     path.join(dir, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\n支撑保单数据闭环管理。",
+    passingNarrativeMarkdown().replace("# AI保单数据闭环平台功能白皮书", "# AI保单数据闭环平台功能白皮书（待审核）"),
     "utf8",
   );
 
@@ -10965,7 +10885,7 @@ test("approved review rejects stale truth readiness fingerprints", () => {
   const pendingPath = path.join(dir, "whitepaper.pending-review.md");
   fs.writeFileSync(
     pendingPath,
-    "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\n支撑保单数据闭环管理。",
+    passingNarrativeMarkdown().replace("# AI保单数据闭环平台功能白皮书", "# AI保单数据闭环平台功能白皮书（待审核）"),
     "utf8",
   );
   writePassingTruthReadinessReport(dir);
@@ -10987,7 +10907,7 @@ test("approved review rejects invalid truth readiness artifact contract", () => 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "review-invalid-truth-artifact-"));
   fs.writeFileSync(
     path.join(dir, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\n支撑保单数据闭环管理。",
+    passingNarrativeMarkdown().replace("# AI保单数据闭环平台功能白皮书", "# AI保单数据闭环平台功能白皮书（待审核）"),
     "utf8",
   );
   fs.writeFileSync(
@@ -11018,7 +10938,7 @@ test("approved review recomputes current truth readiness before final approval",
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "review-current-truth-"));
   fs.writeFileSync(
     path.join(dir, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\n支撑保单数据闭环管理。",
+    passingNarrativeMarkdown().replace("# AI保单数据闭环平台功能白皮书", "# AI保单数据闭环平台功能白皮书（待审核）"),
     "utf8",
   );
   fs.writeFileSync(
@@ -11082,7 +11002,7 @@ test("approved review rejects smoke truth readiness by default", () => {
   fs.mkdirSync(e2eDir, { recursive: true });
   fs.writeFileSync(
     path.join(e2eDir, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\n支撑保单数据闭环管理。",
+    passingNarrativeMarkdown().replace("# AI保单数据闭环平台功能白皮书", "# AI保单数据闭环平台功能白皮书（待审核）"),
     "utf8",
   );
   writePassingTruthReadinessReport(e2eDir);
@@ -11123,7 +11043,7 @@ test("approved review tolerates malformed optional pipeline state", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "review-bad-state-adp-"));
   fs.writeFileSync(
     path.join(dir, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\n支撑保单数据闭环管理。",
+    passingNarrativeMarkdown().replace("# AI保单数据闭环平台功能白皮书", "# AI保单数据闭环平台功能白皮书（待审核）"),
     "utf8",
   );
   writePassingTruthReadinessReport(dir);
@@ -14068,7 +13988,7 @@ test("truth readiness rejects stale fact check source fingerprints", () => {
   const os = require("node:os");
   const path = require("node:path");
   const { runFactCheck } = require("./fact-check-whitepaper");
-  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
+  const { runNarrativeCheck } = require("./check-narrative");
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-stale-fact-check-"));
   writeQualityReportFixture(dir);
@@ -14089,20 +14009,11 @@ test("truth readiness rejects stale fact check source fingerprints", () => {
   );
   fs.writeFileSync(
     path.join(dir, "whitepaper.pending-review.md"),
-    ["# AI保单数据闭环平台功能白皮书", "保单任务模块提供任务列表。"].join("\n"),
+    passingNarrativeMarkdown(),
     "utf8",
   );
   runFactCheck({ inputDir: dir });
-  fs.writeFileSync(
-    path.join(dir, "narrative-quality-report.json"),
-    JSON.stringify(narrativeQualityReportFixture({
-      sourceArtifacts: buildNarrativeSourceArtifacts({
-        markdownPath: path.join(dir, "whitepaper.pending-review.md"),
-        evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
-      }),
-    })),
-    "utf8",
-  );
+  runNarrativeCheck({ inputDir: dir });
 
   const passing = runTruthReadinessCheck({ inputDir: dir });
   assert.equal(passing.canSubmitReview, true);
@@ -14163,7 +14074,7 @@ test("truth readiness rejects stale database truth lineage", () => {
   const { buildFunctionUniverseFromDir } = require("./build-function-universe");
   const { buildVerifiedClaimsFromDir } = require("./build-verified-claims");
   const { runFactCheck } = require("./fact-check-whitepaper");
-  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
+  const { runNarrativeCheck } = require("./check-narrative");
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-lineage-db-"));
@@ -14215,20 +14126,11 @@ test("truth readiness rejects stale database truth lineage", () => {
     .map((claim) => `${claim.module || claim.subject || ""} ${claim.subject || claim.function || claim.entity || ""} [claim:${claim.id}]`);
   fs.writeFileSync(
     path.join(dir, "whitepaper.pending-review.md"),
-    ["# AI保单数据闭环平台功能白皮书", "", ...writableClaimLines].join("\n"),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(dir, "narrative-quality-report.json"),
-    JSON.stringify(narrativeQualityReportFixture({
-      sourceArtifacts: buildNarrativeSourceArtifacts({
-        markdownPath: path.join(dir, "whitepaper.pending-review.md"),
-        evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
-      }),
-    })),
+    [passingUiOnlyNarrativeMarkdown(), "", "## 5. 已验证声明索引", ...writableClaimLines].join("\n"),
     "utf8",
   );
   runFactCheck({ inputDir: dir });
+  runNarrativeCheck({ inputDir: dir });
 
   const passing = runTruthReadinessCheck({
     inputDir: dir,
@@ -15386,6 +15288,59 @@ test("truth readiness rejects forged narrative quality pass state", () => {
   assert.equal(report.gates.narrative.scorePercent, 0);
   assert.equal(report.canSubmitReview, false);
   assert.ok(report.gates.narrative.failures.some((item) => /zero failures/.test(item)));
+  assert.ok(report.blockers.some((item) => item.id === "narrative.invalid-artifact"));
+});
+
+test("truth readiness rejects forged narrative reports against current markdown", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { buildFactCheckSourceArtifacts, runFactCheck } = require("./fact-check-whitepaper");
+  const { buildNarrativeSourceArtifacts } = require("./check-narrative");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-forged-narrative-current-md-"));
+  writePassingTruthArtifacts(dir, { databaseProfile: false });
+  fs.writeFileSync(
+    path.join(dir, "whitepaper.pending-review.md"),
+    "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。",
+    "utf8",
+  );
+  runFactCheck({ inputDir: dir });
+  fs.writeFileSync(
+    path.join(dir, "fact-check-report.json"),
+    JSON.stringify({
+      ...JSON.parse(fs.readFileSync(path.join(dir, "fact-check-report.json"), "utf8")),
+      sourceArtifacts: buildFactCheckSourceArtifacts({
+        markdownPath: path.join(dir, "whitepaper.pending-review.md"),
+        claimsPath: path.join(dir, "verified-claims.json"),
+      }),
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "narrative-quality-report.json"),
+    JSON.stringify(narrativeQualityReportFixture({
+      canSubmitReview: true,
+      failures: [],
+      counts: { chars: 2000, evidencePages: 1 },
+      sourceArtifacts: buildNarrativeSourceArtifacts({
+        markdownPath: path.join(dir, "whitepaper.pending-review.md"),
+        evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
+      }),
+    })),
+    "utf8",
+  );
+
+  const report = runTruthReadinessCheck({ inputDir: dir });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.narrative.pass, false);
+  assert.equal(report.gates.narrative.artifactContractValid, false);
+  assert.ok(
+    report.gates.narrative.failures.some((item) =>
+      /deterministic narrative quality recomputation from current whitepaper\.pending-review\.md/.test(item),
+    ),
+  );
   assert.ok(report.blockers.some((item) => item.id === "narrative.invalid-artifact"));
 });
 
