@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const crypto = require("node:crypto");
 const path = require("node:path");
 const {
+  buildEvidenceSummary,
   buildQualityReport,
   computeEvidenceMetrics,
   parseArgs,
@@ -531,6 +532,7 @@ function buildLineageGate(artifacts = {}) {
     const failure = lineageMismatch(key, artifact, current, ownerFile);
     if (failure) failures.push(failure);
   }
+  failures.push(...validateEvidenceSummaryAgainstCurrentEvidence(artifacts));
   failures.push(...validateFunctionUniverseAgainstCurrentSources(artifacts.functionUniverse?.value || {}, artifacts));
   return {
     id: "lineage",
@@ -913,6 +915,50 @@ function functionUniverseProjection(value = {}) {
     coverage: value.coverage || {},
     rules: value.rules || {},
   };
+}
+
+function evidenceSummaryProjection(value = {}) {
+  return {
+    schemaVersion: value.schemaVersion || null,
+    guidance: value.guidance || "",
+    system: value.system || null,
+    metrics: value.metrics || {},
+    modules: sortByStableKey(Array.isArray(value.modules) ? value.modules : [], (item) => item.name || ""),
+    functions: sortByStableKey(
+      Array.isArray(value.functions) ? value.functions : [],
+      (item) => `${item.module || ""}::${item.name || ""}::${item.menuPath || ""}::${item.id || ""}`,
+    ),
+    containers: sortByStableKey(
+      Array.isArray(value.containers) ? value.containers : [],
+      (item) => `${item.sourcePageId || ""}::${item.id || ""}::${item.title || ""}`,
+    ),
+    pendingItems: sortByStableKey(Array.isArray(value.pendingItems) ? value.pendingItems : []),
+    failedPages: sortByStableKey(Array.isArray(value.failedPages) ? value.failedPages : []),
+    screenshots: sortByStableKey(
+      Array.isArray(value.screenshots) ? value.screenshots : [],
+      (item) => `${item.id || ""}::${item.file || ""}`,
+    ),
+  };
+}
+
+function validateEvidenceSummaryAgainstCurrentEvidence(artifacts = {}) {
+  const failures = [];
+  const evidenceSummary = artifacts.evidenceSummary || {};
+  if (evidenceSummary.status !== "ok" || !evidenceSummary.fingerprint?.exists) return failures;
+  const evidence = artifacts.evidence || {};
+  if (evidence.status !== "ok" || !evidence.fingerprint?.exists) return failures;
+  let recomputed;
+  try {
+    const currentEvidence = JSON.parse(JSON.stringify(evidence.value || {}));
+    recomputed = buildEvidenceSummary(currentEvidence);
+  } catch (error) {
+    failures.push(`evidence-summary.json could not be recomputed from current evidence.json: ${error.message}`);
+    return failures;
+  }
+  if (stableJson(evidenceSummaryProjection(evidenceSummary.value || {})) !== stableJson(evidenceSummaryProjection(recomputed))) {
+    failures.push("evidence-summary.json must match deterministic evidence-summary recomputation from current evidence.json.");
+  }
+  return failures;
 }
 
 function currentOptionalJsonSource(artifact = {}, fileName) {

@@ -277,13 +277,52 @@ function writePassingTruthArtifacts(dir, options = {}) {
     buildVerifiedClaimsArtifact,
   } = require("./build-verified-claims");
   const { buildQualitySourceArtifacts } = require("./check-quality");
+  if (!fs.existsSync(path.join(dir, "whitepaper.pending-review.md"))) {
+    fs.writeFileSync(
+      path.join(dir, "whitepaper.pending-review.md"),
+      passingNarrativeMarkdown(),
+      "utf8",
+    );
+  }
+  const fixtureClaim = buildFixtureWritableClaimFromMarkdown(
+    fs.readFileSync(path.join(dir, "whitepaper.pending-review.md"), "utf8"),
+  );
   if (!fs.existsSync(path.join(dir, "evidence.json"))) {
+    const menuPath = `${fixtureClaim.module} > ${fixtureClaim.function}`;
+    const screenshotId = `${fixtureClaim.id}:screenshot`;
     fs.writeFileSync(
       path.join(dir, "evidence.json"),
       JSON.stringify({
-        menuInventory: [{ title: "保单任务", status: "visited", url: "/policy-task" }],
-        pageInventory: [{ id: "policy-task", type: "page", screenshot: "screenshots/task.png" }],
-        actionInventory: [{ function: "任务列表", type: "query" }],
+        systemInfo: {
+          code: options.systemCode || "adp",
+          name: options.systemName || "AI保单数据闭环平台",
+        },
+        menuMap: [{ title: fixtureClaim.function, menuPath, status: "visited", url: "/policy-task" }],
+        pageInventory: [
+          {
+            id: "policy-task",
+            type: "page",
+            title: fixtureClaim.function,
+            menuPath,
+            url: "/policy-task",
+            screenshot: `${fixtureClaim.function}.png`,
+            evidenceRefs: [screenshotId],
+          },
+        ],
+        screenshotIndex: [
+          {
+            id: screenshotId,
+            file: `${fixtureClaim.function}.png`,
+            module: fixtureClaim.module,
+            function: fixtureClaim.function,
+            caption: fixtureClaim.function,
+          },
+        ],
+        actionInventory: [{ pageId: "policy-task", name: "查询", function: fixtureClaim.function, type: "query" }],
+        formInventory: [{ pageId: "policy-task", fields: [{ label: fixtureClaim.function }] }],
+        tableInventory: [{ pageId: "policy-task", columns: [fixtureClaim.function] }],
+        unverifiedContentLabeling: 1,
+        coreConclusionTraceability: 1,
       }),
       "utf8",
     );
@@ -309,16 +348,6 @@ function writePassingTruthArtifacts(dir, options = {}) {
     }),
     "utf8",
   );
-  if (!fs.existsSync(path.join(dir, "whitepaper.pending-review.md"))) {
-    fs.writeFileSync(
-      path.join(dir, "whitepaper.pending-review.md"),
-      passingNarrativeMarkdown(),
-      "utf8",
-    );
-  }
-  const fixtureClaim = buildFixtureWritableClaimFromMarkdown(
-    fs.readFileSync(path.join(dir, "whitepaper.pending-review.md"), "utf8"),
-  );
   const databaseProfilePath = path.join(dir, "database-profile.json");
   if (options.databaseProfile !== false) {
     fs.writeFileSync(
@@ -340,28 +369,7 @@ function writePassingTruthArtifacts(dir, options = {}) {
     }
   }
   const evidenceSummaryPath = path.join(dir, "evidence-summary.json");
-  const evidenceSummary = {
-    system: { code: options.systemCode || "adp", name: options.systemName || "AI保单数据闭环平台" },
-    modules: [
-      {
-        name: fixtureClaim.module,
-        entry: `${fixtureClaim.module} > ${fixtureClaim.function}`,
-      },
-    ],
-    functions: [
-      {
-        module: fixtureClaim.module,
-        name: fixtureClaim.function,
-        menuPath: `${fixtureClaim.module} > ${fixtureClaim.function}`,
-        actions: ["查询"],
-        queryFields: [fixtureClaim.function],
-        tableColumns: [fixtureClaim.function],
-        screenshots: [
-          { id: `${fixtureClaim.id}:screenshot`, file: `${fixtureClaim.function}.png` },
-        ],
-      },
-    ],
-  };
+  const evidenceSummary = buildEvidenceSummary(JSON.parse(fs.readFileSync(path.join(dir, "evidence.json"), "utf8")));
   fs.writeFileSync(evidenceSummaryPath, JSON.stringify(evidenceSummary), "utf8");
   const functionUniversePath = path.join(dir, "function-universe.json");
   const readOptionalJson = (filePath) => fs.existsSync(filePath)
@@ -8793,7 +8801,7 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   const currentGateFailed = buildDeliveryReadinessReport({ acceptanceReport });
   assert.equal(currentGateFailed.status, "blocked");
   assert.equal(currentGateFailed.canDeliver, false);
-  assert.equal(currentGateFailed.systems[0].scorePercent, 72);
+  assert.equal(currentGateFailed.systems[0].scorePercent, 75);
   assert.equal(currentGateFailed.systems[0].canSubmitReview, false);
   assert.ok(currentGateFailed.blockers.some((item) => item.id === "delivery.current-truth-gate-failed"));
   writePassingTruthArtifacts(systemOutput, { requireDatabaseEvidence: true });
@@ -14355,6 +14363,69 @@ test("truth readiness rejects forged database model artifacts against current pr
     ),
   );
   assert.ok(report.blockers.some((item) => item.id === "database.derived-artifact-invalid"));
+});
+
+test("truth readiness rejects forged evidence summary against current evidence", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { buildFunctionUniverseFromDir } = require("./build-function-universe");
+  const { buildVerifiedClaimsFromDir } = require("./build-verified-claims");
+  const { runFactCheck } = require("./fact-check-whitepaper");
+  const { runNarrativeCheck } = require("./check-narrative");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-forged-evidence-summary-"));
+  writePassingTruthArtifacts(dir, { databaseProfile: false });
+
+  const evidenceSummaryPath = path.join(dir, "evidence-summary.json");
+  const forged = JSON.parse(fs.readFileSync(evidenceSummaryPath, "utf8"));
+  forged.modules.push({
+    name: "赔付管理",
+    entry: "赔付管理 > 赔付审核台账",
+    summary: "赔付管理用于处理赔付审核台账。",
+  });
+  forged.functions.push({
+    id: "pay-ledger",
+    module: "赔付管理",
+    name: "赔付审核台账",
+    menuPath: "赔付管理 > 赔付审核台账",
+    title: "赔付审核台账",
+    url: "/pay-ledger",
+    actions: ["查询"],
+    queryFields: ["赔付审核台账"],
+    tableColumns: ["赔付审核台账", "审核状态"],
+    screenshots: [{ id: "pay-ledger-shot", file: "screenshots/pay-ledger.png" }],
+    hasContainerEvidence: false,
+  });
+  fs.writeFileSync(evidenceSummaryPath, JSON.stringify(forged), "utf8");
+
+  buildFunctionUniverseFromDir(dir);
+  buildVerifiedClaimsFromDir(dir);
+  const verifiedClaims = JSON.parse(fs.readFileSync(path.join(dir, "verified-claims.json"), "utf8"));
+  const writableClaimLines = verifiedClaims.claims
+    .filter((claim) => claim.writable)
+    .map((claim) => `${claim.module || claim.subject || ""} ${claim.subject || claim.function || claim.entity || ""} [claim:${claim.id}]`);
+  fs.writeFileSync(
+    path.join(dir, "whitepaper.pending-review.md"),
+    [passingUiOnlyNarrativeMarkdown(), "", "## 5. 已验证声明索引", ...writableClaimLines].join("\n"),
+    "utf8",
+  );
+  runFactCheck({ inputDir: dir });
+  runNarrativeCheck({ inputDir: dir });
+
+  const report = runTruthReadinessCheck({ inputDir: dir });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.claims.pass, true);
+  assert.equal(report.gates.factCheck.pass, true);
+  assert.equal(report.gates.narrative.pass, true);
+  assert.equal(report.gates.lineage.pass, false);
+  assert.ok(
+    report.gates.lineage.failures.some((item) =>
+      /evidence-summary\.json must match deterministic evidence-summary recomputation from current evidence\.json/.test(item),
+    ),
+  );
+  assert.ok(report.blockers.some((item) => item.id === "truth.lineage-stale"));
 });
 
 test("truth readiness rejects forged function universe against current sources", () => {
