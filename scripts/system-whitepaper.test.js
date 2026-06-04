@@ -123,6 +123,8 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
     version: 1,
     canFinalize: true,
     failures: [],
+    coveredWritableClaimIds: ["function:保单任务:任务列表"],
+    missingWritableClaimIds: [],
     metrics: {
       claimCount: 1,
       writableClaimCount: 1,
@@ -378,6 +380,8 @@ function writePassingTruthArtifacts(dir, options = {}) {
       version: 1,
       canFinalize: true,
       failures: [],
+      coveredWritableClaimIds: ["function:保单任务:任务列表"],
+      missingWritableClaimIds: [],
       metrics: {
         claimCount: 1,
         writableClaimCount: 1,
@@ -8217,7 +8221,15 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
     ),
     "utf8",
   );
-  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
+  fs.writeFileSync(
+    path.join(systemOutput, "whitepaper.pending-review.md"),
+    [
+      "# AI保单数据闭环平台功能白皮书",
+      "",
+      "保单任务模块提供任务列表能力。[claim:function:保单任务:任务列表]",
+    ].join("\n"),
+    "utf8",
+  );
   fs.writeFileSync(
     path.join(systemOutput, "fact-check-report.json"),
     JSON.stringify({
@@ -8225,6 +8237,8 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
       version: 1,
       canFinalize: true,
       failures: [],
+      coveredWritableClaimIds: ["function:保单任务:任务列表"],
+      missingWritableClaimIds: [],
       metrics: {
         claimCount: 1,
         writableClaimCount: 1,
@@ -8501,6 +8515,16 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
 
   fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "# AI保单数据闭环平台功能白皮书", "utf8");
   fs.writeFileSync(
+    path.join(systemOutput, "narrative-quality-report.json"),
+    JSON.stringify(narrativeQualityReportFixture({
+      sourceArtifacts: buildNarrativeSourceArtifacts({
+        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
+        evidenceSummaryPath: path.join(systemOutput, "evidence-summary.json"),
+      }),
+    })),
+    "utf8",
+  );
+  fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
     JSON.stringify({
       ...JSON.parse(fs.readFileSync(path.join(systemOutput, "truth-readiness-report.json"), "utf8")),
@@ -8517,8 +8541,12 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   fs.writeFileSync(
     path.join(systemOutput, "fact-check-report.json"),
     JSON.stringify({
+      artifactType: "fact-check-report",
+      version: 1,
       canFinalize: false,
       failures: [],
+      coveredWritableClaimIds: [],
+      missingWritableClaimIds: ["function:保单任务:任务列表"],
       metrics: {
         claimCount: 1,
         writableClaimCount: 1,
@@ -8530,7 +8558,10 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
         writableClaimCoverageRatio: 0,
         minWritableClaimCoverage: 0.8,
       },
-      missingWritableClaimIds: ["function:保单任务:任务列表"],
+      sourceArtifacts: buildFactCheckSourceArtifacts({
+        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
+        claimsPath: path.join(systemOutput, "verified-claims.json"),
+      }),
     }),
     "utf8",
   );
@@ -8559,8 +8590,12 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   fs.writeFileSync(
     path.join(systemOutput, "fact-check-report.json"),
     JSON.stringify({
+      artifactType: "fact-check-report",
+      version: 1,
       canFinalize: true,
       failures: [],
+      coveredWritableClaimIds: ["function:保单任务:任务列表"],
+      missingWritableClaimIds: [],
       metrics: {
         claimCount: 1,
         writableClaimCount: 1,
@@ -8572,6 +8607,10 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
         writableClaimCoverageRatio: 1,
         minWritableClaimCoverage: 0.8,
       },
+      sourceArtifacts: buildFactCheckSourceArtifacts({
+        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
+        claimsPath: path.join(systemOutput, "verified-claims.json"),
+      }),
     }),
     "utf8",
   );
@@ -8607,6 +8646,7 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   const path = require("node:path");
   const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
   const { buildReadinessSourceArtifacts, loadReadinessInputs } = require("./check-truth-readiness");
+  const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
   const {
     buildDeliveryReadinessReport,
     buildDeliveryReadinessStateSummary,
@@ -8796,8 +8836,12 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   fs.writeFileSync(
     path.join(systemOutput, "fact-check-report.json"),
     JSON.stringify({
+      artifactType: "fact-check-report",
+      version: 1,
       canFinalize: false,
       failures: [],
+      coveredWritableClaimIds: [],
+      missingWritableClaimIds: ["function:保单任务:任务列表"],
       metrics: {
         claimCount: 1,
         writableClaimCount: 1,
@@ -8809,7 +8853,10 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
         writableClaimCoverageRatio: 0,
         minWritableClaimCoverage: 0.8,
       },
-      missingWritableClaimIds: ["function:保单任务:任务列表"],
+      sourceArtifacts: buildFactCheckSourceArtifacts({
+        markdownPath: path.join(systemOutput, "whitepaper.pending-review.md"),
+        claimsPath: path.join(systemOutput, "verified-claims.json"),
+      }),
     }),
     "utf8",
   );
@@ -13552,15 +13599,25 @@ function writeVerifiedClaimsFixture(dir, claims = [], overrides = {}) {
 }
 
 function factCheckReportFixture(overrides = {}) {
+  const {
+    coveredWritableClaimIds: coveredOverrides,
+    missingWritableClaimIds: missingOverrides,
+    metrics: metricsOverrides,
+    ...restOverrides
+  } = overrides;
+  const coveredWritableClaimIds = coveredOverrides || ["function:保单任务:任务列表"];
+  const missingWritableClaimIds = missingOverrides || [];
   const baseMetrics = {
     claimCount: 1,
     writableClaimCount: 1,
     checkedAssertions: 1,
     supportedAssertions: 1,
     supportedRatio: 1,
-    coveredWritableClaimCount: 1,
-    missingWritableClaimCount: 0,
-    writableClaimCoverageRatio: 1,
+    coveredWritableClaimCount: coveredWritableClaimIds.length,
+    missingWritableClaimCount: missingWritableClaimIds.length,
+    writableClaimCoverageRatio: coveredWritableClaimIds.length + missingWritableClaimIds.length
+      ? coveredWritableClaimIds.length / (coveredWritableClaimIds.length + missingWritableClaimIds.length)
+      : 1,
     minWritableClaimCoverage: 0.8,
   };
   return {
@@ -13568,11 +13625,13 @@ function factCheckReportFixture(overrides = {}) {
     version: 1,
     canFinalize: true,
     failures: [],
+    coveredWritableClaimIds,
+    missingWritableClaimIds,
     metrics: {
       ...baseMetrics,
-      ...(overrides.metrics || {}),
+      ...(metricsOverrides || {}),
     },
-    ...overrides,
+    ...restOverrides,
   };
 }
 
@@ -14078,7 +14137,7 @@ test("truth readiness rejects stale database truth lineage", () => {
   const { buildDatabaseModelFromDir } = require("./build-database-model");
   const { buildFunctionUniverseFromDir } = require("./build-function-universe");
   const { buildVerifiedClaimsFromDir } = require("./build-verified-claims");
-  const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
+  const { runFactCheck } = require("./fact-check-whitepaper");
   const { buildNarrativeSourceArtifacts } = require("./check-narrative");
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
 
@@ -14125,9 +14184,13 @@ test("truth readiness rejects stale database truth lineage", () => {
   buildDatabaseModelFromDir(dir, { generatedAt: "2026-06-03T00:00:00.000Z" });
   buildFunctionUniverseFromDir(dir);
   buildVerifiedClaimsFromDir(dir);
+  const verifiedClaims = JSON.parse(fs.readFileSync(path.join(dir, "verified-claims.json"), "utf8"));
+  const writableClaimLines = verifiedClaims.claims
+    .filter((claim) => claim.writable)
+    .map((claim) => `${claim.module || claim.subject || ""} ${claim.subject || claim.function || claim.entity || ""} [claim:${claim.id}]`);
   fs.writeFileSync(
     path.join(dir, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。",
+    ["# AI保单数据闭环平台功能白皮书", "", ...writableClaimLines].join("\n"),
     "utf8",
   );
   fs.writeFileSync(
@@ -14140,16 +14203,7 @@ test("truth readiness rejects stale database truth lineage", () => {
     })),
     "utf8",
   );
-  fs.writeFileSync(
-    path.join(dir, "fact-check-report.json"),
-    JSON.stringify(factCheckReportFixture({
-      sourceArtifacts: buildFactCheckSourceArtifacts({
-        markdownPath: path.join(dir, "whitepaper.pending-review.md"),
-        claimsPath: path.join(dir, "verified-claims.json"),
-      }),
-    })),
-    "utf8",
-  );
+  runFactCheck({ inputDir: dir });
 
   const passing = runTruthReadinessCheck({
     inputDir: dir,
@@ -14328,7 +14382,12 @@ test("truth readiness passes only when evidence claims fact-check and narrative 
     factCheck: {
       file: "fact-check-report.json",
       status: "ok",
-      value: factCheckReportFixture(),
+      value: factCheckReportFixture({
+        metrics: {
+          claimCount: 2,
+          writableClaimCount: 1,
+        },
+      }),
     },
     narrative: {
       file: "narrative-quality-report.json",
@@ -15073,6 +15132,73 @@ test("truth readiness rejects forged fact-check coverage metrics", () => {
   assert.ok(report.blockers.some((item) => item.id === "fact-check.invalid-artifact"));
 });
 
+test("truth readiness rejects fact-check reports not matching current verified claims", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const artifacts = {
+    quality: {
+      file: "quality-report.json",
+      status: "ok",
+      value: qualityReportFixture(),
+    },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: verifiedClaimsFixture([
+        {
+          id: "function:保单任务:任务列表",
+          subject: "任务列表",
+          module: "保单任务",
+          status: "confirmed",
+          writable: true,
+        },
+        {
+          id: "function:保单任务:任务详情",
+          subject: "任务详情",
+          module: "保单任务",
+          status: "confirmed",
+          writable: true,
+        },
+      ]),
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: factCheckReportFixture({
+        canFinalize: true,
+        coveredWritableClaimIds: ["function:保单任务:任务列表"],
+        missingWritableClaimIds: [],
+        metrics: {
+          claimCount: 1,
+          writableClaimCount: 1,
+          checkedAssertions: 1,
+          supportedAssertions: 1,
+          supportedRatio: 1,
+          coveredWritableClaimCount: 1,
+          missingWritableClaimCount: 0,
+          writableClaimCoverageRatio: 1,
+          minWritableClaimCoverage: 0.8,
+        },
+      }),
+    },
+    narrative: {
+      file: "narrative-quality-report.json",
+      status: "ok",
+      value: narrativeQualityReportFixture(),
+    },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.gates.factCheck.pass, false);
+  assert.equal(report.gates.factCheck.artifactContractValid, false);
+  assert.equal(report.gates.factCheck.scorePercent, 0);
+  assert.equal(report.canSubmitReview, false);
+  assert.ok(report.gates.factCheck.failures.some((item) => /current verified-claims\.json/.test(item)));
+  assert.ok(report.gates.factCheck.failures.some((item) => /metrics\.missingWritableClaimCount must match/.test(item)));
+  assert.ok(report.gates.factCheck.failures.some((item) => /missingWritableClaimIds must match/.test(item)));
+  assert.ok(report.blockers.some((item) => item.id === "fact-check.invalid-artifact"));
+});
+
 test("truth readiness rejects invalid narrative quality report artifact contract", () => {
   const { buildTruthReadinessReport } = require("./check-truth-readiness");
   const artifacts = {
@@ -15278,15 +15404,22 @@ test("truth readiness blocks low writable claim coverage", () => {
     claims: {
       file: "verified-claims.json",
       status: "ok",
-      value: {
-        rules: {
-          lowConfidenceNotWritable: true,
-          databaseOnlyNotConfirmed: true,
-          databaseOnlyNotWritable: true,
+      value: verifiedClaimsFixture([
+        {
+          id: "function:保单任务:任务列表",
+          subject: "任务列表",
+          module: "保单任务",
+          status: "confirmed",
+          writable: true,
         },
-        metrics: { claimCount: 2, writableClaimCount: 2, confirmedCount: 2, inferredCount: 0, weakCount: 0 },
-        writableClaimIds: ["function:保单任务:任务列表", "function:保单任务:任务详情"],
-      },
+        {
+          id: "function:保单任务:任务详情",
+          subject: "任务详情",
+          module: "保单任务",
+          status: "confirmed",
+          writable: true,
+        },
+      ]),
     },
     factCheck: {
       file: "fact-check-report.json",
@@ -15294,6 +15427,7 @@ test("truth readiness blocks low writable claim coverage", () => {
       value: factCheckReportFixture({
         canFinalize: false,
         failures: ["Writable claim coverage is below the required threshold."],
+        coveredWritableClaimIds: ["function:保单任务:任务列表"],
         missingWritableClaimIds: ["function:保单任务:任务详情"],
         metrics: {
           claimCount: 2,

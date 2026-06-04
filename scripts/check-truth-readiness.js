@@ -103,6 +103,13 @@ function assertMetricEquals(metrics = {}, key, expected, fileName, containerName
   }
 }
 
+function sameStringSet(left = [], right = []) {
+  const normalize = (items) => [...new Set(items.map((item) => String(item ?? "")))].sort();
+  const a = normalize(left);
+  const b = normalize(right);
+  return a.length === b.length && a.every((item, index) => item === b[index]);
+}
+
 function artifactKeyText(value) {
   return String(value || "").trim();
 }
@@ -798,7 +805,60 @@ function buildClaimsGate(artifact) {
   };
 }
 
-function buildFactCheckGate(artifact) {
+function validateFactCheckAgainstCurrentClaims(value = {}, claimsArtifact = {}) {
+  const failures = [];
+  if (claimsArtifact?.status !== "ok") return failures;
+  const claims = Array.isArray(claimsArtifact.value?.claims) ? claimsArtifact.value.claims : [];
+  const writableClaimIds = claims
+    .filter((claim) => claim && claim.writable === true)
+    .map((claim) => String(claim.id || ""))
+    .filter(Boolean)
+    .sort();
+  const coveredWritableClaimIds = Array.isArray(value.coveredWritableClaimIds)
+    ? [...new Set(value.coveredWritableClaimIds.map(String))].sort()
+    : [];
+  const missingWritableClaimIds = Array.isArray(value.missingWritableClaimIds)
+    ? [...new Set(value.missingWritableClaimIds.map(String))].sort()
+    : [];
+  const coveredSet = new Set(coveredWritableClaimIds);
+  const missingSet = new Set(missingWritableClaimIds);
+  const expectedMissing = writableClaimIds.filter((id) => !coveredSet.has(id)).sort();
+  const currentCoveredCount = coveredWritableClaimIds.filter((id) => writableClaimIds.includes(id)).length;
+  const expectedCoverageRatio = writableClaimIds.length
+    ? currentCoveredCount / writableClaimIds.length
+    : 1;
+  const metrics = value.metrics || {};
+  if (Number(metrics.claimCount || 0) !== claims.length) {
+    failures.push("fact-check-report.json metrics.claimCount must match current verified-claims.json.");
+  }
+  if (Number(metrics.writableClaimCount || 0) !== writableClaimIds.length) {
+    failures.push("fact-check-report.json metrics.writableClaimCount must match current verified-claims.json.");
+  }
+  if (Number(metrics.coveredWritableClaimCount || 0) !== currentCoveredCount) {
+    failures.push("fact-check-report.json metrics.coveredWritableClaimCount must match current covered writable claims.");
+  }
+  if (Number(metrics.missingWritableClaimCount || 0) !== expectedMissing.length) {
+    failures.push("fact-check-report.json metrics.missingWritableClaimCount must match current missing writable claims.");
+  }
+  if (coveredWritableClaimIds.some((id) => !writableClaimIds.includes(id))) {
+    failures.push("fact-check-report.json coveredWritableClaimIds must reference current writable claims only.");
+  }
+  if (missingWritableClaimIds.some((id) => !writableClaimIds.includes(id))) {
+    failures.push("fact-check-report.json missingWritableClaimIds must reference current writable claims only.");
+  }
+  if (!sameStringSet(missingWritableClaimIds, expectedMissing)) {
+    failures.push("fact-check-report.json missingWritableClaimIds must match current uncovered writable claims.");
+  }
+  if (coveredWritableClaimIds.some((id) => missingSet.has(id))) {
+    failures.push("fact-check-report.json coveredWritableClaimIds and missingWritableClaimIds must not overlap.");
+  }
+  if (Math.abs(Number(metrics.writableClaimCoverageRatio || 0) - expectedCoverageRatio) > 0.000001) {
+    failures.push("fact-check-report.json metrics.writableClaimCoverageRatio must match current verified-claims.json.");
+  }
+  return failures;
+}
+
+function buildFactCheckGate(artifact, artifacts = {}) {
   const value = artifact.value || {};
   const contractFailures = [];
   if (artifact.status === "ok") {
@@ -807,6 +867,7 @@ function buildFactCheckGate(artifact) {
     } catch (error) {
       contractFailures.push(error.message);
     }
+    contractFailures.push(...validateFactCheckAgainstCurrentClaims(value, artifacts.claims));
   }
   const artifactContractValid = artifact.status === "ok" && contractFailures.length === 0;
   const metrics = value.metrics || {};
@@ -1418,6 +1479,7 @@ function buildTruthReadinessReport(input = {}) {
     factCheck: buildFactCheckFreshnessGate(
       buildFactCheckGate(
         artifacts.factCheck || { status: "missing", file: REQUIRED_ARTIFACTS.factCheck },
+        artifacts,
       ),
       artifacts,
     ),
