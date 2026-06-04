@@ -119,6 +119,17 @@ function sameStringSet(left = [], right = []) {
   return a.length === b.length && a.every((item, index) => item === b[index]);
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function numbersMatch(left, right, epsilon = 0.000001) {
   return Math.abs(Number(left || 0) - Number(right || 0)) <= epsilon;
 }
@@ -851,7 +862,70 @@ function buildEvidenceGate(artifact, artifacts = {}) {
   };
 }
 
-function buildClaimsGate(artifact) {
+function findClaimSourceMismatches(artifacts = {}) {
+  const claims = artifacts.claims || {};
+  const functionUniverse = artifacts.functionUniverse || {};
+  const recorded = claims?.value?.sourceArtifacts?.functionUniverse;
+  const recordedSourceExists = normalizeSourceFingerprint(recorded || {}).exists;
+  if (!recorded && !functionUniverse?.fingerprint?.exists) return [];
+  if (!recordedSourceExists && !functionUniverse?.fingerprint?.exists) return [];
+  const failure = lineageMismatch("functionUniverse", claims, functionUniverse, "verified-claims.json");
+  return failure ? [failure] : [];
+}
+
+function verifiedClaimsProjection(value = {}) {
+  const claims = Array.isArray(value.claims) ? value.claims : [];
+  return {
+    claims: [...claims].sort((left, right) => String(left.id || "").localeCompare(String(right.id || ""))),
+    writableClaimIds: Array.isArray(value.writableClaimIds)
+      ? [...new Set(value.writableClaimIds.map(String))].sort()
+      : [],
+    metrics: value.metrics || {},
+    rules: value.rules || {},
+  };
+}
+
+function validateClaimsAgainstCurrentFunctionUniverse(value = {}, artifacts = {}) {
+  const failures = [];
+  const functionUniverse = artifacts.functionUniverse || {};
+  if (functionUniverse.status !== "ok" || !functionUniverse.fingerprint?.exists) return failures;
+  if (findClaimSourceMismatches(artifacts).length) return failures;
+  let recomputed;
+  try {
+    const { buildVerifiedClaimsArtifact } = require("./build-verified-claims");
+    recomputed = buildVerifiedClaimsArtifact({ functionUniverse: functionUniverse.value || {} });
+  } catch (error) {
+    failures.push(`verified-claims.json could not be recomputed from current function-universe.json: ${error.message}`);
+    return failures;
+  }
+  if (stableJson(verifiedClaimsProjection(value).claims) !== stableJson(verifiedClaimsProjection(recomputed).claims)) {
+    failures.push("verified-claims.json claims must match deterministic verified-claims recomputation from current function-universe.json.");
+  }
+  if (!sameStringSet(value.writableClaimIds || [], recomputed.writableClaimIds || [])) {
+    failures.push("verified-claims.json writableClaimIds must match deterministic verified-claims recomputation from current function-universe.json.");
+  }
+  const metrics = value.metrics || {};
+  const recomputedMetrics = recomputed.metrics || {};
+  for (const key of [
+    "claimCount",
+    "writableClaimCount",
+    "confirmedCount",
+    "inferredCount",
+    "weakCount",
+    "databaseOnlyClaimCount",
+    "supportedRatio",
+  ]) {
+    if (!numbersMatch(metrics[key], recomputedMetrics[key])) {
+      failures.push(`verified-claims.json metrics.${key} must match deterministic verified-claims recomputation from current function-universe.json.`);
+    }
+  }
+  if (stableJson(value.rules || {}) !== stableJson(recomputed.rules || {})) {
+    failures.push("verified-claims.json rules must match deterministic verified-claims recomputation from current function-universe.json.");
+  }
+  return failures;
+}
+
+function buildClaimsGate(artifact, artifacts = {}) {
   const value = artifact.value || {};
   const contractFailures = [];
   if (artifact.status === "ok") {
@@ -860,6 +934,7 @@ function buildClaimsGate(artifact) {
     } catch (error) {
       contractFailures.push(error.message);
     }
+    contractFailures.push(...validateClaimsAgainstCurrentFunctionUniverse(value, artifacts));
   }
   const artifactContractValid = artifact.status === "ok" && contractFailures.length === 0;
   const metrics = value.metrics || {};
@@ -1679,7 +1754,7 @@ function buildTruthReadinessReport(input = {}) {
   const lineageGate = buildLineageGate(artifacts);
   const gates = {
     evidence: buildEvidenceGate(artifacts.quality || { status: "missing", file: REQUIRED_ARTIFACTS.quality }, artifacts),
-    claims: buildClaimsGate(artifacts.claims || { status: "missing", file: REQUIRED_ARTIFACTS.claims }),
+    claims: buildClaimsGate(artifacts.claims || { status: "missing", file: REQUIRED_ARTIFACTS.claims }, artifacts),
     factCheck: buildFactCheckFreshnessGate(
       buildFactCheckGate(
         artifacts.factCheck || { status: "missing", file: REQUIRED_ARTIFACTS.factCheck },
@@ -1787,15 +1862,6 @@ function main() {
   }
 }
 
-if (require.main === module) {
-  try {
-    main();
-  } catch (error) {
-    console.error(error.message);
-    process.exit(1);
-  }
-}
-
 module.exports = {
   DEFAULT_THRESHOLD,
   assertValidDatabaseProfileArtifact,
@@ -1815,3 +1881,12 @@ module.exports = {
   runTruthReadinessCheck,
   scanDatabaseProfileSafety,
 };
+
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
+}

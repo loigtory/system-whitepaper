@@ -269,7 +269,10 @@ function writePassingTruthArtifacts(dir, options = {}) {
     loadReadinessInputs,
   } = require("./check-truth-readiness");
   const { buildSourceArtifacts: buildUniverseSourceArtifacts } = require("./build-function-universe");
-  const { buildSourceArtifacts: buildClaimSourceArtifacts } = require("./build-verified-claims");
+  const {
+    buildSourceArtifacts: buildClaimSourceArtifacts,
+    buildVerifiedClaimsArtifact,
+  } = require("./build-verified-claims");
   const { buildQualitySourceArtifacts } = require("./check-quality");
   if (!fs.existsSync(path.join(dir, "evidence.json"))) {
     fs.writeFileSync(
@@ -339,7 +342,14 @@ function writePassingTruthArtifacts(dir, options = {}) {
         name: fixtureClaim.function,
         module: fixtureClaim.module,
         confidence: "high",
-        sources: [{ type: "ui-function", id: fixtureClaim.id, label: fixtureClaim.function }],
+        menuPath: `${fixtureClaim.module} > ${fixtureClaim.function}`,
+        actions: ["查询"],
+        queryFields: [fixtureClaim.function],
+        tableColumns: [fixtureClaim.function],
+        sources: [
+          { type: "ui-function", id: fixtureClaim.id, label: fixtureClaim.function },
+          { type: "screenshot", id: `${fixtureClaim.id}:screenshot`, label: `${fixtureClaim.function}.png` },
+        ],
       },
     ],
     entities: [],
@@ -405,41 +415,12 @@ function writePassingTruthArtifacts(dir, options = {}) {
     }),
     "utf8",
   );
-  fs.writeFileSync(
-    path.join(dir, "verified-claims.json"),
-    JSON.stringify({
-      artifactType: "verified-claims",
-      version: 1,
-      claims: [
-        {
-          id: fixtureClaim.id,
-          subject: fixtureClaim.subject,
-          module: fixtureClaim.module,
-          function: fixtureClaim.function,
-          status: "confirmed",
-          writable: true,
-        },
-      ],
-      rules: {
-        lowConfidenceNotWritable: true,
-        databaseOnlyNotConfirmed: true,
-        databaseOnlyNotWritable: true,
-      },
-      metrics: {
-        claimCount: 1,
-        writableClaimCount: 1,
-        confirmedCount: 1,
-        inferredCount: 0,
-        weakCount: 0,
-        databaseOnlyClaimCount: 0,
-      },
-      writableClaimIds: [fixtureClaim.id],
-      sourceArtifacts: buildClaimSourceArtifacts({
-        functionUniversePath,
-      }),
-    }),
-    "utf8",
-  );
+  const verifiedClaims = buildVerifiedClaimsArtifact({
+    functionUniverse: JSON.parse(fs.readFileSync(functionUniversePath, "utf8")),
+    sourceArtifacts: buildClaimSourceArtifacts({ functionUniversePath }),
+    generatedAt: "2026-06-03T00:00:30.000Z",
+  });
+  fs.writeFileSync(path.join(dir, "verified-claims.json"), JSON.stringify(verifiedClaims), "utf8");
   runFactCheck({ inputDir: dir });
   runNarrativeCheck({ inputDir: dir });
   const report = buildTruthReadinessReport({
@@ -14839,6 +14820,48 @@ test("truth readiness rejects forged verified claims artifact metrics", () => {
   assert.equal(report.gates.claims.scorePercent, 0);
   assert.equal(report.canSubmitReview, false);
   assert.ok(report.gates.claims.failures.some((item) => /metrics\.claimCount must match/.test(item)));
+  assert.ok(report.blockers.some((item) => item.id === "claims.invalid-artifact"));
+});
+
+test("truth readiness rejects forged verified claims against current function universe", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { buildSourceArtifacts: buildClaimSourceArtifacts } = require("./build-verified-claims");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-forged-claims-current-universe-"));
+  writePassingTruthArtifacts(dir, { databaseProfile: false });
+  const functionUniversePath = path.join(dir, "function-universe.json");
+  fs.writeFileSync(
+    path.join(dir, "verified-claims.json"),
+    JSON.stringify(verifiedClaimsFixture(
+      [
+        {
+          id: "function:赔付管理:赔付审核台账",
+          subject: "赔付审核台账",
+          module: "赔付管理",
+          function: "赔付审核台账",
+          status: "confirmed",
+          writable: true,
+        },
+      ],
+      {
+        sourceArtifacts: buildClaimSourceArtifacts({ functionUniversePath }),
+      },
+    )),
+    "utf8",
+  );
+
+  const report = runTruthReadinessCheck({ inputDir: dir });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.claims.pass, false);
+  assert.equal(report.gates.claims.artifactContractValid, false);
+  assert.ok(
+    report.gates.claims.failures.some((item) =>
+      /deterministic verified-claims recomputation from current function-universe\.json/.test(item),
+    ),
+  );
   assert.ok(report.blockers.some((item) => item.id === "claims.invalid-artifact"));
 });
 
