@@ -8470,6 +8470,17 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
     "utf8",
   );
 
+  fs.writeFileSync(
+    path.join(systemOutput, "whitepaper.final.md"),
+    `${passingUiOnlyNarrativeMarkdown()}\n\n## 手工篡改的终稿内容\n这里模拟终稿绕过待审稿和事实核验。`,
+    "utf8",
+  );
+  const forgedFinalWhitepaper = buildBatchAcceptanceReport({ args: { config: configPath } });
+  assert.equal(forgedFinalWhitepaper.status, "blocked");
+  assert.equal(forgedFinalWhitepaper.canSubmitAll, false);
+  assert.ok(forgedFinalWhitepaper.blockers.some((item) => item.id === "whitepaper.final-not-approved-pending"));
+  fs.unlinkSync(path.join(systemOutput, "whitepaper.final.md"));
+
   fs.writeFileSync(path.join(systemOutput, "quality-report.json"), "{\"canFinalize\":false}", "utf8");
   const stale = buildBatchAcceptanceReport({ args: { config: configPath } });
   assert.equal(stale.status, "blocked");
@@ -8558,6 +8569,7 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
   const { buildReadinessSourceArtifacts, loadReadinessInputs } = require("./check-truth-readiness");
   const { buildFactCheckSourceArtifacts } = require("./fact-check-whitepaper");
+  const { finalizeWhitepaperMarkdown } = require("./system-whitepaper-lib");
   const {
     buildDeliveryReadinessReport,
     buildDeliveryReadinessStateSummary,
@@ -8688,11 +8700,11 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.md")), true);
 
   const finalPath = path.join(systemOutput, "whitepaper.final.md");
-  fs.writeFileSync(
-    finalPath,
-    "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。",
-    "utf8",
+  const approvedFinalMarkdown = finalizeWhitepaperMarkdown(
+    fs.readFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "utf8"),
+    { systemName: "AI保单数据闭环平台" },
   );
+  fs.writeFileSync(finalPath, approvedFinalMarkdown, "utf8");
   const word = exportWhitepaperWord({
     inputPath: finalPath,
     systemName: "AI保单数据闭环平台",
@@ -8706,6 +8718,29 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.equal(finalReady.systems[0].docxExists, true);
   assert.equal(finalReady.systems[0].docxManifestExists, true);
   assert.equal(finalReady.systems[0].docxCurrent, true);
+  fs.writeFileSync(
+    finalPath,
+    `${approvedFinalMarkdown}\n\n## 手工篡改的终稿内容\n这里模拟终稿绕过待审稿和事实核验后重新导出 Word。`,
+    "utf8",
+  );
+  const forgedWord = exportWhitepaperWord({
+    inputPath: finalPath,
+    systemName: "AI保单数据闭环平台",
+    date: "2026-06-03",
+  });
+  const forgedFinal = buildDeliveryReadinessReport({ acceptanceReport });
+  assert.equal(forgedFinal.status, "blocked");
+  assert.equal(forgedFinal.canDeliver, false);
+  assert.equal(forgedFinal.systems[0].docxCurrent, true);
+  assert.ok(forgedFinal.blockers.some((item) => item.id === "delivery.final-not-approved-pending"));
+  fs.unlinkSync(forgedWord.outputPath);
+  fs.unlinkSync(forgedWord.manifestPath);
+  fs.writeFileSync(finalPath, approvedFinalMarkdown, "utf8");
+  exportWhitepaperWord({
+    inputPath: finalPath,
+    systemName: "AI保单数据闭环平台",
+    date: "2026-06-03",
+  });
   fs.appendFileSync(finalPath, "\n\n## 未导出的变更\n这里模拟最终稿变更后未重新导出 Word。", "utf8");
   const staleWord = buildDeliveryReadinessReport({ acceptanceReport });
   assert.equal(staleWord.status, "blocked");

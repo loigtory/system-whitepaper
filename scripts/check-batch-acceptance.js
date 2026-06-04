@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const {
+  finalizeWhitepaperMarkdown,
   parseArgs,
   readOptionalJsonObject,
   writeJson,
@@ -86,6 +87,10 @@ function readTextIfExists(filePath) {
   } catch {
     return "";
   }
+}
+
+function finalMatchesPendingReview(pendingMarkdown = "", finalMarkdown = "", options = {}) {
+  return String(finalMarkdown || "") === finalizeWhitepaperMarkdown(pendingMarkdown, options);
 }
 
 function truthReportLooksLikeSmoke(report = {}) {
@@ -416,6 +421,14 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
       blocker("whitepaper.smoke-artifact", "Whitepaper Markdown contains local smoke wording.", {
         systemCode: code,
         rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+      }),
+    );
+  }
+  if (fileExists(finalPath) && fileExists(pendingReviewPath) && !finalMatchesPendingReview(pendingMarkdown, finalMarkdown, { systemName: system.name || "" })) {
+    blockers.push(
+      blocker("whitepaper.final-not-approved-pending", "Final whitepaper differs from the approved pending-review markdown.", {
+        systemCode: code,
+        rerunNodes: ["review"],
       }),
     );
   }

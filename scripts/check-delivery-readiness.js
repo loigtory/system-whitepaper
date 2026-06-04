@@ -2,7 +2,12 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { parseArgs, readOptionalJsonObject, writeJson } = require("./system-whitepaper-lib");
+const {
+  finalizeWhitepaperMarkdown,
+  parseArgs,
+  readOptionalJsonObject,
+  writeJson,
+} = require("./system-whitepaper-lib");
 const { runBatchAcceptance } = require("./check-batch-acceptance");
 const {
   assertValidTruthReadinessReportArtifact,
@@ -321,6 +326,10 @@ function validateFinalDocx(outputDir, state = {}, finalPath = "") {
   return { valid: true, docxPath, manifestPath, reason: "" };
 }
 
+function finalMatchesPendingReview(pendingMarkdown = "", finalMarkdown = "", options = {}) {
+  return String(finalMarkdown || "") === finalizeWhitepaperMarkdown(pendingMarkdown, options);
+}
+
 function nodeStatus(state = {}, nodeId) {
   return state.nodes?.[nodeId]?.status || "missing";
 }
@@ -558,6 +567,15 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
       blocker(
         "delivery.docx-not-current",
         `Final whitepaper exists but Word output is not bound to the current final Markdown: ${docx.reason || "unknown"}.`,
+        { systemCode: code, rerunNodes: ["review"] },
+      ),
+    );
+  }
+  if (finalExists && pendingReviewExists && !finalMatchesPendingReview(pendingMarkdown, finalMarkdown, { systemName: systemReport.name || state?.name || "" })) {
+    blockers.push(
+      blocker(
+        "delivery.final-not-approved-pending",
+        "Final whitepaper differs from the approved pending-review markdown; rerun review approval to regenerate final and Word artifacts.",
         { systemCode: code, rerunNodes: ["review"] },
       ),
     );
