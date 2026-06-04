@@ -40,6 +40,7 @@ The unattended pipeline is grouped into five business-visible phases:
    - **库表模型**: convert the redacted profile into `data-dictionary.json` and `entity-model.json`; these are script-derived evidence artifacts, not Agent database access.
    - **功能宇宙**: merge UI evidence and redacted database entities into `function-universe.json` candidates.
    - **可信断言**: convert the universe into `verified-claims.json`; only `writable=true` claims may become body assertions. Database-only claims must remain evidence-only/pending until UI evidence confirms them.
+   - When `databaseProfile.enabled=true`, the DB node is complete only after the redacted profile, data dictionary, entity model, function universe, verified claims, fact-check, and truth-readiness all share current source fingerprints. A profile alone is not enough for review readiness.
 4. **成稿**:
    - **底稿**: generate `whitepaper.draft.md` from evidence. This is a factual draft, not the final whitepaper.
    - **摘要**: build `evidence-summary.json` for LLM input.
@@ -90,7 +91,7 @@ Use the npm scripts as the stable entrypoints:
 - `npm run truth:universe -- --input outputs/<code>`: merge UI evidence summary and redacted database profile into `function-universe.json` candidates.
 - `npm run truth:claims -- --input outputs/<code>`: convert the function universe into `verified-claims.json` with confidence and writable/non-writable boundaries; database-only inferred claims are not writable.
 - `npm run truth:fact-check -- --input outputs/<code>`: check `whitepaper.pending-review.md` against writable claims; block unsupported/non-writable body assertions and low writable-claim coverage.
-- `npm run truth:readiness -- --input outputs/<code>`: aggregate truth gates into `truth-readiness-report.json`; a non-passing report blocks review submission. In the full pipeline, systems with `databaseProfile.enabled=true` automatically require redacted database evidence before the Truth gate can pass.
+- `npm run truth:readiness -- --input outputs/<code>`: aggregate truth gates into `truth-readiness-report.json`; a non-passing report blocks review submission. In the full pipeline, systems with `databaseProfile.enabled=true` automatically require the complete DB enhancement chain: redacted profile, derived model artifacts, DB-linked function universe, database boundary claims, at least one UI+DB writable claim, fact-check coverage, and current source fingerprints.
 - `npm run sync`: sync the system registry into `config/systems.local.yaml`.
 - `npm run pipeline -- --system <code> --with-whitepaper`: run the unattended end-to-end whitepaper pipeline for one configured system. Without `--with-whitepaper`, pipeline runs are for scoped evidence/spec/quality nodes only and are not deliverable whitepaper runs.
 - `npm run batch`: run the full whitepaper pipeline for all configured systems with 4 parallel workers; use `-- --systems <code1>,<code2>` to limit scope, `-- --concurrency <n>` to change worker count, or `-- --batch-retries <n>` to enable bounded recoverable retries.
@@ -181,7 +182,7 @@ Before finalizing, verify:
 - `run-whitepaper-pipeline.js` automatically performs one bounded coverage repair when `fact-check-report.json` lists `missingWritableClaimIds`: it writes `coverage-repair-plan.json`, reruns scoped narrative work with the inferred module `--narrative-part`, then reruns fact-check. Use `--no-coverage-repair` only for debugging.
 - `fact-check-report.json` must have `canFinalize=true` before producing `whitepaper.final.md`.
 - `truth-readiness-report.json` must have `canSubmitReview=true`, score >= 95%, and matching source-artifact fingerprints before human review or final approval; `run-review-decision.js --status approved` blocks final Markdown/Word generation when this report is missing, malformed, non-passing, stale, smoke/local-e2e, or under an `_e2e` output directory.
-- Database-derived truth artifacts (`data-dictionary.json`, `entity-model.json`, `function-universe.json`, and `verified-claims.json`) must carry current upstream source fingerprints; `truth-readiness` blocks stale DB/claim lineage.
+- Database-derived truth artifacts (`data-dictionary.json`, `entity-model.json`, `function-universe.json`, and `verified-claims.json`) must carry current upstream source fingerprints; `truth-readiness` blocks stale DB/claim lineage. If DB evidence is required, it also blocks `database.enhancement-incomplete` until DB-derived entities and UI+DB linked writable claims participate in the checked whitepaper path.
 - If `whitepaper.final.md` exists, delivery readiness requires the `.docx` sidecar manifest to match the current final Markdown fingerprint and current Word file fingerprint.
 - No duplicated function explanations.
 - No source-code, database, or internal implementation claims without browser evidence.

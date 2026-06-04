@@ -1696,6 +1696,109 @@ function isValidDatabaseProfile(value, expectedSystem = {}) {
   return databaseProfileSystemCode(value) === expectedCode;
 }
 
+function sourceTypeStartsWith(sources = [], prefix) {
+  return (Array.isArray(sources) ? sources : []).some((source) =>
+    String(source?.type || "").startsWith(prefix),
+  );
+}
+
+function claimHasUiEvidence(claim = {}) {
+  return sourceTypeStartsWith(claim.sources, "ui-") ||
+    (Array.isArray(claim.sources) && claim.sources.some((source) => source?.type === "screenshot"));
+}
+
+function claimHasDatabaseEvidence(claim = {}) {
+  return sourceTypeStartsWith(claim.sources, "db-");
+}
+
+function sourceArtifactExists(value = {}, key) {
+  return normalizeSourceFingerprint(value?.sourceArtifacts?.[key] || {}).exists === true;
+}
+
+function buildDatabaseEnhancementStatus(input = {}) {
+  const {
+    profileAvailable,
+    dataDictionaryContractValid,
+    entityModelContractValid,
+    functionUniverseContractValid,
+    dataDictionary,
+    entityModel,
+    universe,
+    claimsArtifact,
+  } = input;
+  const claims = claimsArtifact?.status === "ok" && Array.isArray(claimsArtifact.value?.claims)
+    ? claimsArtifact.value.claims
+    : [];
+  const databaseOnlyClaims = claims.filter((claim) => claimHasDatabaseEvidence(claim) && !claimHasUiEvidence(claim));
+  const uiDatabaseClaims = claims.filter((claim) => claimHasDatabaseEvidence(claim) && claimHasUiEvidence(claim));
+  const writableUiDatabaseClaims = uiDatabaseClaims.filter((claim) => claim.writable === true);
+  const dataDictionaryLinkedToProfile =
+    dataDictionaryContractValid && sourceArtifactExists(dataDictionary, "databaseProfile");
+  const entityModelLinkedToDatabase =
+    entityModelContractValid &&
+    sourceArtifactExists(entityModel, "databaseProfile") &&
+    sourceArtifactExists(entityModel, "dataDictionary");
+  const functionUniverseLinkedToDatabase =
+    functionUniverseContractValid &&
+    sourceArtifactExists(universe, "databaseProfile") &&
+    sourceArtifactExists(universe, "entityModel");
+  const failures = [];
+  if (!profileAvailable) failures.push("Valid redacted database-profile.json is required.");
+  if (!profileAvailable) {
+    return {
+      pass: false,
+      failures,
+      metrics: {
+        dataDictionaryLinkedToProfile,
+        entityModelLinkedToDatabase,
+        functionUniverseLinkedToDatabase,
+        databaseOnlyClaimCount: databaseOnlyClaims.length,
+        uiDatabaseClaimCount: uiDatabaseClaims.length,
+        writableUiDatabaseClaimCount: writableUiDatabaseClaims.length,
+      },
+    };
+  }
+  if (!dataDictionaryLinkedToProfile) {
+    failures.push("data-dictionary.json must be generated from the current redacted database-profile.json.");
+  }
+  if (!entityModelLinkedToDatabase) {
+    failures.push("entity-model.json must be generated from the current data-dictionary.json and database-profile.json.");
+  }
+  if (!functionUniverseLinkedToDatabase) {
+    failures.push("function-universe.json must record current database-profile.json and entity-model.json sources.");
+  }
+  if (Number(dataDictionary?.metrics?.columnCount || 0) <= 0) {
+    failures.push("Database evidence must include at least one redacted column in data-dictionary.json.");
+  }
+  if (Number(entityModel?.metrics?.entityCount || 0) <= 0) {
+    failures.push("Database evidence must include at least one business entity in entity-model.json.");
+  }
+  if (Number(universe?.coverage?.entityCount || 0) <= 0) {
+    failures.push("function-universe.json must include database-derived entities.");
+  }
+  if (databaseOnlyClaims.length <= 0) {
+    failures.push("verified-claims.json must include database-only boundary claims marked non-writable.");
+  }
+  if (uiDatabaseClaims.length <= 0) {
+    failures.push("verified-claims.json must include UI+database linked claims for business interpretation.");
+  }
+  if (writableUiDatabaseClaims.length <= 0) {
+    failures.push("At least one UI+database linked claim must be writable before database-enhanced review readiness.");
+  }
+  return {
+    pass: failures.length === 0,
+    failures,
+    metrics: {
+      dataDictionaryLinkedToProfile,
+      entityModelLinkedToDatabase,
+      functionUniverseLinkedToDatabase,
+      databaseOnlyClaimCount: databaseOnlyClaims.length,
+      uiDatabaseClaimCount: uiDatabaseClaims.length,
+      writableUiDatabaseClaimCount: writableUiDatabaseClaims.length,
+    },
+  };
+}
+
 function safePathJoin(parts = []) {
   return parts.filter(Boolean).join(".");
 }
@@ -1860,6 +1963,11 @@ function buildDatabaseGate(artifacts, options = {}) {
   const universe = functionUniverseContractValid ? universeArtifact.value || {} : {};
   const dataDictionary = dataDictionaryContractValid ? dataDictionaryArtifact.value || {} : {};
   const entityModel = entityModelContractValid ? entityModelArtifact.value || {} : {};
+  const claimsArtifact = artifacts.claims || {
+    status: "missing",
+    file: REQUIRED_ARTIFACTS.claims,
+    value: null,
+  };
   const coverage = universe.coverage || {};
   const entityCount = Number(entityModel.metrics?.entityCount || coverage.entityCount || 0);
   const linkedFunctionCount = Number(coverage.linkedFunctionCount || 0);
@@ -1893,19 +2001,36 @@ function buildDatabaseGate(artifacts, options = {}) {
       derivedArtifactContractPass(entityModelArtifact, entityModelContractValid) &&
       derivedArtifactContractPass(universeArtifact, functionUniverseContractValid));
   const available = safeProfileAvailable || entityCount > 0 || columnCount > 0;
-  const pass = profileSafety.pass && derivedArtifactContractsPass;
+  const required = normalizeBoolean(options.requireDatabaseEvidence);
+  const enhancementStatus = buildDatabaseEnhancementStatus({
+    profileAvailable: safeProfileAvailable,
+    dataDictionaryContractValid,
+    entityModelContractValid,
+    functionUniverseContractValid,
+    dataDictionary,
+    entityModel,
+    universe,
+    claimsArtifact,
+  });
+  const pass =
+    profileSafety.pass &&
+    derivedArtifactContractsPass &&
+    (!required || enhancementStatus.pass);
   const score = available && pass ? 1 : 0;
   return {
     id: "database",
     label: "Redacted database evidence",
     pass,
+    required,
     available,
     profileAvailable: safeProfileAvailable,
     rawProfileAvailable: profileAvailable,
     profileArtifactValid,
     profileSystemMatches,
     derivedArtifactContractsPass,
+    enhancementPass: enhancementStatus.pass,
     contractFailures,
+    enhancementFailures: enhancementStatus.failures,
     profileSafety,
     score,
     scorePercent: percent(score),
@@ -1926,11 +2051,12 @@ function buildDatabaseGate(artifacts, options = {}) {
       entityModelContractValid,
       functionUniverseStatus: universeArtifact.status,
       functionUniverseContractValid,
+      ...enhancementStatus.metrics,
     },
     warnings: available
       ? profileSafety.warnings
       : ["No redacted database profile was available; UI evidence remains the primary truth source."],
-    failures: [...profileSafety.failures, ...contractFailures],
+    failures: [...profileSafety.failures, ...contractFailures, ...(required ? enhancementStatus.failures : [])],
   };
 }
 
@@ -2071,7 +2197,20 @@ function buildDatabaseRequirementGate(gate = {}, options = {}) {
       failures.push("Valid redacted database-profile.json is required but missing.");
     }
   }
-  const pass = gate.pass !== false && (!required || profileAvailable) && failures.length === 0;
+  if (required && !profileAvailable && gate.profileArtifactValid) {
+    const expectedCode = gate.metrics?.expectedSystemCode || "";
+    const actualCode = gate.metrics?.databaseProfileSystemCode || "";
+    if (expectedCode && actualCode !== expectedCode) {
+      const message = `database-profile.json belongs to ${actualCode || "unknown"}, expected ${expectedCode}.`;
+      if (!failures.includes(message)) failures.push(message);
+    }
+  }
+  if (required && profileAvailable && gate.enhancementPass !== true) {
+    for (const failure of gate.enhancementFailures || []) {
+      if (!failures.includes(failure)) failures.push(failure);
+    }
+  }
+  const pass = gate.pass !== false && (!required || (profileAvailable && gate.enhancementPass === true)) && failures.length === 0;
   return {
     ...gate,
     required,
@@ -2108,7 +2247,19 @@ function collectDatabaseRequirementBlockers(gates, options = {}) {
       ),
     ];
   }
-  if (!normalizeBoolean(options.requireDatabaseEvidence) || gates.database.profileAvailable) return [];
+  if (!normalizeBoolean(options.requireDatabaseEvidence)) return [];
+  if (gates.database.profileAvailable && gates.database.enhancementPass !== true) {
+    return [
+      blocker(
+        "database.enhancement-incomplete",
+        "P0",
+        "databaseProfile.enabled=true but database evidence has not completed the db-profile -> db-model -> truth-universe -> truth-claims enhancement chain.",
+        ["db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+        { failures: gates.database.enhancementFailures || [], quotaImpact: "low" },
+      ),
+    ];
+  }
+  if (gates.database.profileAvailable) return [];
   const expectedCode = gates.database.metrics?.expectedSystemCode || "";
   const actualCode = gates.database.metrics?.databaseProfileSystemCode || "";
   return [

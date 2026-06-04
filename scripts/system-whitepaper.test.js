@@ -276,6 +276,7 @@ function writePassingTruthArtifacts(dir, options = {}) {
     buildSourceArtifacts: buildClaimSourceArtifacts,
     buildVerifiedClaimsArtifact,
   } = require("./build-verified-claims");
+  const { buildDatabaseModelFromDir } = require("./build-database-model");
   const { buildQualitySourceArtifacts } = require("./check-quality");
   if (!fs.existsSync(path.join(dir, "whitepaper.pending-review.md"))) {
     fs.writeFileSync(
@@ -355,7 +356,19 @@ function writePassingTruthArtifacts(dir, options = {}) {
       JSON.stringify({
         artifactType: "database-profile",
         system: { code: options.systemCode || "adp", name: options.systemName || "AI保单数据闭环平台" },
-        tables: [],
+        tables: [
+          {
+            schema: "adp_test",
+            name: "policy_task",
+            comment: fixtureClaim.function,
+            rowCount: 12,
+            columns: [
+              { name: "id", type: "bigint", comment: "主键", primaryKey: true },
+              { name: "policy_no", type: "varchar", comment: "保单号" },
+              { name: "created_time", type: "datetime", comment: "创建时间" },
+            ],
+          },
+        ],
         safety: { secretRedacted: true },
       }),
       "utf8",
@@ -367,6 +380,8 @@ function writePassingTruthArtifacts(dir, options = {}) {
     for (const filePath of [databaseProfilePath, dataDictionaryPath, entityModelPath]) {
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     }
+  } else {
+    buildDatabaseModelFromDir(dir, { generatedAt: "2026-06-03T00:00:00.000Z" });
   }
   const evidenceSummaryPath = path.join(dir, "evidence-summary.json");
   const evidenceSummary = buildEvidenceSummary(JSON.parse(fs.readFileSync(path.join(dir, "evidence.json"), "utf8")));
@@ -393,12 +408,23 @@ function writePassingTruthArtifacts(dir, options = {}) {
     generatedAt: "2026-06-03T00:00:30.000Z",
   });
   fs.writeFileSync(path.join(dir, "verified-claims.json"), JSON.stringify(verifiedClaims), "utf8");
+  const writableClaimLines = verifiedClaims.claims
+    .filter((claim) => claim.writable)
+    .map((claim) => `${claim.module || claim.subject || ""} ${claim.subject || claim.function || claim.entity || ""} [claim:${claim.id}]`);
+  const pendingReviewPath = path.join(dir, "whitepaper.pending-review.md");
+  const pendingReview = fs.readFileSync(pendingReviewPath, "utf8");
+  fs.writeFileSync(
+    pendingReviewPath,
+    [pendingReview, "", "## 5. 已验证声明索引", ...writableClaimLines].join("\n"),
+    "utf8",
+  );
   runFactCheck({ inputDir: dir });
   runNarrativeCheck({ inputDir: dir });
   const report = buildTruthReadinessReport({
     artifacts: loadReadinessInputs(dir),
     threshold: 0.95,
     requireDatabaseEvidence: options.requireDatabaseEvidence === true,
+    expectedSystem: { code: options.systemCode || "adp", name: options.systemName || "AI保单数据闭环平台" },
     generatedAt: "2026-06-03T00:01:00.000Z",
   });
   assert.equal(report.canSubmitReview, true);
@@ -8904,46 +8930,7 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
     ].join("\n"),
     "utf8",
   );
-  writeQualityReportFixture(systemOutput);
-  fs.writeFileSync(
-    path.join(systemOutput, "verified-claims.json"),
-    JSON.stringify(
-      verifiedClaimsFixture([
-        {
-          id: "function:保单任务:任务列表",
-          subject: "任务列表",
-          module: "保单任务",
-          status: "confirmed",
-          writable: true,
-        },
-      ]),
-    ),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(systemOutput, "whitepaper.pending-review.md"),
-    passingUiOnlyNarrativeMarkdown(),
-    "utf8",
-  );
-  runFactCheck({ inputDir: systemOutput });
-  runNarrativeCheck({ inputDir: systemOutput });
-  fs.writeFileSync(
-    path.join(systemOutput, "database-profile.json"),
-    JSON.stringify({ artifactType: "database-profile", system: { code: "adp" }, tables: [], safety: { secretRedacted: true } }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(systemOutput, "truth-readiness-report.json"),
-    JSON.stringify(truthReadinessReportFixture(systemOutput, {
-      score: 0.98,
-      scorePercent: 98,
-      requirements: { databaseEvidenceRequired: true },
-      gates: {
-        database: { pass: true, available: true, required: true, profileAvailable: true, scorePercent: 100 },
-      },
-    })),
-    "utf8",
-  );
+  writePassingTruthArtifacts(systemOutput, { requireDatabaseEvidence: true });
   fs.writeFileSync(
     path.join(outputRoot, "_batch", "run-state.json"),
     JSON.stringify({
@@ -9396,7 +9383,7 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   );
   const currentGateFailed = buildBatchAcceptanceReport({ args: { config: configPath } });
   assert.equal(currentGateFailed.status, "blocked");
-  assert.equal(currentGateFailed.systems[0].scorePercent, 72);
+  assert.ok(currentGateFailed.systems[0].scorePercent < 95);
   assert.equal(currentGateFailed.systems[0].canSubmitReview, false);
   assert.ok(currentGateFailed.blockers.some((item) => item.id === "truth-readiness.current-gate-failed"));
   assert.ok(currentGateFailed.blockers.some((item) => item.id === "fact-check.writable-coverage"));
@@ -15971,7 +15958,55 @@ test("truth readiness requires real database profile when database evidence is m
     expectedSystem: { code: "adp" },
   });
   assert.equal(validProfileReport.gates.database.profileAvailable, true);
-  assert.equal(validProfileReport.canSubmitReview, true);
+  assert.equal(validProfileReport.gates.database.enhancementPass, false);
+  assert.equal(validProfileReport.canSubmitReview, false);
+  assert.ok(validProfileReport.blockers.some((item) => item.id === "database.enhancement-incomplete"));
+});
+
+test("truth readiness requires database evidence to complete the enhancement chain", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-db-enhancement-chain-"));
+  writePassingTruthArtifacts(dir, { databaseProfile: false });
+  fs.writeFileSync(
+    path.join(dir, "database-profile.json"),
+    JSON.stringify({
+      artifactType: "database-profile",
+      system: { code: "adp", name: "AI保单数据闭环平台" },
+      tables: [
+        {
+          schema: "adp_test",
+          name: "policy_task",
+          comment: "保单任务",
+          columns: [
+            { name: "id", type: "bigint", comment: "主键", primaryKey: true },
+            { name: "status", type: "varchar", comment: "任务状态", dictionary: ["INIT", "DONE"] },
+          ],
+        },
+      ],
+      safety: { secretRedacted: true },
+    }),
+    "utf8",
+  );
+
+  const report = runTruthReadinessCheck({
+    inputDir: dir,
+    requireDatabaseEvidence: true,
+    systemCode: "adp",
+  });
+
+  assert.equal(report.gates.database.profileAvailable, true);
+  assert.equal(report.gates.database.enhancementPass, false);
+  assert.equal(report.canSubmitReview, false);
+  assert.ok(report.blockers.some((item) => item.id === "database.enhancement-incomplete"));
+  assert.ok(
+    report.gates.database.enhancementFailures.some((item) =>
+      /data-dictionary\.json must be generated/.test(item),
+    ),
+  );
 });
 
 test("truth readiness rejects malformed database-derived truth artifacts", () => {
