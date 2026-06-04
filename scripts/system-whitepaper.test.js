@@ -11539,6 +11539,94 @@ test("dashboard download route serves docx artifact", async () => {
   }
 });
 
+test("dashboard preview route guards final artifact with truth approval", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const http = require("node:http");
+  const { createDashboardServer } = require("./local-dashboard/server");
+  const { finalizeWhitepaperMarkdown } = require("./system-whitepaper-lib");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-preview-final-"));
+  const configPath = path.join(dir, "systems.local.yaml");
+  const output = path.join(dir, "outputs", "adp");
+  fs.mkdirSync(output, { recursive: true });
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+    ].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(output, "whitepaper.pending-review.md"), passingUiOnlyNarrativeMarkdown(), "utf8");
+  writePassingTruthArtifacts(output, { databaseProfile: false });
+  fs.writeFileSync(
+    path.join(output, "whitepaper.final.md"),
+    finalizeWhitepaperMarkdown(fs.readFileSync(path.join(output, "whitepaper.pending-review.md"), "utf8"), {
+      systemName: "AI保单数据闭环平台",
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(output, "pipeline-state.json"),
+    JSON.stringify({
+      code: "adp",
+      name: "AI保单数据闭环平台",
+      overallStatus: "finalized",
+      review: { status: "approved" },
+      nodes: {},
+      phases: {},
+    }),
+    "utf8",
+  );
+
+  const server = createDashboardServer({ configPath });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  const preview = (artifact) =>
+    new Promise((resolve, reject) => {
+      http
+        .get(`http://127.0.0.1:${port}/api/preview?system=adp&artifact=${artifact}`, (res) => {
+          const chunks = [];
+          res.on("data", (chunk) => chunks.push(chunk));
+          res.on("end", () =>
+            resolve({
+              statusCode: res.statusCode,
+              headers: res.headers,
+              body: Buffer.concat(chunks).toString("utf8"),
+            }),
+          );
+        })
+        .on("error", reject);
+    });
+
+  try {
+    const approvedFinal = await preview("final");
+    assert.equal(approvedFinal.statusCode, 200);
+    assert.match(approvedFinal.body, /AI保单数据闭环平台功能白皮书/);
+
+    fs.appendFileSync(
+      path.join(output, "whitepaper.final.md"),
+      "\n\n## 手工篡改的终稿内容\n这里模拟终稿预览绕过待审稿。",
+      "utf8",
+    );
+    const blockedFinal = await preview("final");
+    assert.equal(blockedFinal.statusCode, 400);
+    assert.match(blockedFinal.body, /Final delivery requires final Markdown/);
+
+    const pendingReview = await preview("pendingReview");
+    assert.equal(pendingReview.statusCode, 200);
+    assert.match(pendingReview.body, /白皮书预览/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("dashboard download route blocks docx without valid approval state", async () => {
   const fs = require("node:fs");
   const os = require("node:os");

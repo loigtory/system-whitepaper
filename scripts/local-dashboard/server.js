@@ -109,16 +109,16 @@ function resolveFinalMarkdownPath(systemOutput, state, system = {}) {
   return "";
 }
 
-function assertDashboardDocxAllowed(systemOutput, state = {}, system = {}) {
+function assertDashboardFinalDeliveryAllowed(systemOutput, state = {}, system = {}) {
   const reviewApproved =
     state.overallStatus === "finalized" || state.review?.status === "approved";
   if (!reviewApproved) {
-    throw new Error("Word download requires approved review state.");
+    throw new Error("Final delivery requires approved review state.");
   }
   const pendingPath = path.join(systemOutput, "whitepaper.pending-review.md");
   const finalPath = path.join(systemOutput, "whitepaper.final.md");
   if (!fs.existsSync(pendingPath) || !fs.existsSync(finalPath)) {
-    throw new Error("Word download requires both pending-review and final whitepaper Markdown.");
+    throw new Error("Final delivery requires both pending-review and final whitepaper Markdown.");
   }
   const pendingMarkdown = fs.readFileSync(pendingPath, "utf8");
   const finalMarkdown = fs.readFileSync(finalPath, "utf8");
@@ -126,7 +126,7 @@ function assertDashboardDocxAllowed(systemOutput, state = {}, system = {}) {
     systemName: system.name || state.name || "",
   });
   if (finalMarkdown !== expectedFinal) {
-    throw new Error("Word download requires final Markdown to match the approved pending-review Markdown.");
+    throw new Error("Final delivery requires final Markdown to match the approved pending-review Markdown.");
   }
   assertApprovalTruthReadiness(systemOutput, {
     state,
@@ -135,9 +135,9 @@ function assertDashboardDocxAllowed(systemOutput, state = {}, system = {}) {
   });
 }
 
-function dashboardDocxAllowed(systemOutput, state = {}, system = {}) {
+function dashboardFinalDeliveryAllowed(systemOutput, state = {}, system = {}) {
   try {
-    assertDashboardDocxAllowed(systemOutput, state, system);
+    assertDashboardFinalDeliveryAllowed(systemOutput, state, system);
     return true;
   } catch {
     return false;
@@ -147,7 +147,7 @@ function dashboardDocxAllowed(systemOutput, state = {}, system = {}) {
 function ensureDocxArtifact(systemOutput, state, system = {}) {
   let docxPath = resolveDocxArtifact(systemOutput, state.artifacts?.docx);
   const mdPath = resolveFinalMarkdownPath(systemOutput, state, system);
-  if (!dashboardDocxAllowed(systemOutput, state, system)) return "";
+  if (!dashboardFinalDeliveryAllowed(systemOutput, state, system)) return "";
   if (docxPath && fs.existsSync(docxPath)) {
     if (!mdPath) return docxPath;
     const docxState = {
@@ -1590,6 +1590,9 @@ function renderMarkdownToHtml(markdown) {
 
 function resolvePreviewArtifact(systemOutput, artifactKey, system = {}) {
   const { state } = readDashboardPipelineState(path.join(systemOutput, "pipeline-state.json"));
+  if (artifactKey === "final") {
+    assertDashboardFinalDeliveryAllowed(systemOutput, state || {}, system);
+  }
   const snapshot = buildArtifactSnapshot(systemOutput, state || {}, system);
   const artifact = snapshot[artifactKey];
   if (!artifact?.exists || !artifact.path) {
