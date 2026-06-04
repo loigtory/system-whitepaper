@@ -23,6 +23,7 @@ const { assertValidQualityReportArtifact } = require("./check-quality");
 const {
   assertValidOperationGuideGateArtifact,
   assertValidOperationSpecArtifact,
+  buildOperationSpec,
 } = require("./operation-spec/lib");
 
 const DEFAULT_THRESHOLD = 0.95;
@@ -532,6 +533,7 @@ function buildLineageGate(artifacts = {}) {
     const failure = lineageMismatch(key, artifact, current, ownerFile);
     if (failure) failures.push(failure);
   }
+  failures.push(...validateOperationSpecAgainstCurrentSources(artifacts));
   failures.push(...validateEvidenceSummaryAgainstCurrentEvidence(artifacts));
   failures.push(...validateFunctionUniverseAgainstCurrentSources(artifacts.functionUniverse?.value || {}, artifacts));
   return {
@@ -915,6 +917,130 @@ function functionUniverseProjection(value = {}) {
     coverage: value.coverage || {},
     rules: value.rules || {},
   };
+}
+
+function operationSpecModuleProjection(module = {}) {
+  return {
+    name: module.name || "",
+    entry: module.entry || "",
+    list: module.list || {},
+    flows: sortByStableKey(Array.isArray(module.flows) ? module.flows : [], (item) => `${item.name || ""}::${item.trigger || ""}`),
+    tabs: Array.isArray(module.tabs) ? [...module.tabs].map(String).sort() : [],
+    screenshots: Array.isArray(module.screenshots) ? [...module.screenshots].map(String).sort() : [],
+    apis: sortByStableKey(Array.isArray(module.apis) ? module.apis : [], (item) => `${item.method || ""}::${item.url || ""}`),
+  };
+}
+
+function operationSpecProjection(value = {}) {
+  return {
+    artifactType: value.artifactType || "",
+    version: value.version || null,
+    schemaVersion: value.schemaVersion || null,
+    systemCode: value.systemCode || "",
+    systemName: value.systemName || "",
+    testUrl: value.testUrl || "",
+    navigation: sortByStableKey(Array.isArray(value.navigation) ? value.navigation : [], (item) => item.menuPath || ""),
+    modules: sortByStableKey(
+      (Array.isArray(value.modules) ? value.modules : []).map(operationSpecModuleProjection),
+      (item) => item.name || "",
+    ),
+    crossLinks: sortByStableKey(Array.isArray(value.crossLinks) ? value.crossLinks : [], (item) => `${item.from || ""}::${item.hint || ""}`),
+    networkEntryCount: Number(value.networkEntryCount || 0),
+    pending: sortByStableKey(Array.isArray(value.pending) ? value.pending : [], (item) => `${item.topic || ""}::${item.reason || ""}`),
+    metrics: value.metrics || {},
+    gate: value.gate || {},
+  };
+}
+
+function currentSiblingJsonArtifact(anchorArtifact = {}, fileName) {
+  const baseDir = anchorArtifact.path ? path.dirname(anchorArtifact.path) : "";
+  const filePath = baseDir ? path.join(baseDir, fileName) : "";
+  return {
+    file: fileName,
+    path: filePath,
+    fingerprint: filePath ? fingerprintFile(filePath) : { exists: false, size: 0, mtimeMs: null, sha256: "" },
+    ...(filePath ? readJsonArtifact(filePath) : { status: "missing", value: null, error: "" }),
+  };
+}
+
+function operationSpecOptionalSourceValue(artifact = {}, fileName) {
+  if (!artifact.fingerprint?.exists) return null;
+  if (artifact.status !== "ok") {
+    throw new Error(`${fileName} is ${artifact.status}${artifact.error ? `: ${artifact.error}` : ""}`);
+  }
+  return artifact.value || {};
+}
+
+function operationSpecSystemForRecompute(value = {}) {
+  const moduleBusinessHints = {};
+  for (const module of Array.isArray(value.modules) ? value.modules : []) {
+    if (module?.name && module?.businessHint) {
+      moduleBusinessHints[module.name] = String(module.businessHint || "");
+    }
+  }
+  return {
+    code: value.systemCode || "",
+    name: value.systemName || "",
+    url: value.testUrl || "",
+    moduleBusinessHints,
+  };
+}
+
+function findOperationSpecSourceMismatches(artifacts = {}) {
+  const operationSpec = artifacts.operationSpec || {};
+  if (operationSpec.status !== "ok" || !operationSpec.fingerprint?.exists) return [];
+  const optionalSources = {
+    writeValidation: currentSiblingJsonArtifact(operationSpec, "write-validation-result.json"),
+    networkIndex: currentSiblingJsonArtifact(operationSpec, "network-index.json"),
+  };
+  const checks = [
+    ["evidence", artifacts.evidence, "operation-spec.json"],
+    ["writeValidation", optionalSources.writeValidation, "operation-spec.json"],
+    ["networkIndex", optionalSources.networkIndex, "operation-spec.json"],
+  ];
+  const failures = [];
+  for (const [key, current, ownerFile] of checks) {
+    const recorded = operationSpec?.value?.sourceArtifacts?.[key];
+    const recordedSourceExists = normalizeSourceFingerprint(recorded || {}).exists;
+    if (!recorded && !current?.fingerprint?.exists) continue;
+    if (!recordedSourceExists && !current?.fingerprint?.exists) continue;
+    const failure = lineageMismatch(key, operationSpec, current, ownerFile);
+    if (failure) failures.push(failure);
+  }
+  return failures;
+}
+
+function validateOperationSpecAgainstCurrentSources(artifacts = {}) {
+  const failures = [];
+  const operationSpec = artifacts.operationSpec || {};
+  if (operationSpec.status !== "ok" || !operationSpec.fingerprint?.exists) return failures;
+  const sourceMismatches = findOperationSpecSourceMismatches(artifacts);
+  failures.push(...sourceMismatches);
+  if (sourceMismatches.length) return failures;
+  const evidence = artifacts.evidence || {};
+  if (evidence.status !== "ok" || !evidence.fingerprint?.exists) {
+    failures.push("operation-spec.json could not be recomputed because current evidence.json is missing or invalid.");
+    return failures;
+  }
+  const writeValidation = currentSiblingJsonArtifact(operationSpec, "write-validation-result.json");
+  const networkIndex = currentSiblingJsonArtifact(operationSpec, "network-index.json");
+  let recomputed;
+  try {
+    recomputed = buildOperationSpec({
+      evidence: JSON.parse(JSON.stringify(evidence.value || {})),
+      system: operationSpecSystemForRecompute(operationSpec.value || {}),
+      writeValidation: operationSpecOptionalSourceValue(writeValidation, "write-validation-result.json"),
+      networkIndex: operationSpecOptionalSourceValue(networkIndex, "network-index.json"),
+      allowDraft: Boolean(operationSpec.value?.gate?.canComposeGuide && (operationSpec.value?.gate?.failures || []).length),
+    }).spec;
+  } catch (error) {
+    failures.push(`operation-spec.json could not be recomputed from current evidence/write-validation/network inputs: ${error.message}`);
+    return failures;
+  }
+  if (stableJson(operationSpecProjection(operationSpec.value || {})) !== stableJson(operationSpecProjection(recomputed))) {
+    failures.push("operation-spec.json must match deterministic operation-spec recomputation from current evidence/write-validation/network inputs.");
+  }
+  return failures;
 }
 
 function evidenceSummaryProjection(value = {}) {
@@ -2015,7 +2141,7 @@ function buildTruthReadinessReport(input = {}) {
         "truth.lineage-stale",
         "P0",
         "Truth Pipeline artifacts were not generated from the current upstream evidence/database inputs.",
-        ["db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+        ["build-spec", "compose-guide", "db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
       ),
     );
   }

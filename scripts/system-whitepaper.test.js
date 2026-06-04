@@ -15251,6 +15251,74 @@ test("truth readiness rejects forged operation spec evidence artifacts", () => {
   assert.ok(report.blockers.some((item) => item.id === "evidence.invalid-artifact"));
 });
 
+test("truth readiness rejects forged operation spec against current evidence", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { buildQualitySourceArtifacts } = require("./check-quality");
+  const {
+    buildOperationSpec,
+    buildOperationSpecSourceArtifacts,
+  } = require("./operation-spec/lib");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-forged-operation-spec-current-evidence-"));
+  writePassingTruthArtifacts(dir, { databaseProfile: false });
+  const evidencePath = path.join(dir, "evidence.json");
+  const operationSpecPath = path.join(dir, "operation-spec.json");
+  const operationGuideGatePath = path.join(dir, "operation-guide-gate.json");
+  const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
+  const { spec } = buildOperationSpec({
+    evidence,
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    sourceArtifacts: buildOperationSpecSourceArtifacts({ evidencePath }),
+  });
+  fs.writeFileSync(operationSpecPath, JSON.stringify(spec), "utf8");
+  fs.writeFileSync(
+    path.join(dir, "quality-report.json"),
+    JSON.stringify(qualityReportFixture({
+      sourceArtifacts: buildQualitySourceArtifacts({
+        evidencePath,
+        operationSpecPath,
+        operationGuideGatePath,
+      }),
+    })),
+    "utf8",
+  );
+  const passing = runTruthReadinessCheck({ inputDir: dir });
+  assert.equal(passing.canSubmitReview, true);
+  assert.equal(passing.gates.lineage.pass, true);
+
+  const forged = JSON.parse(fs.readFileSync(operationSpecPath, "utf8"));
+  forged.modules[0].list.columns.push("伪造赔付审核字段");
+  fs.writeFileSync(operationSpecPath, JSON.stringify(forged), "utf8");
+  fs.writeFileSync(
+    path.join(dir, "quality-report.json"),
+    JSON.stringify(qualityReportFixture({
+      sourceArtifacts: buildQualitySourceArtifacts({
+        evidencePath,
+        operationSpecPath,
+        operationGuideGatePath,
+      }),
+    })),
+    "utf8",
+  );
+
+  const report = runTruthReadinessCheck({ inputDir: dir });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.evidence.pass, true);
+  assert.equal(report.gates.lineage.pass, false);
+  assert.ok(
+    report.gates.lineage.failures.some((item) =>
+      /operation-spec\.json must match deterministic operation-spec recomputation from current evidence\/write-validation\/network inputs/.test(item),
+    ),
+  );
+  const blocker = report.blockers.find((item) => item.id === "truth.lineage-stale");
+  assert.ok(blocker);
+  assert.ok(blocker.rerunNodes.includes("build-spec"));
+  assert.ok(blocker.rerunNodes.includes("compose-guide"));
+});
+
 test("truth readiness rejects invalid fact-check report artifact contract", () => {
   const { buildTruthReadinessReport } = require("./check-truth-readiness");
   const artifacts = {
