@@ -14,7 +14,12 @@ const { loadBatchConfig, resolveBatchConcurrency } = require("./run-whitepaper-b
 const { runBatchAcceptance } = require("./check-batch-acceptance");
 const { runDeliveryReadiness } = require("./check-delivery-readiness");
 const { runRealRunReadiness } = require("./check-real-run-readiness");
-const { assertValidRepairFollowUpPlanArtifact } = require("./repair-artifacts");
+const {
+  assertValidRepairFollowUpPlanArtifact,
+  sourceArtifactRecord,
+  sourceFingerprintsFromArtifacts,
+  uniqueSystemCodes,
+} = require("./repair-artifacts");
 
 const DEFAULT_MAX_ROUNDS = 3;
 const SUPPORTED_FOLLOW_UP_SCRIPTS = new Set(["repair:batch", "batch"]);
@@ -73,6 +78,53 @@ function readFollowUpPlan(filePath) {
     throw new Error(`repair-follow-up-plan.json is not a valid follow-up artifact: ${error.message}`);
   }
   return plan;
+}
+
+function buildFollowUpLoopSourceBinding(context = {}, planPath = "", plan = {}) {
+  const batchDir = path.join(context.outputRoot || "outputs", "_batch");
+  const planSources = plan.sourceArtifacts && typeof plan.sourceArtifacts === "object" ? plan.sourceArtifacts : {};
+  const followUpPlan = sourceArtifactRecord(planPath, plan, {
+    baseDir: batchDir,
+    file: "repair-follow-up-plan.json",
+  });
+  const sourceArtifacts = {
+    followUpPlan,
+    ...Object.fromEntries(
+      ["batchRunState", "batchDiagnosis", "repairQueue", "repairClosure"]
+        .filter((key) => planSources[key])
+        .map((key) => [key, planSources[key]]),
+    ),
+  };
+  const sourceFingerprints = {
+    ...sourceFingerprintsFromArtifacts(sourceArtifacts),
+    ...(plan.sourceFingerprints && typeof plan.sourceFingerprints === "object" ? plan.sourceFingerprints : {}),
+    followUpPlan: followUpPlan.fingerprint,
+  };
+  const batchSystems = uniqueSystemCodes([plan.batchSystems || [], plan.queueItems || [], plan.blockedQueueItems || []]);
+  const selectedSystems = uniqueSystemCodes([
+    plan.selectedSystems || [],
+    plan.commands || [],
+    plan.queueItems || [],
+    plan.blockedQueueItems || [],
+  ]);
+  return {
+    sourceArtifacts,
+    sourceFingerprints,
+    batchSystems,
+    selectedSystems: selectedSystems.length ? selectedSystems : batchSystems,
+  };
+}
+
+function summarizeFinalPlan(plan = {}, sourceBinding = {}) {
+  return {
+    status: plan.status || "",
+    nextBestAction: plan.nextBestAction || "",
+    summary: plan.summary || {},
+    generatedAt: plan.generatedAt || "",
+    sourceFingerprints: sourceBinding.sourceFingerprints || plan.sourceFingerprints || {},
+    batchSystems: sourceBinding.batchSystems || plan.batchSystems || [],
+    selectedSystems: sourceBinding.selectedSystems || plan.selectedSystems || [],
+  };
 }
 
 function createLoopSkippedCommand(command = {}, reason) {
@@ -240,6 +292,7 @@ async function runRepairFollowUpLoop(options = {}) {
   const spawnImpl = typeof options.spawn === "function" ? options.spawn : spawn;
   const runId = nowIso(options.now).replace(/[^0-9A-Za-z]+/g, "").slice(0, 14) || Date.now();
   let plan = options.followUpPlan || readFollowUpPlan(planPath);
+  let sourceBinding = buildFollowUpLoopSourceBinding(context, planPath, plan);
   let state = {
     artifactType: "batch-repair-follow-up-loop-state",
     version: 1,
@@ -252,13 +305,13 @@ async function runRepairFollowUpLoop(options = {}) {
       agentWritingAllowed: false,
       supportedNpmScripts: [...SUPPORTED_FOLLOW_UP_SCRIPTS],
     },
+    sourceArtifacts: sourceBinding.sourceArtifacts,
+    sourceFingerprints: sourceBinding.sourceFingerprints,
+    batchSystems: sourceBinding.batchSystems,
+    selectedSystems: sourceBinding.selectedSystems,
     rounds: [],
     skipped: [],
-    finalPlan: {
-      status: plan.status || "",
-      nextBestAction: plan.nextBestAction || "",
-      summary: plan.summary || {},
-    },
+    finalPlan: summarizeFinalPlan(plan, sourceBinding),
     updatedAt: nowIso(options.now),
   };
   writeFollowUpLoopState(context.outputRoot, state);
@@ -309,6 +362,10 @@ async function runRepairFollowUpLoop(options = {}) {
       args: childArgs,
       status: normalizeBooleanOption(args["dry-run"]) ? "dry-run" : "running",
       logFile,
+      selectedSystems: uniqueSystemCodes(command.systems || []),
+      sourceFingerprints: {
+        followUpPlan: state.sourceFingerprints.followUpPlan,
+      },
       startedAt: new Date().toISOString(),
       finishedAt: "",
       exitCode: null,
@@ -348,11 +405,12 @@ async function runRepairFollowUpLoop(options = {}) {
       break;
     }
     plan = readFollowUpPlan(planPath);
-    state.finalPlan = {
-      status: plan.status || "",
-      nextBestAction: plan.nextBestAction || "",
-      summary: plan.summary || {},
-    };
+    sourceBinding = buildFollowUpLoopSourceBinding(context, planPath, plan);
+    state.sourceArtifacts = sourceBinding.sourceArtifacts;
+    state.sourceFingerprints = sourceBinding.sourceFingerprints;
+    state.batchSystems = sourceBinding.batchSystems;
+    state.selectedSystems = sourceBinding.selectedSystems;
+    state.finalPlan = summarizeFinalPlan(plan, sourceBinding);
     state.updatedAt = new Date().toISOString();
     writeFollowUpLoopState(context.outputRoot, state);
   }
@@ -363,11 +421,12 @@ async function runRepairFollowUpLoop(options = {}) {
     state.reason = terminal.reason;
   }
   state.finishedAt = new Date().toISOString();
-  state.finalPlan = {
-    status: plan.status || "",
-    nextBestAction: plan.nextBestAction || "",
-    summary: plan.summary || {},
-  };
+  sourceBinding = buildFollowUpLoopSourceBinding(context, planPath, plan);
+  state.sourceArtifacts = sourceBinding.sourceArtifacts;
+  state.sourceFingerprints = sourceBinding.sourceFingerprints;
+  state.batchSystems = sourceBinding.batchSystems;
+  state.selectedSystems = sourceBinding.selectedSystems;
+  state.finalPlan = summarizeFinalPlan(plan, sourceBinding);
   const terminalChecks = writeFollowUpLoopTerminalChecks(context, args);
   state.acceptance = terminalChecks.acceptance;
   state.deliveryReadiness = terminalChecks.deliveryReadiness;
@@ -394,6 +453,7 @@ if (require.main === module) {
 
 module.exports = {
   buildFollowUpChildArgs,
+  buildFollowUpLoopSourceBinding,
   buildRepairBatchChildArgs: buildFollowUpChildArgs,
   readFollowUpPlan,
   resolveFollowUpEntrypoint,

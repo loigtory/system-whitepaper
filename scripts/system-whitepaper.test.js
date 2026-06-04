@@ -5465,6 +5465,11 @@ test("stopPipeline terminalizes stale batch run-state without tracked child", ()
   assert.equal(snapshot.running, false);
   assert.equal(snapshot.activeRun, null);
   assert.equal(snapshot.batch.status, "failed");
+  assert.deepEqual(snapshot.batchStopSummary.terminatedBatchSystems, ["adp", "claim"]);
+  assert.equal(snapshot.batchStopSummary.terminatedCount, 2);
+  assert.equal(snapshot.batchStopSummary.terminatedSystems[0].stopReason, "dashboard-stop");
+  assert.deepEqual(snapshot.batch.stopSummary.terminatedBatchSystems, ["adp", "claim"]);
+  assert.match(snapshot.batch.stopSummary.terminatedSystems[0].lastError, /stopped|停止/i);
 });
 
 test("resetPipelineStateOnDisk restores fresh pending state", () => {
@@ -6692,6 +6697,213 @@ test("agent isolation guard accepts isolated workers and rejects overlap", () =>
   assert.ok(violationIds.includes("worker.write-scope-overlap"));
   assert.ok(violationIds.includes("worker.coordinator-owned-scope"));
   assert.ok(violationIds.includes("worker.read-only-write-scope"));
+});
+
+test("agent isolation strict mode verifies actual worktrees, branches, handoffs, and diff scope", () => {
+  const { validateAgentIsolationPlan } = require("./check-agent-isolation");
+  const files = new Map([
+    [
+      "d:\\repo\\system-whitepaper-dashboard\\outputs\\agent-dashboard\\handoff.json",
+      JSON.stringify({
+        workerId: "dashboard",
+        changedFiles: ["scripts/local-dashboard/server.js"],
+        tests: ["node --test --test-name-pattern dashboard scripts/system-whitepaper.test.js"],
+      }),
+    ],
+    [
+      "d:\\repo\\system-whitepaper-readiness\\outputs\\agent-readiness\\handoff.json",
+      JSON.stringify({
+        workerId: "readiness",
+        changedFiles: ["scripts/check-real-run-readiness.js"],
+        tests: ["node --test --test-name-pattern readiness scripts/system-whitepaper.test.js"],
+      }),
+    ],
+    [
+      "d:\\repo\\system-whitepaper-batch-stop\\outputs\\agent-batch-stop\\handoff.json",
+      JSON.stringify({
+        workerId: "batch-stop",
+        changedFiles: ["scripts/run-whitepaper-batch.js"],
+        tests: ["node --test --test-name-pattern batch scripts/system-whitepaper.test.js"],
+      }),
+    ],
+  ]);
+  const git = (args) => {
+    const command = args.join(" ");
+    if (command === "worktree list --porcelain") {
+      return [
+        "worktree D:/repo/system-whitepaper",
+        "HEAD aaa",
+        "branch refs/heads/main",
+        "",
+        "worktree D:/repo/system-whitepaper-dashboard",
+        "HEAD bbb",
+        "branch refs/heads/codex/dashboard-progress",
+        "",
+        "worktree D:/repo/system-whitepaper-readiness",
+        "HEAD ccc",
+        "branch refs/heads/codex/readiness-gates",
+        "",
+        "worktree D:/repo/system-whitepaper-batch-stop",
+        "HEAD ddd",
+        "branch refs/heads/codex/batch-stop-state",
+        "",
+        "worktree D:/repo/system-whitepaper-auditor",
+        "HEAD eee",
+        "branch refs/heads/codex/auditor",
+        "",
+      ].join("\n");
+    }
+    if (command === "-C d:/repo/system-whitepaper status --short") return "";
+    if (command === "-C d:/repo/system-whitepaper-dashboard status --short") {
+      return " M scripts/local-dashboard/server.js\n?? outputs/agent-dashboard/handoff.json\n";
+    }
+    if (command === "-C d:/repo/system-whitepaper-readiness status --short") return " M scripts/check-real-run-readiness.js\n";
+    if (command === "-C d:/repo/system-whitepaper-batch-stop status --short") return " M scripts/run-whitepaper-batch.js\n";
+    return "";
+  };
+
+  const strict = validateAgentIsolationPlan(
+    {
+      artifactType: "agent-isolation-plan",
+      version: 1,
+      expectedWorkers: 4,
+      coordinator: {
+        id: "main",
+        worktree: "D:/repo/system-whitepaper",
+        branch: "main",
+      },
+      mergePolicy: {
+        coordinatorOnlyMerge: true,
+        reviewRequired: true,
+      },
+      workers: [
+        {
+          id: "dashboard",
+          worktree: "D:/repo/system-whitepaper-dashboard",
+          branch: "codex/dashboard-progress",
+          outputDir: "outputs/agent-dashboard",
+          handoffReport: "outputs/agent-dashboard/handoff.json",
+          writeScope: ["scripts/local-dashboard/"],
+        },
+        {
+          id: "readiness",
+          worktree: "D:/repo/system-whitepaper-readiness",
+          branch: "codex/readiness-gates",
+          outputDir: "outputs/agent-readiness",
+          handoffReport: "outputs/agent-readiness/handoff.json",
+          writeScope: ["scripts/check-real-run-readiness.js"],
+        },
+        {
+          id: "batch-stop",
+          worktree: "D:/repo/system-whitepaper-batch-stop",
+          branch: "codex/batch-stop-state",
+          outputDir: "outputs/agent-batch-stop",
+          handoffReport: "outputs/agent-batch-stop/handoff.json",
+          writeScope: ["scripts/run-whitepaper-batch.js"],
+        },
+        {
+          id: "auditor",
+          readOnly: true,
+          worktree: "D:/repo/system-whitepaper-auditor",
+        },
+      ],
+    },
+    {
+      verifyWorktrees: true,
+      requireHandoffs: true,
+      requireCleanCoordinator: true,
+      git,
+      fileExists: (filePath) => files.has(String(filePath).toLowerCase()),
+      readTextFile: (filePath) => files.get(String(filePath).toLowerCase()),
+    },
+  );
+
+  assert.equal(strict.ok, true);
+  assert.equal(strict.summary.actualWorktreesChecked, 4);
+  assert.equal(strict.summary.actualHandoffReportsChecked, 3);
+  assert.equal(strict.summary.actualChangedFilesChecked, 4);
+});
+
+test("agent isolation strict mode rejects missing worktree, dirty coordinator, and out-of-scope handoff", () => {
+  const { validateAgentIsolationPlan } = require("./check-agent-isolation");
+  const handoffPath = "d:\\repo\\system-whitepaper-dashboard\\outputs\\agent-dashboard\\handoff.json";
+  const git = (args) => {
+    const command = args.join(" ");
+    if (command === "worktree list --porcelain") {
+      return [
+        "worktree D:/repo/system-whitepaper",
+        "HEAD aaa",
+        "branch refs/heads/main",
+        "",
+        "worktree D:/repo/system-whitepaper-dashboard",
+        "HEAD bbb",
+        "branch refs/heads/codex/wrong-branch",
+        "",
+      ].join("\n");
+    }
+    if (command === "-C d:/repo/system-whitepaper status --short") return " M SKILL.md\n";
+    if (command === "-C d:/repo/system-whitepaper-dashboard status --short") return " M scripts/system-whitepaper.test.js\n";
+    return "";
+  };
+
+  const strict = validateAgentIsolationPlan(
+    {
+      artifactType: "agent-isolation-plan",
+      version: 1,
+      expectedWorkers: 2,
+      coordinator: {
+        id: "main",
+        worktree: "D:/repo/system-whitepaper",
+        branch: "main",
+      },
+      mergePolicy: {
+        coordinatorOnlyMerge: true,
+        reviewRequired: true,
+      },
+      workers: [
+        {
+          id: "dashboard",
+          worktree: "D:/repo/system-whitepaper-dashboard",
+          branch: "codex/dashboard-progress",
+          outputDir: "outputs/agent-dashboard",
+          handoffReport: "outputs/agent-dashboard/handoff.json",
+          writeScope: ["scripts/local-dashboard/"],
+        },
+        {
+          id: "readiness",
+          worktree: "D:/repo/system-whitepaper-readiness",
+          branch: "codex/readiness-gates",
+          outputDir: "outputs/agent-readiness",
+          handoffReport: "outputs/agent-readiness/handoff.json",
+          writeScope: ["scripts/check-real-run-readiness.js"],
+        },
+      ],
+    },
+    {
+      verifyWorktrees: true,
+      requireHandoffs: true,
+      requireCleanCoordinator: true,
+      git,
+      fileExists: (filePath) => String(filePath).toLowerCase() === handoffPath,
+      readTextFile: () =>
+        JSON.stringify({
+          workerId: "dashboard",
+          changedFiles: ["scripts/system-whitepaper.test.js"],
+          tests: [],
+        }),
+    },
+  );
+  const violationIds = strict.violations.map((item) => item.id);
+  const warningIds = strict.warnings.map((item) => item.id);
+
+  assert.equal(strict.ok, false);
+  assert.ok(violationIds.includes("coordinator.worktree-dirty"));
+  assert.ok(violationIds.includes("worker.branch-actual-mismatch"));
+  assert.ok(violationIds.includes("worker.diff-out-of-scope"));
+  assert.ok(violationIds.includes("worker.handoff-file-out-of-scope"));
+  assert.ok(violationIds.includes("worker.worktree-not-registered"));
+  assert.ok(violationIds.includes("worker.handoff-missing-actual"));
+  assert.ok(warningIds.includes("worker.handoff-tests-missing"));
 });
 
 function createDashboardFrontendContext() {
@@ -8470,6 +8682,7 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   const { buildFactCheckSourceArtifacts, runFactCheck } = require("./fact-check-whitepaper");
   const { runNarrativeCheck } = require("./check-narrative");
   const { buildReadinessSourceArtifacts, loadReadinessInputs } = require("./check-truth-readiness");
+  const { fingerprintFile } = require("./repair-artifacts");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "batch-acceptance-"));
   const outputRoot = path.join(dir, "outputs");
   const systemOutput = path.join(outputRoot, "adp");
@@ -8568,6 +8781,15 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
     }),
     "utf8",
   );
+  const batchSourceArtifact = (fileName) => ({
+    file: fileName,
+    sourceType: "file",
+    fingerprint: fingerprintFile(path.join(outputRoot, "_batch", fileName)),
+  });
+  const repairClosureSourceArtifacts = {
+    batchDiagnosis: batchSourceArtifact("diagnosis.json"),
+    repairQueue: batchSourceArtifact("repair-queue.json"),
+  };
   const repairClosurePath = path.join(outputRoot, "_batch", "repair-closure.json");
   fs.writeFileSync(
     repairClosurePath,
@@ -8599,6 +8821,13 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
         generatedAt: "2026-06-03T00:02:30.000Z",
         summary: { total: 0, autoRunnable: 0, blocked: 0, requiresAgentWriting: 0 },
       },
+      sourceArtifacts: repairClosureSourceArtifacts,
+      sourceFingerprints: {
+        batchDiagnosis: repairClosureSourceArtifacts.batchDiagnosis.fingerprint,
+        repairQueue: repairClosureSourceArtifacts.repairQueue.fingerprint,
+      },
+      batchSystems: ["adp"],
+      selectedSystems: ["adp"],
       failedGroups: [],
       pendingGroups: [],
       blockers: [],
@@ -8646,6 +8875,83 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
     JSON.stringify(acceptedClosureArtifact),
     "utf8",
   );
+
+  fs.writeFileSync(
+    repairClosurePath,
+    JSON.stringify({
+      ...acceptedClosureArtifact,
+      diagnosis: {
+        ...acceptedClosureArtifact.diagnosis,
+        generatedAt: "2026-06-02T23:59:00.000Z",
+      },
+    }),
+    "utf8",
+  );
+  const staleClosure = buildBatchAcceptanceReport({ args: { config: configPath } });
+  assert.equal(staleClosure.status, "blocked");
+  assert.ok(staleClosure.blockers.some((item) => item.id === "repair.closure-stale"));
+  fs.writeFileSync(repairClosurePath, JSON.stringify(acceptedClosureArtifact), "utf8");
+
+  const followUpSourceArtifacts = {
+    batchDiagnosis: batchSourceArtifact("diagnosis.json"),
+    repairQueue: batchSourceArtifact("repair-queue.json"),
+    repairClosure: batchSourceArtifact("repair-closure.json"),
+  };
+  const followUpPlanPath = path.join(outputRoot, "_batch", "repair-follow-up-plan.json");
+  fs.writeFileSync(
+    followUpPlanPath,
+    JSON.stringify({
+      artifactType: "batch-repair-follow-up-plan",
+      version: 1,
+      generatedAt: "2026-06-03T00:03:30.000Z",
+      status: "ready-to-run",
+      nextBestAction: "Run stale low-quota command.",
+      source: {
+        closureStatus: "blocked",
+        runStatus: "success",
+        diagnosisGeneratedAt: "2026-06-02T23:59:00.000Z",
+        repairQueueGeneratedAt: "2026-06-03T00:02:30.000Z",
+      },
+      policy: {
+        reset: false,
+        reviewNodeAllowed: false,
+        agentWritingRequiresFlag: true,
+      },
+      sourceArtifacts: followUpSourceArtifacts,
+      sourceFingerprints: {
+        batchDiagnosis: followUpSourceArtifacts.batchDiagnosis.fingerprint,
+        repairQueue: followUpSourceArtifacts.repairQueue.fingerprint,
+        repairClosure: followUpSourceArtifacts.repairClosure.fingerprint,
+      },
+      batchSystems: ["adp"],
+      selectedSystems: ["adp"],
+      summary: {
+        commands: 1,
+        lowQuotaCommands: 1,
+        agentWritingCommands: 0,
+        remainingQueueItems: 0,
+        blockedQueueItems: 0,
+      },
+      commands: [
+        {
+          id: "stale-follow-up",
+          canAutoRun: true,
+          canRunWithoutAgentWriting: true,
+          requiresAgentWriting: false,
+          requiresExplicitQuotaApproval: false,
+          command: { npmScript: "repair:batch", args: [] },
+        },
+      ],
+      queueItems: [],
+      blockedQueueItems: [],
+      blockers: [],
+    }),
+    "utf8",
+  );
+  const staleFollowUp = buildBatchAcceptanceReport({ args: { config: configPath } });
+  assert.equal(staleFollowUp.status, "blocked");
+  assert.ok(staleFollowUp.blockers.some((item) => item.id === "repair.follow-up-stale"));
+  fs.unlinkSync(followUpPlanPath);
 
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),

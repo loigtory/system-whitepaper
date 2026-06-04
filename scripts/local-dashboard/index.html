@@ -767,6 +767,72 @@
         return `节点进度：${progressValue(progress, "completed")}/${total}`;
       }
 
+      function batchStopDisplaySystems(stopSummary = {}) {
+        const detailed = Array.isArray(stopSummary.terminatedSystems) ? stopSummary.terminatedSystems : [];
+        if (detailed.length) return detailed;
+        return (stopSummary.terminatedBatchSystems || []).map((code) => ({ code }));
+      }
+
+      function renderBatchStatus() {
+        const batch = snapshot.batch;
+        if (!batch || snapshot.activeRun?.mode === "batch") return "";
+        const summary = batch.summary || {};
+        const stopSummary = snapshot.batchStopSummary || batch.stopSummary || {};
+        const stoppedSystems = batchStopDisplaySystems(stopSummary);
+        const diagnosis = batch.diagnosis;
+        const diagnosisSummary = diagnosis?.summary || {};
+        const repairQueue = batch.repairQueue;
+        const repairQueueSummary = repairQueue?.summary || {};
+        const acceptance = batch.acceptance;
+        const acceptanceSummary = acceptance?.summary || {};
+        const repairFollowUp = batch.repairFollowUp;
+        const repairFollowUpSummary = repairFollowUp?.summary || {};
+        const isBatchLike =
+          batch.mode === "batch" ||
+          Number(summary.total || 0) > 1 ||
+          stoppedSystems.length ||
+          diagnosis ||
+          repairQueue ||
+          acceptance ||
+          batch.deliveryReadiness ||
+          batch.realRunReadiness ||
+          repairFollowUp;
+        if (!isBatchLike) return "";
+        const stoppedCards = stoppedSystems
+          .map(
+            (item) => `
+              <div class="batch-item">
+                <div><strong>${escapeHtml(item.name || item.code || "-")}</strong> ${statusBadge(item.status || "paused")}</div>
+                <div class="muted">${escapeHtml(item.code || "-")} · run=${escapeHtml(item.runStatus || "failed")} · reason=${escapeHtml(item.stopReason || "-")}</div>
+                ${item.lastError ? `<div class="muted">停止原因 ${escapeHtml(item.lastError)}</div>` : ""}
+                ${item.retryNodes ? `<div class="muted">建议重试节点 ${escapeHtml(item.retryNodes)}</div>` : ""}
+                ${(item.finishedAt || item.updatedAt) ? `<div class="muted">更新时间 ${formatTime(item.finishedAt || item.updatedAt)}</div>` : ""}
+              </div>
+            `,
+          )
+          .join("");
+        return `
+          <section class="card">
+            <h2>最近 Batch 状态</h2>
+            <div class="usage-history">
+              ${statusBadge(batch.status || "-")}
+              <span class="usage-history-item">总数 ${escapeHtml(String(summary.total || batch.total || 0))}</span>
+              <span class="usage-history-item">完成 ${escapeHtml(String(summary.completed || summary.successful || summary.success || 0))}</span>
+              <span class="usage-history-item">失败 ${escapeHtml(String(summary.failed || 0))}</span>
+              <span class="usage-history-item">运行 ${escapeHtml(String(summary.running || 0))}</span>
+              <span class="usage-history-item">队列 ${escapeHtml(String(summary.queued || 0))}</span>
+            </div>
+            ${stoppedSystems.length ? `<div class="status failed" style="margin-top: 12px">Dashboard stop 已终止 ${escapeHtml(String(stoppedSystems.length))} 个系统：${escapeHtml(stoppedSystems.map((item) => item.code || item.name || "-").join(", "))}</div>` : ""}
+            ${stopSummary.lastStoppedAt ? `<div class="muted" style="margin-top: 8px">最近停止时间：${formatTime(stopSummary.lastStoppedAt)}</div>` : ""}
+            ${diagnosis ? `<div class="muted" style="margin-top: 10px">批量诊断 Ready ${escapeHtml(String(diagnosisSummary.ready || 0))}/${escapeHtml(String(diagnosisSummary.total || 0))} · Blocked ${escapeHtml(String(diagnosisSummary.blocked || 0))} · 缺失可写声明 ${escapeHtml(String(diagnosisSummary.missingWritableClaims || 0))}</div>` : ""}
+            ${repairQueue ? `<div class="muted" style="margin-top: 6px">修复队列 自动 ${escapeHtml(String(repairQueueSummary.autoRunnable || 0))}/${escapeHtml(String(repairQueueSummary.total || 0))} · 阻塞 ${escapeHtml(String(repairQueueSummary.blocked || 0))} · 写稿额度 ${escapeHtml(String(repairQueueSummary.requiresAgentWriting || 0))}</div>` : ""}
+            ${acceptance ? `<div class="muted" style="margin-top: 6px">验收 ${escapeHtml(acceptance.status || "-")} · accepted ${escapeHtml(String(acceptanceSummary.accepted || 0))}/${escapeHtml(String(acceptanceSummary.total || 0))} · blockers ${escapeHtml(String(acceptanceSummary.blockers || 0))} · 可提交 ${acceptance.canSubmitAll ? "是" : "否"}</div>` : ""}
+            ${repairFollowUp ? `<div class="muted" style="margin-top: 6px">Repair follow-up ${escapeHtml(repairFollowUp.status || "-")} · commands ${escapeHtml(String(repairFollowUpSummary.commands || 0))} · ${escapeHtml(repairFollowUp.nextBestAction || "-")}</div>` : ""}
+            ${stoppedCards ? `<div class="batch-grid">${stoppedCards}</div>` : ""}
+          </section>
+        `;
+      }
+
       function displayNodeLabel(system, nodeId) {
         if (system.overallStatus === "finalized" && nodeId === "end") return nodeText.end;
         return nodeText[nodeId] || system.nodes?.[nodeId]?.label || nodeId;
@@ -1713,7 +1779,7 @@
       }
 
       function renderHome() {
-        return renderSummary() + renderActiveRun() + renderFilters() + renderSystemsTable();
+        return renderSummary() + renderActiveRun() + renderBatchStatus() + renderFilters() + renderSystemsTable();
       }
 
       function render() {
@@ -1829,6 +1895,7 @@
             const parts = [];
             if (result.killedPids?.length) parts.push(`已结束进程 ${result.killedPids.join(", ")}`);
             if (result.pausedSystems?.length) parts.push(`已暂停 ${result.pausedSystems.join(", ")}`);
+            if (result.terminatedBatchSystems?.length) parts.push(`已终止 batch 系统 ${result.terminatedBatchSystems.join(", ")}`);
             if (result.staleStateCleared) parts.push("已清理卡住的运行状态");
             setMessage(parts.join("；") || "已停止当前任务");
           } else {

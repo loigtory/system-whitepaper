@@ -61,8 +61,10 @@ Use the 4-thread model for unattended multi-system development:
 
 - Run different systems in parallel. Each system must write to its own `outputs/<system-code>/` directory.
 - For Codex/Agent development work, the main Agent is the coordinator and reviewer. Worker Agents must act like independent developers: each writable worker uses its own non-nested worktree, branch, output directory, `handoffReport`, and non-overlapping `writeScope`; read-only auditors must declare no `writeScope`.
-- Record the assignment in `.agents/4-agent-plan.json` and run `npm run agent:isolation` before dispatching workers and before merging. The guard blocks shared or nested worktrees, shared branches, shared or nested output directories, missing/unsafe handoff reports, overlapping write scopes, worker edits to coordinator-owned paths, and plans without a coordinator-only merge policy.
-- Integrate worker results only through the main Agent after reviewing each worker's `handoffReport`, diffs, and tests. Treat shared config, `scripts/system-whitepaper.test.js`, `SKILL.md`, `package.json`, and `_batch` state as coordinator-owned unless the main Agent changes them directly.
+- Record the assignment in `.agents/4-agent-plan.json` and run `npm run agent:isolation` before creating or dispatching workers. This is only a declaration check.
+- Before worker execution, run `npm run agent:isolation:worktrees` from the coordinator worktree. Before merging, run `npm run agent:isolation:strict`. The worktree check proves worker paths are registered git worktrees and writable workers are on their assigned branches; strict mode additionally proves worker diffs stay inside `writeScope` and each writable worker has a valid `handoffReport`.
+- Treat same-directory subagents as not isolated. If a worker cannot run in its own git worktree/branch/output/handoff path, do not count it as one of the 4 independent agents and do not merge its changes as worker output.
+- Integrate worker results only through the main Agent after reviewing each worker's `handoffReport`, diffs, and tests. Treat shared config, `scripts/system-whitepaper.test.js`, `SKILL.md`, `package.json`, `.agents/`, and `_batch` state as coordinator-owned unless the main Agent changes them directly.
 - Use a merge policy in the plan, for example: `"mergePolicy": { "coordinatorOnlyMerge": true, "reviewRequired": true }`.
 - Do not run the same system twice at the same time. Duplicate system codes or duplicate batch requests are invalid because they can overwrite screenshots, state, prompts, and review artifacts.
 - The batch runner owns `outputs/_batch/run-state.json`. Single-system child pipelines are started with `--no-batch-state` so they cannot overwrite the aggregate batch state.
@@ -78,7 +80,9 @@ Use the npm scripts as the stable entrypoints:
 
 - `npm run init`: create `config/systems.local.yaml`, `secrets/`, and `outputs/` from the packaged example if missing.
 - `npm run doctor`: validate local config, secret paths, safe test-data prefix, output directory, and system registry before running the pipeline.
-- `npm run agent:isolation`: validate `.agents/4-agent-plan.json` before 4-agent Codex development so worker worktrees, branches, output directories, and write scopes remain isolated.
+- `npm run agent:isolation`: validate `.agents/4-agent-plan.json` declarations before creating 4-agent Codex workers.
+- `npm run agent:isolation:worktrees`: validate actual git worktrees, branches, and coordinator cleanliness before worker execution.
+- `npm run agent:isolation:strict`: validate actual git worktrees, branches, handoff reports, coordinator cleanliness, and worker diff/writeScope boundaries before merging.
 - `npm run db:profile -- --system <code>`: build a redacted `database-profile.json` from private test-database metadata or `databaseProfile.mode=connector` / `--connector` read-only schema scan when enabled.
 - `npm run db:model -- --input outputs/<code>`: derive `data-dictionary.json` and `entity-model.json` from the redacted database profile.
 - `npm run truth:universe -- --input outputs/<code>`: merge UI evidence summary and redacted database profile into `function-universe.json` candidates.

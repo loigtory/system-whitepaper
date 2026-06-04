@@ -17,6 +17,9 @@ const { runRealRunReadiness } = require("./check-real-run-readiness");
 const {
   assertValidRepairClosureArtifact,
   assertValidRepairFollowUpPlanArtifact,
+  sourceArtifactRecord,
+  sourceFingerprintsFromArtifacts,
+  uniqueSystemCodes,
 } = require("./repair-artifacts");
 
 const REPAIR_NODE_ORDER = NODES.map((node) => node.id).filter((nodeId) => nodeId !== "review");
@@ -304,6 +307,58 @@ function readBatchArtifact(outputRoot, fileName) {
   return readOptionalJsonObject(path.join(outputRoot, "_batch", fileName));
 }
 
+function batchArtifactPath(outputRoot, fileName) {
+  return outputRoot ? path.join(outputRoot, "_batch", fileName) : "";
+}
+
+function buildRepairSourceArtifacts(outputRoot, sources = {}, keys = []) {
+  const batchDir = outputRoot ? path.join(outputRoot, "_batch") : process.cwd();
+  const fileNames = {
+    batchRunState: "run-state.json",
+    batchDiagnosis: "diagnosis.json",
+    repairQueue: "repair-queue.json",
+    repairRunPlan: "repair-run-plan.json",
+    repairClosure: "repair-closure.json",
+  };
+  const result = {};
+  for (const key of keys) {
+    const fileName = fileNames[key];
+    if (!fileName) continue;
+    const value = sources[key] === undefined ? null : sources[key];
+    if (!outputRoot && value === null) continue;
+    result[key] = sourceArtifactRecord(batchArtifactPath(outputRoot, fileName), value, {
+      baseDir: batchDir,
+      file: fileName,
+    });
+  }
+  return result;
+}
+
+function buildRepairSourceBinding(outputRoot, sources = {}, selectedSystemInputs = [], sourceKeys = []) {
+  const batchState = sources.batchRunState || (outputRoot ? readBatchArtifact(outputRoot, "run-state.json") : null);
+  const diagnosis = sources.batchDiagnosis || sources.diagnosis || null;
+  const repairQueue = sources.repairQueue || null;
+  const sourceValues = {
+    ...sources,
+    batchRunState: batchState,
+    batchDiagnosis: diagnosis,
+    repairQueue,
+  };
+  const sourceArtifacts = buildRepairSourceArtifacts(outputRoot, sourceValues, sourceKeys);
+  const batchSystems = uniqueSystemCodes([
+    batchState?.systems || [],
+    diagnosis?.systems || [],
+    repairQueue?.items || [],
+  ]);
+  const selectedSystems = uniqueSystemCodes(selectedSystemInputs);
+  return {
+    sourceArtifacts,
+    sourceFingerprints: sourceFingerprintsFromArtifacts(sourceArtifacts),
+    batchSystems,
+    selectedSystems: selectedSystems.length ? selectedSystems : batchSystems,
+  };
+}
+
 function summarizeClosureDiagnosis(diagnosis = null) {
   const summary = diagnosis?.summary || {};
   const systems = Array.isArray(diagnosis?.systems) ? diagnosis.systems : [];
@@ -343,6 +398,17 @@ function buildRepairClosureReport(state = {}, options = {}) {
   const outputRoot = options.outputRoot || "";
   const diagnosis = options.diagnosis || (outputRoot ? readBatchArtifact(outputRoot, "diagnosis.json") : null);
   const repairQueue = options.repairQueue || (outputRoot ? readBatchArtifact(outputRoot, "repair-queue.json") : null);
+  const sourceBinding = buildRepairSourceBinding(
+    outputRoot,
+    {
+      batchRunState: options.batchRunState,
+      batchDiagnosis: diagnosis,
+      repairQueue,
+      repairRunPlan: options.repairRunPlan,
+    },
+    [options.selectedSystems || [], state.groups || []],
+    ["batchRunState", "batchDiagnosis", "repairQueue", "repairRunPlan"],
+  );
   const diagnosisSummary = summarizeClosureDiagnosis(diagnosis);
   const repairQueueSummary = summarizeClosureRepairQueue(repairQueue);
   const failedGroups = (Array.isArray(state.groups) ? state.groups : []).filter((group) => group.status === "failed");
@@ -390,6 +456,10 @@ function buildRepairClosureReport(state = {}, options = {}) {
       generatedAt: repairQueue?.generatedAt || "",
       summary: repairQueueSummary,
     },
+    sourceArtifacts: sourceBinding.sourceArtifacts,
+    sourceFingerprints: sourceBinding.sourceFingerprints,
+    batchSystems: sourceBinding.batchSystems,
+    selectedSystems: sourceBinding.selectedSystems,
     failedGroups: failedGroups.map((group) => ({
       id: group.id || "",
       systems: group.systems || [],
@@ -686,6 +756,25 @@ function buildRepairFollowUpPlan(state = {}, options = {}) {
       `${item.systemCode || "-"} repair item blocked: ${reason}${detail ? ` (${detail})` : ""}`,
     ),
   ];
+  const sourceBinding = buildRepairSourceBinding(
+    outputRoot,
+    {
+      batchRunState: options.batchRunState,
+      batchDiagnosis: diagnosis,
+      repairQueue,
+      repairClosure: closure,
+    },
+    [
+      options.selectedSystems || [],
+      closure.selectedSystems || [],
+      failedGroups,
+      pendingGroups,
+      commands,
+      queueItems,
+      blockedItems.map(({ item }) => item),
+    ],
+    ["batchRunState", "batchDiagnosis", "repairQueue", "repairClosure"],
+  );
   return {
     artifactType: "batch-repair-follow-up-plan",
     version: 1,
@@ -697,7 +786,12 @@ function buildRepairFollowUpPlan(state = {}, options = {}) {
       runStatus: state.status || "",
       diagnosisGeneratedAt: diagnosis?.generatedAt || "",
       repairQueueGeneratedAt: repairQueue?.generatedAt || "",
+      closureGeneratedAt: closure.generatedAt || "",
     },
+    sourceArtifacts: sourceBinding.sourceArtifacts,
+    sourceFingerprints: sourceBinding.sourceFingerprints,
+    batchSystems: sourceBinding.batchSystems,
+    selectedSystems: sourceBinding.selectedSystems,
     policy: {
       reset: false,
       reviewNodeAllowed: false,
@@ -825,6 +919,9 @@ function writeRepairTerminalArtifacts(outputRoot, state, options = {}) {
       blockers: closure.blockers,
       artifacts: closureArtifacts,
       generatedAt: closure.generatedAt,
+      sourceFingerprints: closure.sourceFingerprints,
+      batchSystems: closure.batchSystems,
+      selectedSystems: closure.selectedSystems,
       followUp: {
         status: followUpPlan.status,
         nextBestAction: followUpPlan.nextBestAction,
@@ -838,6 +935,9 @@ function writeRepairTerminalArtifacts(outputRoot, state, options = {}) {
       summary: followUpPlan.summary,
       artifacts: followUpArtifacts,
       generatedAt: followUpPlan.generatedAt,
+      sourceFingerprints: followUpPlan.sourceFingerprints,
+      batchSystems: followUpPlan.batchSystems,
+      selectedSystems: followUpPlan.selectedSystems,
     },
     updatedAt: new Date().toISOString(),
   };
@@ -959,6 +1059,8 @@ async function runRepairQueue(options = {}) {
       model: args.model || "",
       batchRetries: args["batch-retries"],
       concurrency,
+      selectedSystems: splitCsv(args.systems || args.system || ""),
+      repairRunPlan: plan,
     });
     const terminalChecks = writeRepairTerminalChecks(context, args);
     state.acceptance = terminalChecks.acceptance;
@@ -1036,6 +1138,8 @@ async function runRepairQueue(options = {}) {
     model: args.model || "",
     batchRetries: args["batch-retries"],
     concurrency,
+    selectedSystems: splitCsv(args.systems || args.system || ""),
+    repairRunPlan: plan,
   });
   const terminalChecks = writeRepairTerminalChecks(context, args);
   state.acceptance = terminalChecks.acceptance;

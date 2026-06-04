@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 const { parseArgs, writeJson } = require("./system-whitepaper-lib");
 
 const DEFAULT_PLAN_PATH = ".agents/4-agent-plan.json";
@@ -34,6 +35,10 @@ function compactItems(items) {
 
 function unique(items) {
   return [...new Set(compactItems(items))];
+}
+
+function asBooleanFlag(value) {
+  return value === true || value === "true" || value === "1" || value === "yes";
 }
 
 function normalizePathText(value) {
@@ -73,6 +78,228 @@ function scopeContains(parent, child) {
   const b = normalizeScopePath(child);
   if (!a || !b) return false;
   return a === b || b.startsWith(`${a}/`);
+}
+
+function normalizeBranchName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^refs\/heads\//, "");
+}
+
+function runGitCommand(args = [], options = {}) {
+  if (typeof options.git === "function") {
+    return String(options.git(args, { cwd: options.cwd || process.cwd() }) || "");
+  }
+  return execFileSync("git", args, {
+    cwd: options.cwd || process.cwd(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function parseGitWorktreeList(output = "") {
+  const entries = [];
+  let current = null;
+  for (const line of String(output || "").split(/\r?\n/)) {
+    if (!line.trim()) {
+      if (current) entries.push(current);
+      current = null;
+      continue;
+    }
+    const [key, ...rest] = line.split(" ");
+    const value = rest.join(" ");
+    if (key === "worktree") {
+      if (current) entries.push(current);
+      current = { worktree: normalizeWorktreePath(value), branch: "", head: "" };
+    } else if (current && key === "branch") {
+      current.branch = normalizeBranchName(value);
+    } else if (current && key === "HEAD") {
+      current.head = value;
+    } else if (current && key === "detached") {
+      current.detached = true;
+    }
+  }
+  if (current) entries.push(current);
+  return entries;
+}
+
+function parseGitStatusPaths(output = "") {
+  return unique(
+    String(output || "")
+      .split(/\r?\n/)
+      .map((line) => {
+        if (!line.trim()) return "";
+        const raw = line.length > 3 ? line.slice(3).trim() : "";
+        const renamed = raw.includes(" -> ") ? raw.split(" -> ").pop() : raw;
+        return normalizeScopePath(renamed.replace(/^"|"$/g, ""));
+      }),
+  );
+}
+
+function fileExists(filePath, options = {}) {
+  if (typeof options.fileExists === "function") return Boolean(options.fileExists(filePath));
+  return fs.existsSync(filePath);
+}
+
+function readTextFile(filePath, options = {}) {
+  if (typeof options.readTextFile === "function") return String(options.readTextFile(filePath) || "");
+  return fs.readFileSync(filePath, "utf8");
+}
+
+function pathAllowedByScopes(filePath, scopes = []) {
+  return scopes.some((scope) => scopeContains(scope, filePath));
+}
+
+function validateActualAgentIsolation(plan, options = {}) {
+  const violations = [];
+  const warnings = [];
+  const verifyWorktrees = asBooleanFlag(options.verifyWorktrees);
+  const requireHandoffs = asBooleanFlag(options.requireHandoffs);
+  const requireCleanCoordinator = asBooleanFlag(options.requireCleanCoordinator);
+  if (!verifyWorktrees && !requireHandoffs && !requireCleanCoordinator) {
+    return {
+      violations,
+      warnings,
+      summary: {
+        actualWorktreesChecked: 0,
+        handoffReportsChecked: 0,
+        changedFilesChecked: 0,
+        coordinatorChangedFiles: 0,
+      },
+    };
+  }
+
+  const coordinator = isPlainObject(plan.coordinator) ? plan.coordinator : {};
+  const coordinatorWorktree = normalizeWorktreePath(
+    coordinator.worktree || options.coordinatorWorktree || process.cwd(),
+  );
+  const coordinatorBranch = normalizeBranchName(coordinator.branch || "");
+  const workers = Array.isArray(plan.workers) ? plan.workers : [];
+  let worktreeEntries = [];
+  let actualWorktreesChecked = 0;
+  let handoffReportsChecked = 0;
+  let changedFilesChecked = 0;
+  let coordinatorChangedFiles = 0;
+
+  if (verifyWorktrees || requireCleanCoordinator) {
+    try {
+      worktreeEntries = parseGitWorktreeList(runGitCommand(["worktree", "list", "--porcelain"], options));
+    } catch (error) {
+      violations.push(issue("git.worktree-list-failed", `Unable to inspect git worktrees: ${error.message}`));
+      worktreeEntries = [];
+    }
+  }
+  const worktreeByPath = new Map(worktreeEntries.map((entry) => [entry.worktree, entry]));
+
+  if (requireCleanCoordinator && coordinatorWorktree) {
+    try {
+      const coordinatorStatus = parseGitStatusPaths(
+        runGitCommand(["-C", coordinatorWorktree, "status", "--short"], options),
+      );
+      coordinatorChangedFiles = coordinatorStatus.length;
+      if (coordinatorStatus.length) {
+        violations.push(
+          issue("coordinator.worktree-dirty", "Coordinator worktree has uncommitted changes before worker merge.", {
+            severity: "P1",
+          }),
+        );
+      }
+    } catch (error) {
+      violations.push(issue("coordinator.status-failed", `Unable to inspect coordinator status: ${error.message}`));
+    }
+  }
+
+  workers.forEach((worker, index) => {
+    if (!isPlainObject(worker)) return;
+    const id = String(worker.id || worker.name || `worker-${index + 1}`).trim();
+    const readOnly = worker.readOnly === true || String(worker.mode || "").toLowerCase() === "read-only";
+    const worktree = normalizeWorktreePath(worker.worktree);
+    const branch = normalizeBranchName(worker.branch || "");
+    const outputDir = normalizeScopePath(worker.outputDir || "");
+    const handoffReport = normalizeScopePath(worker.handoffReport || worker.reportPath || "");
+    const writeScope = unique(worker.writeScope || worker.ownedPaths || []);
+
+    if (verifyWorktrees && worktree) {
+      actualWorktreesChecked += 1;
+      const entry = worktreeByPath.get(worktree);
+      if (!entry) {
+        violations.push(issue("worker.worktree-not-registered", "Worker worktree is not registered in git worktree list.", { workerId: id }));
+      } else if (!readOnly && branch && entry.branch && normalizeBranchName(entry.branch) !== branch) {
+        violations.push(
+          issue("worker.branch-actual-mismatch", `Worker worktree branch is ${entry.branch}, expected ${branch}.`, {
+            workerId: id,
+          }),
+        );
+      } else if (!readOnly && branch && !entry.branch) {
+        violations.push(issue("worker.branch-detached", "Writable worker worktree must not be detached.", { workerId: id }));
+      }
+
+      if (!readOnly) {
+        let changedFiles = [];
+        try {
+          changedFiles = parseGitStatusPaths(runGitCommand(["-C", worktree, "status", "--short"], options));
+        } catch (error) {
+          violations.push(issue("worker.status-failed", `Unable to inspect worker status: ${error.message}`, { workerId: id }));
+        }
+        changedFilesChecked += changedFiles.length;
+        for (const filePath of changedFiles) {
+          if (outputDir && scopeContains(outputDir, filePath)) continue;
+          if (!pathAllowedByScopes(filePath, writeScope)) {
+            violations.push(
+              issue("worker.diff-out-of-scope", `Worker changed file outside writeScope: ${filePath}.`, { workerId: id }),
+            );
+          }
+        }
+      }
+    }
+
+    if (requireHandoffs && !readOnly) {
+      if (!worktree || !handoffReport) return;
+      handoffReportsChecked += 1;
+      const reportPath = path.resolve(worktree, handoffReport);
+      if (!fileExists(reportPath, options)) {
+        violations.push(issue("worker.handoff-missing-actual", `Worker handoffReport does not exist: ${handoffReport}.`, { workerId: id }));
+        return;
+      }
+      let handoff = {};
+      try {
+        handoff = JSON.parse(readTextFile(reportPath, options));
+      } catch (error) {
+        violations.push(issue("worker.handoff-invalid-json", `Worker handoffReport is not valid JSON: ${error.message}`, { workerId: id }));
+        return;
+      }
+      const handoffWorkerId = String(handoff.workerId || handoff.id || "").trim();
+      if (handoffWorkerId && handoffWorkerId !== id) {
+        violations.push(issue("worker.handoff-id-mismatch", `handoffReport workerId is ${handoffWorkerId}, expected ${id}.`, { workerId: id }));
+      }
+      const declaredChangedFiles = unique(handoff.changedFiles || handoff.filesChanged || []);
+      for (const filePath of declaredChangedFiles) {
+        if (outputDir && scopeContains(outputDir, filePath)) continue;
+        if (!pathAllowedByScopes(filePath, writeScope)) {
+          violations.push(
+            issue("worker.handoff-file-out-of-scope", `handoffReport lists file outside writeScope: ${filePath}.`, {
+              workerId: id,
+            }),
+          );
+        }
+      }
+      const tests = Array.isArray(handoff.tests) ? handoff.tests : [];
+      if (!tests.length) {
+        warnings.push(issue("worker.handoff-tests-missing", "handoffReport does not list worker-run tests.", { workerId: id, severity: "P2" }));
+      }
+    }
+  });
+
+  return {
+    violations,
+    warnings,
+    summary: {
+      actualWorktreesChecked,
+      handoffReportsChecked,
+      changedFilesChecked,
+      coordinatorChangedFiles,
+    },
+  };
 }
 
 function validateAgentIsolationPlan(plan, options = {}) {
@@ -292,6 +519,10 @@ function validateAgentIsolationPlan(plan, options = {}) {
     warnings.push(issue("workers.no-writable", "No writable workers are assigned.", { severity: "P2" }));
   }
 
+  const actual = validateActualAgentIsolation(plan, options);
+  violations.push(...actual.violations);
+  warnings.push(...actual.warnings);
+
   return {
     artifactType: "agent-isolation-report",
     version: 1,
@@ -305,6 +536,10 @@ function validateAgentIsolationPlan(plan, options = {}) {
       coordinatorOwnedPaths: coordinatorOwnedPaths.length,
       handoffReports,
       writeScopes: writableScopes.length,
+      actualWorktreesChecked: actual.summary.actualWorktreesChecked,
+      actualHandoffReportsChecked: actual.summary.handoffReportsChecked,
+      actualChangedFilesChecked: actual.summary.changedFilesChecked,
+      coordinatorChangedFiles: actual.summary.coordinatorChangedFiles,
     },
     workerIds: workers.map((worker, index) => String(worker?.id || worker?.name || `worker-${index + 1}`)),
     violations,
@@ -326,6 +561,9 @@ function runAgentIsolationCheck(args = {}) {
   const report = validateAgentIsolationPlan(plan, {
     expectedWorkers: args["expected-workers"],
     coordinatorWorktree: args["coordinator-worktree"],
+    verifyWorktrees: args["verify-worktrees"],
+    requireHandoffs: args["require-handoffs"],
+    requireCleanCoordinator: args["require-clean-coordinator"],
   });
 
   if (args.report && args.report !== true) {
@@ -358,6 +596,8 @@ if (require.main === module) {
 module.exports = {
   DEFAULT_COORDINATOR_OWNED_PATHS,
   DEFAULT_PLAN_PATH,
+  parseGitStatusPaths,
+  parseGitWorktreeList,
   runAgentIsolationCheck,
   scopeContains,
   scopeOverlaps,

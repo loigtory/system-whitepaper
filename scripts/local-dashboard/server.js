@@ -923,6 +923,50 @@ function progressFromBatchSummary(summary = {}) {
   };
 }
 
+function isStopTerminatedBatchSystem(item = {}) {
+  const runStatus = String(item.runStatus || "");
+  const status = String(item.status || "");
+  const stopReason = String(item.stopReason || "");
+  const signal = String(item.signal || "");
+  const failureCategory = String(item.failureCategory || item.failure?.category || "");
+  const lastError = String(item.lastError || "");
+  const stopMarked =
+    Boolean(stopReason || signal) ||
+    failureCategory === "interrupted" ||
+    /dashboard-stop|interrupted|sigint|sigterm|手动停止|停止/.test(lastError.toLowerCase());
+  return stopMarked && runStatus === "failed" && status === "paused";
+}
+
+function normalizeRetryNodes(retryPlan = {}) {
+  if (Array.isArray(retryPlan.nodes)) return retryPlan.nodes.filter(Boolean).join(",");
+  return String(retryPlan.nodes || "");
+}
+
+function buildBatchStopSummary(batch = {}) {
+  const systems = Array.isArray(batch?.systems) ? batch.systems : [];
+  const terminatedSystems = systems.filter(isStopTerminatedBatchSystem).map((item) => ({
+    code: item.code || "",
+    name: item.name || "",
+    status: item.status || "",
+    runStatus: item.runStatus || "",
+    stopReason: item.stopReason || item.signal || item.failureCategory || item.failure?.category || "",
+    lastError: item.lastError || "",
+    retryNodes: normalizeRetryNodes(item.retryPlan || item.failure?.retryPlan || {}),
+    finishedAt: item.finishedAt || "",
+    updatedAt: item.updatedAt || "",
+  }));
+  const stoppedTimes = terminatedSystems
+    .map((item) => item.finishedAt || item.updatedAt)
+    .filter(Boolean)
+    .sort();
+  return {
+    terminatedBatchSystems: terminatedSystems.map((item) => item.code).filter(Boolean),
+    terminatedSystems,
+    terminatedCount: terminatedSystems.length,
+    lastStoppedAt: stoppedTimes.length ? stoppedTimes[stoppedTimes.length - 1] : "",
+  };
+}
+
 function buildBatchActiveRun(run, systems, batch) {
   const batchSystems = Array.isArray(batch?.systems) ? batch.systems : [];
   const runningBatchSystems = batchSystems.filter(
@@ -951,6 +995,7 @@ function buildBatchActiveRun(run, systems, batch) {
   const deliveryReadiness = batch?.deliveryReadiness || null;
   const realRunReadiness = batch?.realRunReadiness || null;
   const repairFollowUp = batch?.repairFollowUp || null;
+  const stopSummary = batch?.stopSummary || buildBatchStopSummary(batch);
   return {
     mode: "batch",
     systemCode: currentCodes.join(","),
@@ -970,6 +1015,7 @@ function buildBatchActiveRun(run, systems, batch) {
     deliveryReadiness,
     realRunReadiness,
     repairFollowUp,
+    stopSummary,
     startedAt: run.startedAt || batch?.startedAt || "",
     runningMs:
       run.startedAt || batch?.startedAt
@@ -1172,9 +1218,11 @@ function buildDashboardSnapshot(options = {}) {
     followUpMarkdown: fileInfo(path.join(outputRoot, "_batch", "repair-follow-up-plan.md")),
     followUpLoopState: fileInfo(path.join(outputRoot, "_batch", "repair-follow-up-loop-state.json")),
   };
+  const batchStopSummary = batch ? buildBatchStopSummary(batch) : null;
   const batchForActiveRun = batch
     ? {
         ...batch,
+        stopSummary: batch.stopSummary || batchStopSummary,
         diagnosis:
           batch.diagnosis ||
           (batchDiagnosis
@@ -1330,6 +1378,7 @@ function buildDashboardSnapshot(options = {}) {
     batchRepairFollowUpPlan,
     batchRepairFollowUpLoopState,
     batchRepairRunArtifacts,
+    batchStopSummary,
     summary: buildSummary(systems),
     activeRun,
     systems,

@@ -1,9 +1,115 @@
 #!/usr/bin/env node
 
+const fs = require("node:fs");
+const path = require("node:path");
+const crypto = require("node:crypto");
+
 const CLOSURE_TYPE = "batch-repair-closure";
 const FOLLOW_UP_TYPE = "batch-repair-follow-up-plan";
 const FOLLOW_UP_STATUSES = new Set(["complete", "ready-to-run", "needs-agent-writing", "blocked"]);
 const SUPPORTED_FOLLOW_UP_SCRIPTS = new Set(["repair:batch", "batch"]);
+
+function sortJsonValue(value) {
+  if (Array.isArray(value)) return value.map(sortJsonValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .filter((key) => value[key] !== undefined)
+      .map((key) => [key, sortJsonValue(value[key])]),
+  );
+}
+
+function fingerprintJsonValue(value) {
+  if (value === undefined || value === null) {
+    return { exists: false, size: 0, mtimeMs: null, sha256: "" };
+  }
+  const buffer = Buffer.from(JSON.stringify(sortJsonValue(value)), "utf8");
+  return {
+    exists: true,
+    size: buffer.length,
+    mtimeMs: null,
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+function fingerprintFile(filePath) {
+  const resolved = filePath ? path.resolve(String(filePath)) : "";
+  if (!resolved || !fs.existsSync(resolved)) {
+    return { exists: false, size: 0, mtimeMs: null, sha256: "" };
+  }
+  const stat = fs.statSync(resolved);
+  if (!stat.isFile()) {
+    return { exists: false, size: 0, mtimeMs: null, sha256: "" };
+  }
+  const buffer = fs.readFileSync(resolved);
+  return {
+    exists: true,
+    size: stat.size,
+    mtimeMs: Math.round(stat.mtimeMs),
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+function sourceArtifactRecord(filePath, value = null, options = {}) {
+  const resolved = filePath ? path.resolve(String(filePath)) : "";
+  const file = resolved
+    ? path.relative(options.baseDir || path.dirname(resolved), resolved).replace(/\\/g, "/")
+    : options.file || "";
+  const fileFingerprint = fingerprintFile(resolved);
+  if (fileFingerprint.exists) {
+    return {
+      file,
+      sourceType: "file",
+      fingerprint: fileFingerprint,
+    };
+  }
+  const objectFingerprint = fingerprintJsonValue(value);
+  if (objectFingerprint.exists) {
+    return {
+      file,
+      sourceType: "object",
+      fingerprint: objectFingerprint,
+    };
+  }
+  return {
+    file,
+    sourceType: "missing",
+    fingerprint: fileFingerprint,
+  };
+}
+
+function sourceFingerprintsFromArtifacts(sourceArtifacts = {}) {
+  return Object.fromEntries(
+    Object.entries(sourceArtifacts).map(([key, artifact]) => [
+      key,
+      artifact?.fingerprint || { exists: false, size: 0, mtimeMs: null, sha256: "" },
+    ]),
+  );
+}
+
+function uniqueSystemCodes(values = []) {
+  const result = [];
+  const seen = new Set();
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (value && typeof value === "object") {
+      visit(value.code);
+      visit(value.systemCode);
+      if (Array.isArray(value.systems)) visit(value.systems);
+      return;
+    }
+    const code = String(value || "").trim();
+    if (!code || seen.has(code)) return;
+    seen.add(code);
+    result.push(code);
+  };
+  visit(values);
+  return result;
+}
 
 function assertJsonObject(value, message) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -26,6 +132,47 @@ function assertBoolean(value, message) {
 function assertFiniteNumber(value, message) {
   if (!Number.isFinite(Number(value))) {
     throw new Error(message);
+  }
+}
+
+function assertSourceFingerprint(value, message) {
+  assertJsonObject(value, message);
+  assertBoolean(value.exists, `${message}.exists must be a boolean.`);
+  assertFiniteNumber(value.size, `${message}.size must be numeric.`);
+  if (value.mtimeMs !== null && value.mtimeMs !== undefined) {
+    assertFiniteNumber(value.mtimeMs, `${message}.mtimeMs must be numeric or null.`);
+  }
+  if (value.exists && !String(value.sha256 || "").trim()) {
+    throw new Error(`${message}.sha256 must be present when exists=true.`);
+  }
+}
+
+function assertSourceArtifactRecord(value, message) {
+  assertJsonObject(value, message);
+  if (!String(value.sourceType || "").trim()) {
+    throw new Error(`${message}.sourceType must be present.`);
+  }
+  assertSourceFingerprint(value.fingerprint, `${message}.fingerprint`);
+}
+
+function assertOptionalSourceBindings(artifact = {}, fileName) {
+  if (artifact.sourceArtifacts !== undefined) {
+    assertJsonObject(artifact.sourceArtifacts, `${fileName} sourceArtifacts must be a JSON object.`);
+    for (const [key, record] of Object.entries(artifact.sourceArtifacts)) {
+      assertSourceArtifactRecord(record, `${fileName} sourceArtifacts.${key}`);
+    }
+  }
+  if (artifact.sourceFingerprints !== undefined) {
+    assertJsonObject(artifact.sourceFingerprints, `${fileName} sourceFingerprints must be a JSON object.`);
+    for (const [key, fingerprint] of Object.entries(artifact.sourceFingerprints)) {
+      assertSourceFingerprint(fingerprint, `${fileName} sourceFingerprints.${key}`);
+    }
+  }
+  if (artifact.batchSystems !== undefined) {
+    assertArray(artifact.batchSystems, `${fileName} batchSystems must be an array.`);
+  }
+  if (artifact.selectedSystems !== undefined) {
+    assertArray(artifact.selectedSystems, `${fileName} selectedSystems must be an array.`);
   }
 }
 
@@ -74,6 +221,7 @@ function assertValidRepairClosureArtifact(closure = {}) {
   assertJsonObject(closure.diagnosis.summary, "repair-closure.json diagnosis.summary must be a JSON object.");
   assertJsonObject(closure.repairQueue, "repair-closure.json repairQueue must be a JSON object.");
   assertJsonObject(closure.repairQueue.summary, "repair-closure.json repairQueue.summary must be a JSON object.");
+  assertOptionalSourceBindings(closure, "repair-closure.json");
 
   if (closure.status !== "passed") return;
 
@@ -136,6 +284,7 @@ function assertValidRepairFollowUpPlanArtifact(plan = {}) {
   assertArray(plan.queueItems, "repair-follow-up-plan.json queueItems must be an array.");
   assertArray(plan.blockedQueueItems, "repair-follow-up-plan.json blockedQueueItems must be an array.");
   assertArray(plan.blockers, "repair-follow-up-plan.json blockers must be an array.");
+  assertOptionalSourceBindings(plan, "repair-follow-up-plan.json");
 
   const summary = plan.summary;
   assertSummaryEquals(summary, "commands", plan.commands.length, "repair-follow-up-plan.json");
@@ -209,5 +358,10 @@ function assertValidRepairFollowUpPlanArtifact(plan = {}) {
 module.exports = {
   assertValidRepairClosureArtifact,
   assertValidRepairFollowUpPlanArtifact,
+  fingerprintFile,
+  fingerprintJsonValue,
   isLowQuotaAutoRepairCommand,
+  sourceArtifactRecord,
+  sourceFingerprintsFromArtifacts,
+  uniqueSystemCodes,
 };
