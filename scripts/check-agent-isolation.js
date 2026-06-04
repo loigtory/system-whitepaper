@@ -8,6 +8,7 @@ const DEFAULT_PLAN_PATH = ".agents/4-agent-plan.json";
 const DEFAULT_COORDINATOR_OWNED_PATHS = [
   "SKILL.md",
   "package.json",
+  "scripts/check-agent-isolation.js",
   "scripts/system-whitepaper.test.js",
   "outputs/_batch/",
 ];
@@ -67,6 +68,13 @@ function scopeOverlaps(left, right) {
   return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 }
 
+function scopeContains(parent, child) {
+  const a = normalizeScopePath(parent);
+  const b = normalizeScopePath(child);
+  if (!a || !b) return false;
+  return a === b || b.startsWith(`${a}/`);
+}
+
 function validateAgentIsolationPlan(plan, options = {}) {
   const violations = [];
   const warnings = [];
@@ -94,6 +102,23 @@ function validateAgentIsolationPlan(plan, options = {}) {
     coordinator.worktree || options.coordinatorWorktree || process.cwd(),
   );
   const coordinatorBranch = String(coordinator.branch || "").trim();
+  if (!coordinatorBranch) {
+    violations.push(issue("coordinator.branch-missing", "Coordinator branch is required."));
+  }
+  const mergePolicy = isPlainObject(plan.mergePolicy)
+    ? plan.mergePolicy
+    : isPlainObject(coordinator.mergePolicy)
+      ? coordinator.mergePolicy
+      : {};
+  if (!isPlainObject(plan.mergePolicy) && !isPlainObject(coordinator.mergePolicy)) {
+    violations.push(issue("merge.policy-missing", "Agent isolation plan must declare a coordinator merge policy."));
+  }
+  if (mergePolicy.coordinatorOnlyMerge !== true) {
+    violations.push(issue("merge.coordinator-only", "Only the coordinator may review, stage, merge, or commit worker results."));
+  }
+  if (mergePolicy.reviewRequired !== true) {
+    violations.push(issue("merge.review-required", "Coordinator review is required before merging worker results."));
+  }
   const coordinatorOwnedPaths = unique([
     ...DEFAULT_COORDINATOR_OWNED_PATHS,
     ...compactItems(plan.coordinatorOwnedPaths),
@@ -114,9 +139,14 @@ function validateAgentIsolationPlan(plan, options = {}) {
   const worktreeOwners = new Map();
   const branchOwners = new Map();
   const outputOwners = new Map();
+  const handoffOwners = new Map();
+  const worktreeScopes = [];
+  const outputScopes = [];
+  const handoffScopes = [];
   const writableScopes = [];
   let writableWorkers = 0;
   let readOnlyWorkers = 0;
+  let handoffReports = 0;
 
   workers.forEach((worker, index) => {
     if (!isPlainObject(worker)) {
@@ -129,6 +159,7 @@ function validateAgentIsolationPlan(plan, options = {}) {
     const worktree = normalizeWorktreePath(worker.worktree);
     const branch = String(worker.branch || "").trim();
     const outputDir = normalizeScopePath(worker.outputDir || "");
+    const handoffReport = normalizeScopePath(worker.handoffReport || worker.reportPath || "");
     const writeScope = unique(worker.writeScope || worker.ownedPaths || []);
 
     if (!id) {
@@ -140,16 +171,22 @@ function validateAgentIsolationPlan(plan, options = {}) {
 
     if (!worktree) {
       violations.push(issue("worker.worktree-missing", "Worker worktree is required.", { workerId: id }));
-    } else if (!readOnly && worktree === coordinatorWorktree) {
-      violations.push(issue("worker.worktree-main", "Writable worker must not use the coordinator worktree.", { workerId: id }));
+    } else if (scopeOverlaps(worktree, coordinatorWorktree)) {
+      violations.push(issue("worker.worktree-main", "Worker must not use the coordinator worktree or a nested path.", { workerId: id }));
     }
     if (worktree) {
       const owner = worktreeOwners.get(worktree);
       if (owner) {
         violations.push(issue("worker.worktree-duplicate", `Workers share the same worktree: ${owner}, ${id}.`, { workerId: id }));
       } else {
+        for (const prior of worktreeScopes) {
+          if (scopeOverlaps(worktree, prior.worktree)) {
+            violations.push(issue("worker.worktree-overlap", `Worker worktree overlaps ${prior.workerId}: ${worktree} <-> ${prior.worktree}.`, { workerId: id }));
+          }
+        }
         worktreeOwners.set(worktree, id);
       }
+      worktreeScopes.push({ workerId: id, worktree });
     }
 
     if (readOnly) {
@@ -181,11 +218,51 @@ function validateAgentIsolationPlan(plan, options = {}) {
       if (pathIsUnsafeRelative(outputDir)) {
         violations.push(issue("worker.output-unsafe", "Worker outputDir must be a safe relative path.", { workerId: id }));
       }
+      for (const ownedPath of coordinatorOwnedPaths) {
+        if (scopeOverlaps(outputDir, ownedPath)) {
+          violations.push(issue("worker.output-coordinator-owned", `Worker outputDir overlaps coordinator-owned path: ${ownedPath}.`, { workerId: id }));
+        }
+      }
       const owner = outputOwners.get(outputDir);
       if (owner) {
         violations.push(issue("worker.output-duplicate", `Writable workers share the same outputDir: ${owner}, ${id}.`, { workerId: id }));
       } else {
+        for (const prior of outputScopes) {
+          if (scopeOverlaps(outputDir, prior.outputDir)) {
+            violations.push(issue("worker.output-overlap", `Worker outputDir overlaps ${prior.workerId}: ${outputDir} <-> ${prior.outputDir}.`, { workerId: id }));
+          }
+        }
         outputOwners.set(outputDir, id);
+      }
+      outputScopes.push({ workerId: id, outputDir });
+    }
+
+    if (!handoffReport) {
+      violations.push(issue("worker.handoff-missing", "Writable worker handoffReport is required.", { workerId: id }));
+    } else {
+      handoffReports += 1;
+      if (pathIsUnsafeRelative(handoffReport)) {
+        violations.push(issue("worker.handoff-unsafe", "Worker handoffReport must be a safe relative path.", { workerId: id }));
+      }
+      const owner = handoffOwners.get(handoffReport);
+      if (owner) {
+        violations.push(issue("worker.handoff-duplicate", `Writable workers share the same handoffReport: ${owner}, ${id}.`, { workerId: id }));
+      } else {
+        for (const prior of handoffScopes) {
+          if (scopeOverlaps(handoffReport, prior.handoffReport)) {
+            violations.push(issue("worker.handoff-overlap", `Worker handoffReport overlaps ${prior.workerId}: ${handoffReport} <-> ${prior.handoffReport}.`, { workerId: id }));
+          }
+        }
+        handoffOwners.set(handoffReport, id);
+      }
+      handoffScopes.push({ workerId: id, handoffReport });
+      if (outputDir && (!scopeContains(outputDir, handoffReport) || handoffReport === outputDir)) {
+        violations.push(issue("worker.handoff-output-mismatch", "Worker handoffReport must live inside its outputDir.", { workerId: id }));
+      }
+      for (const ownedPath of coordinatorOwnedPaths) {
+        if (scopeOverlaps(handoffReport, ownedPath)) {
+          violations.push(issue("worker.handoff-coordinator-owned", `Worker handoffReport overlaps coordinator-owned path: ${ownedPath}.`, { workerId: id }));
+        }
       }
     }
 
@@ -226,6 +303,7 @@ function validateAgentIsolationPlan(plan, options = {}) {
       readOnlyWorkers,
       expectedWorkers: Number.isFinite(expectedWorkers) ? expectedWorkers : null,
       coordinatorOwnedPaths: coordinatorOwnedPaths.length,
+      handoffReports,
       writeScopes: writableScopes.length,
     },
     workerIds: workers.map((worker, index) => String(worker?.id || worker?.name || `worker-${index + 1}`)),
@@ -281,6 +359,7 @@ module.exports = {
   DEFAULT_COORDINATOR_OWNED_PATHS,
   DEFAULT_PLAN_PATH,
   runAgentIsolationCheck,
+  scopeContains,
   scopeOverlaps,
   validateAgentIsolationPlan,
 };

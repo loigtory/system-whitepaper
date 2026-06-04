@@ -6592,12 +6592,17 @@ test("agent isolation guard accepts isolated workers and rejects overlap", () =>
       worktree: "D:/repo/system-whitepaper",
       branch: "main",
     },
+    mergePolicy: {
+      coordinatorOnlyMerge: true,
+      reviewRequired: true,
+    },
     workers: [
       {
         id: "dashboard",
         worktree: "D:/repo/system-whitepaper-dashboard",
         branch: "codex/dashboard-progress",
         outputDir: "outputs/agent-dashboard",
+        handoffReport: "outputs/agent-dashboard/handoff.json",
         writeScope: ["scripts/local-dashboard/"],
       },
       {
@@ -6605,6 +6610,7 @@ test("agent isolation guard accepts isolated workers and rejects overlap", () =>
         worktree: "D:/repo/system-whitepaper-readiness",
         branch: "codex/readiness-gates",
         outputDir: "outputs/agent-readiness",
+        handoffReport: "outputs/agent-readiness/handoff.json",
         writeScope: ["scripts/check-real-run-readiness.js"],
       },
       {
@@ -6612,6 +6618,7 @@ test("agent isolation guard accepts isolated workers and rejects overlap", () =>
         worktree: "D:/repo/system-whitepaper-batch-stop",
         branch: "codex/batch-stop-state",
         outputDir: "outputs/agent-batch-stop",
+        handoffReport: "outputs/agent-batch-stop/handoff.json",
         writeScope: ["scripts/run-whitepaper-batch.js"],
       },
       {
@@ -6626,6 +6633,7 @@ test("agent isolation guard accepts isolated workers and rejects overlap", () =>
   assert.equal(isolated.summary.workers, 4);
   assert.equal(isolated.summary.writableWorkers, 3);
   assert.equal(isolated.summary.readOnlyWorkers, 1);
+  assert.equal(isolated.summary.handoffReports, 3);
 
   const overlapping = validateAgentIsolationPlan({
     artifactType: "agent-isolation-plan",
@@ -6641,21 +6649,24 @@ test("agent isolation guard accepts isolated workers and rejects overlap", () =>
         id: "one",
         worktree: "D:/repo/system-whitepaper-one",
         branch: "codex/shared",
-        outputDir: "outputs/shared",
+        outputDir: "outputs/_batch",
+        handoffReport: "outputs/_batch/one-handoff.json",
         writeScope: ["scripts/"],
       },
       {
         id: "two",
         worktree: "D:/repo/system-whitepaper-one",
         branch: "codex/shared",
-        outputDir: "outputs/shared",
+        outputDir: "outputs/_batch/nested",
+        handoffReport: "outputs/_batch/one-handoff.json",
         writeScope: ["scripts/check-real-run-readiness.js"],
       },
       {
         id: "three",
-        worktree: "D:/repo/system-whitepaper-three",
+        worktree: "D:/repo/system-whitepaper/worker-three",
         branch: "codex/three",
         outputDir: "outputs/three",
+        handoffReport: "outputs/three/handoff.json",
         writeScope: ["SKILL.md"],
       },
       {
@@ -6669,9 +6680,15 @@ test("agent isolation guard accepts isolated workers and rejects overlap", () =>
   const violationIds = overlapping.violations.map((item) => item.id);
 
   assert.equal(overlapping.ok, false);
+  assert.ok(violationIds.includes("merge.policy-missing"));
   assert.ok(violationIds.includes("worker.worktree-duplicate"));
+  assert.ok(violationIds.includes("worker.worktree-main"));
   assert.ok(violationIds.includes("worker.branch-duplicate"));
-  assert.ok(violationIds.includes("worker.output-duplicate"));
+  assert.ok(violationIds.includes("worker.output-overlap"));
+  assert.ok(violationIds.includes("worker.output-coordinator-owned"));
+  assert.ok(violationIds.includes("worker.handoff-duplicate"));
+  assert.ok(violationIds.includes("worker.handoff-output-mismatch"));
+  assert.ok(violationIds.includes("worker.handoff-coordinator-owned"));
   assert.ok(violationIds.includes("worker.write-scope-overlap"));
   assert.ok(violationIds.includes("worker.coordinator-owned-scope"));
   assert.ok(violationIds.includes("worker.read-only-write-scope"));
