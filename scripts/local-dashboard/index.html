@@ -737,9 +737,34 @@
         return `<span class="status ${escapeHtml(status)}">${statusText[status] || escapeHtml(status)}</span>`;
       }
 
-      function progressBar(progress) {
-        const percent = progress?.percent || 0;
-        return `<div class="progress" title="${progress?.completed || 0}/${progress?.total || 0}"><span style="width:${percent}%"></span></div>`;
+      function progressValue(progress, key, fallback = 0) {
+        const value = Number(progress?.[key] ?? fallback);
+        return Number.isFinite(value) ? value : 0;
+      }
+
+      function progressBar(progress, scope = "nodes") {
+        const total = progressValue(progress, "total");
+        const value =
+          scope === "batch"
+            ? progressValue(progress, "finished", progress?.completed ?? 0)
+            : progressValue(progress, "completed");
+        const percent = progressValue(progress, "percent", total ? Math.round((value / total) * 100) : 0);
+        const title =
+          scope === "batch"
+            ? `运行结束 ${value}/${total} · 成功 ${progressValue(progress, "successful", progress?.completed ?? 0)} · 失败 ${progressValue(progress, "failed")}`
+            : `节点进度 ${value}/${total}`;
+        return `<div class="progress" title="${escapeHtml(title)}"><span style="width:${percent}%"></span></div>`;
+      }
+
+      function progressText(progress, scope = "nodes") {
+        const total = progressValue(progress, "total");
+        if (scope === "batch") {
+          const finished = progressValue(progress, "finished", progress?.completed ?? 0);
+          const successful = progressValue(progress, "successful", progress?.completed ?? 0);
+          const failed = progressValue(progress, "failed");
+          return `运行结束：${finished}/${total} · 成功：${successful} · 失败：${failed}`;
+        }
+        return `节点进度：${progressValue(progress, "completed")}/${total}`;
       }
 
       function displayNodeLabel(system, nodeId) {
@@ -867,7 +892,8 @@
                 </div>
                 <div class="muted">PID ${run.pid || "-"} · ${formatDuration(run.runningMs)}</div>
               </div>
-              <div style="margin-top: 14px">${progressBar(run.progress)}</div>
+              <div style="margin-top: 14px">${progressBar(run.progress, "batch")}</div>
+              <div class="muted" style="margin-top: 6px">${escapeHtml(progressText(run.progress, "batch"))}</div>
               ${items ? `<div class="batch-grid">${items}</div>` : ""}
             </section>
           `;
@@ -884,6 +910,7 @@
               <div class="muted">PID ${run.pid || "-"} · 已运行 ${formatDuration(run.runningMs)}</div>
             </div>
             <div style="margin-top: 14px">${progressBar(run.progress)}</div>
+            <div class="muted" style="margin-top: 6px">${escapeHtml(progressText(run.progress))}</div>
           </section>
         `;
       }
@@ -932,7 +959,7 @@
                   <th>系统</th>
                   <th>状态</th>
                   <th>当前链路</th>
-                  <th>进度</th>
+                  <th>节点进度</th>
                   <th>最后更新时间</th>
                   <th>产物</th>
                   <th>操作</th>
@@ -949,7 +976,7 @@
                         </td>
                         <td>${statusBadge(system.overallStatus)}</td>
                         <td>${escapeHtml(displayPhaseLabel(system))} · ${escapeHtml(displayNodeLabel(system, system.currentNode))}</td>
-                        <td>${progressBar(system.progress)}<div class="muted">${system.progress.completed}/${system.progress.total}</div></td>
+                        <td>${progressBar(system.progress)}<div class="muted">${escapeHtml(progressText(system.progress))}</div></td>
                         <td class="muted">${formatTime(system.updatedAt)}</td>
                         <td>${artifactBadges(system)}</td>
                         <td>
@@ -1666,7 +1693,7 @@
             <div class="meta-grid" style="margin-top: 12px">
               <span class="status ${system.overallStatus === "finalized" ? "finalized" : "pending"}">当前阶段：${escapeHtml(displayPhaseLabel(system))}</span>
               <span class="status ${system.overallStatus === "finalized" ? "finalized" : "pending"}">当前节点：${escapeHtml(displayNodeLabel(system, system.currentNode))}</span>
-              <span class="status pending">进度：${system.progress.completed}/${system.progress.total}</span>
+              <span class="status pending">${escapeHtml(progressText(system.progress))}</span>
               <span class="muted">更新：${formatTime(system.updatedAt)}</span>
             </div>
           </section>

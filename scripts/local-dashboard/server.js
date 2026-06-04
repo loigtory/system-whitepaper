@@ -762,6 +762,9 @@ function buildProgress(state) {
     completed,
     failed,
     total: nodeIds.length,
+    kind: "nodes",
+    label: "节点进度",
+    unitLabel: "已完成节点",
     percent: nodeIds.length ? Math.round((completed / nodeIds.length) * 100) : 0,
   };
 }
@@ -899,12 +902,20 @@ function resolveTrackedRun(systems) {
 
 function progressFromBatchSummary(summary = {}) {
   const total = Number(summary.total || 0);
-  const completed = Number(summary.completed || 0) + Number(summary.failed || 0);
-  const boundedCompleted = Math.min(total, Math.max(0, completed));
+  const successful = Number(summary.successful ?? summary.completed ?? 0);
+  const failed = Number(summary.failed || 0);
+  const finished = Number(summary.finished ?? successful + failed);
+  const boundedFinished = Math.min(total, Math.max(0, finished));
   return {
     total,
-    completed: boundedCompleted,
-    percent: total ? Math.round((boundedCompleted / total) * 100) : 0,
+    finished: boundedFinished,
+    successful: Math.min(total, Math.max(0, successful)),
+    failed: Math.min(total, Math.max(0, failed)),
+    completed: boundedFinished,
+    kind: "batch",
+    label: "运行进度",
+    unitLabel: "运行结束",
+    percent: total ? Math.round((boundedFinished / total) * 100) : 0,
   };
 }
 

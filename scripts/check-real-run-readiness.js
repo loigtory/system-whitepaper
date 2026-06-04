@@ -24,6 +24,22 @@ const {
 const { assertValidBatchAcceptanceReportArtifact } = require("./check-batch-acceptance");
 const { assertValidDeliveryReadinessReportArtifact } = require("./check-delivery-readiness");
 
+const REQUIRED_REAL_NODES = [
+  "collect",
+  "truth-universe",
+  "truth-claims",
+  "build-spec",
+  "compose-guide",
+  "draft",
+  "summary",
+  "narrative",
+  "fact-check",
+  "quality",
+  "truth-readiness",
+];
+const DB_REQUIRED_NODES = ["db-profile", "db-model"];
+const OPTIONAL_OR_SKIPPABLE_NODES = ["sync", "session", "inspect", "validate-write"];
+
 function nowIso(value) {
   return value || new Date().toISOString();
 }
@@ -485,10 +501,76 @@ function pipelineNodeStatus(state = {}, nodeId) {
   return state.nodes?.[nodeId]?.status || "missing";
 }
 
+function pipelineNodeIsComplete(state, nodeId, options = {}) {
+  const status = pipelineNodeStatus(state, nodeId);
+  if (status === "success") return true;
+  return options.allowSkipped && status === "skipped";
+}
+
 function pipelineNodeStillComplete(currentStatus, recordedStatus) {
   if (recordedStatus === "success") return currentStatus === "success";
   if (recordedStatus === "skipped") return currentStatus === "skipped";
   return true;
+}
+
+function collectCurrentRequiredNodeFailures(pipelineState = {}, system = {}) {
+  const failures = [];
+  const databaseProfileConfigured = Boolean(
+    system.databaseProfileConfigured || system.databaseProfileEnabled || system.databaseProfile?.enabled,
+  );
+  for (const nodeId of REQUIRED_REAL_NODES) {
+    if (!pipelineNodeIsComplete(pipelineState, nodeId)) {
+      failures.push(`${nodeId}:${pipelineNodeStatus(pipelineState, nodeId)}`);
+    }
+  }
+  if (databaseProfileConfigured) {
+    for (const nodeId of DB_REQUIRED_NODES) {
+      if (!pipelineNodeIsComplete(pipelineState, nodeId)) {
+        failures.push(`${nodeId}:${pipelineNodeStatus(pipelineState, nodeId)}`);
+      }
+    }
+  }
+  for (const nodeId of OPTIONAL_OR_SKIPPABLE_NODES) {
+    if (!pipelineNodeIsComplete(pipelineState, nodeId, { allowSkipped: true })) {
+      failures.push(`${nodeId}:${pipelineNodeStatus(pipelineState, nodeId)}`);
+    }
+  }
+  return failures;
+}
+
+function bindDeliveryReportToCurrentRequiredNodes(deliveryReport, context = {}, currentSystems = []) {
+  if (!deliveryReport || deliveryReport.status !== "ready" || deliveryReport.canDeliver !== true) {
+    return { report: deliveryReport, warnings: [] };
+  }
+  const invalidSystems = [];
+  const currentSystemByCode = new Map(
+    currentSystems.map((system) => [String(system?.code || system?.systemCode || "").trim(), system]),
+  );
+  for (const system of Array.isArray(deliveryReport.systems) ? deliveryReport.systems : []) {
+    const code = String(system?.code || system?.systemCode || "").trim();
+    if (!code) continue;
+    const pipelineState = readJsonObjectIfExists(path.join(context.outputRoot || "", code, "pipeline-state.json"));
+    if (!pipelineState) {
+      invalidSystems.push({ code, failures: ["pipeline-state:missing"] });
+      continue;
+    }
+    const currentSystem = currentSystemByCode.get(code) || {};
+    const failures = collectCurrentRequiredNodeFailures(pipelineState, { ...system, ...currentSystem });
+    if (failures.length) invalidSystems.push({ code, failures });
+  }
+  if (invalidSystems.length) {
+    return {
+      report: null,
+      warnings: [
+        reportScopeWarning(
+          "delivery",
+          "current-required-nodes-not-success",
+          `Ignored ready delivery report because current required pipeline nodes are not complete: ${invalidSystems.map((item) => `${item.code}:${item.failures.join(",")}`).join("; ")}.`,
+        ),
+      ],
+    };
+  }
+  return { report: deliveryReport, warnings: [] };
 }
 
 function bindDeliveryReportToAcceptance(deliveryReport, acceptanceReport) {
@@ -675,7 +757,8 @@ function buildRealRunReadinessReport(input = {}) {
   const acceptanceSelection = selectScopedReport(rawAcceptanceReport, "acceptance", selectedCodes, context);
   const deliverySelection = selectScopedReport(rawDeliveryReport, "delivery", selectedCodes, context);
   const boundDeliverySelection = bindDeliveryReportToAcceptance(deliverySelection.report, acceptanceSelection.report);
-  const freshDeliverySelection = bindDeliveryReportToCurrentSources(boundDeliverySelection.report, context);
+  const requiredNodeDeliverySelection = bindDeliveryReportToCurrentRequiredNodes(boundDeliverySelection.report, context, systems);
+  const freshDeliverySelection = bindDeliveryReportToCurrentSources(requiredNodeDeliverySelection.report, context);
   const terminalDeliverySelection = bindDeliveryToBatchRunState(
     freshDeliverySelection.report,
     runStateSelection.runState,
@@ -686,6 +769,7 @@ function buildRealRunReadinessReport(input = {}) {
     ...acceptanceSelection.warnings,
     ...deliverySelection.warnings,
     ...boundDeliverySelection.warnings,
+    ...requiredNodeDeliverySelection.warnings,
     ...freshDeliverySelection.warnings,
     ...terminalDeliverySelection.warnings,
   );

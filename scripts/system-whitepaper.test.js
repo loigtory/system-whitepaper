@@ -6437,7 +6437,15 @@ test("dashboard frontend renders batch truth and repair summary", () => {
         artifacts: { repairQueueMarkdown: "repair-queue.md" },
       },
       runningMs: 120000,
-      progress: { total: 2, completed: 1, percent: 50 },
+      progress: {
+        total: 2,
+        finished: 1,
+        successful: 1,
+        failed: 0,
+        completed: 1,
+        percent: 50,
+        kind: "batch",
+      },
       systems: [
         {
           code: "adp",
@@ -6470,6 +6478,9 @@ test("dashboard frontend renders batch truth and repair summary", () => {
   );
 
   assert.match(html, /Batch execution/);
+  assert.match(html, /运行结束：1\/2/);
+  assert.match(html, /成功：1/);
+  assert.match(html, /失败：0/);
   assert.match(html, /真实度可审 1/);
   assert.match(html, /自动补写 1/);
   assert.match(html, /真实度 96%/);
@@ -6491,6 +6502,103 @@ test("dashboard frontend renders batch truth and repair summary", () => {
   assert.match(html, /自动 0\/1/);
   assert.match(html, /写稿额度 1/);
   assert.match(html, /修复队列文件 repair-queue\.md/);
+});
+
+test("agent isolation guard accepts isolated workers and rejects overlap", () => {
+  const { validateAgentIsolationPlan } = require("./check-agent-isolation");
+
+  const isolated = validateAgentIsolationPlan({
+    artifactType: "agent-isolation-plan",
+    version: 1,
+    expectedWorkers: 4,
+    coordinator: {
+      id: "main",
+      worktree: "D:/repo/system-whitepaper",
+      branch: "main",
+    },
+    workers: [
+      {
+        id: "dashboard",
+        worktree: "D:/repo/system-whitepaper-dashboard",
+        branch: "codex/dashboard-progress",
+        outputDir: "outputs/agent-dashboard",
+        writeScope: ["scripts/local-dashboard/"],
+      },
+      {
+        id: "readiness",
+        worktree: "D:/repo/system-whitepaper-readiness",
+        branch: "codex/readiness-gates",
+        outputDir: "outputs/agent-readiness",
+        writeScope: ["scripts/check-real-run-readiness.js"],
+      },
+      {
+        id: "batch-stop",
+        worktree: "D:/repo/system-whitepaper-batch-stop",
+        branch: "codex/batch-stop-state",
+        outputDir: "outputs/agent-batch-stop",
+        writeScope: ["scripts/run-whitepaper-batch.js"],
+      },
+      {
+        id: "auditor",
+        readOnly: true,
+        worktree: "D:/repo/system-whitepaper-auditor",
+      },
+    ],
+  });
+
+  assert.equal(isolated.ok, true);
+  assert.equal(isolated.summary.workers, 4);
+  assert.equal(isolated.summary.writableWorkers, 3);
+  assert.equal(isolated.summary.readOnlyWorkers, 1);
+
+  const overlapping = validateAgentIsolationPlan({
+    artifactType: "agent-isolation-plan",
+    version: 1,
+    expectedWorkers: 4,
+    coordinator: {
+      id: "main",
+      worktree: "D:/repo/system-whitepaper",
+      branch: "main",
+    },
+    workers: [
+      {
+        id: "one",
+        worktree: "D:/repo/system-whitepaper-one",
+        branch: "codex/shared",
+        outputDir: "outputs/shared",
+        writeScope: ["scripts/"],
+      },
+      {
+        id: "two",
+        worktree: "D:/repo/system-whitepaper-one",
+        branch: "codex/shared",
+        outputDir: "outputs/shared",
+        writeScope: ["scripts/check-real-run-readiness.js"],
+      },
+      {
+        id: "three",
+        worktree: "D:/repo/system-whitepaper-three",
+        branch: "codex/three",
+        outputDir: "outputs/three",
+        writeScope: ["SKILL.md"],
+      },
+      {
+        id: "four",
+        readOnly: true,
+        worktree: "D:/repo/system-whitepaper-four",
+        writeScope: ["docs/narrative-guide.md"],
+      },
+    ],
+  });
+  const violationIds = overlapping.violations.map((item) => item.id);
+
+  assert.equal(overlapping.ok, false);
+  assert.ok(violationIds.includes("worker.worktree-duplicate"));
+  assert.ok(violationIds.includes("worker.branch-duplicate"));
+  assert.ok(violationIds.includes("worker.output-duplicate"));
+  assert.ok(violationIds.includes("worker.write-scope-overlap"));
+  assert.ok(violationIds.includes("worker.coordinator-owned-scope"));
+  assert.ok(violationIds.includes("worker.read-only-write-scope"));
 });
 
 function createDashboardFrontendContext() {
@@ -9236,6 +9344,38 @@ test("real run readiness unifies preflight and final delivery state", () => {
   const artifacts = writeRealRunReadinessReport(outputRoot, ready);
   assert.equal(fs.existsSync(artifacts.jsonPath), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "real-run-readiness-report.md")), true);
+
+  const collectSkippedState = {
+    ...state,
+    nodes: {
+      ...state.nodes,
+      collect: {
+        ...state.nodes.collect,
+        status: "skipped",
+      },
+    },
+  };
+  writePipelineState(path.join(systemOutput, "pipeline-state.json"), collectSkippedState);
+  const skippedRequiredNodeReady = buildRealRunReadinessReport({
+    args: { systems: "adp" },
+    context,
+    doctor: {
+      ok: true,
+      failures: [],
+      warnings: [],
+      counts: { failures: 0, warnings: 0, systems: 1 },
+    },
+    acceptanceReport,
+    deliveryReport,
+  });
+  assert.equal(skippedRequiredNodeReady.status, "in-progress");
+  assert.equal(skippedRequiredNodeReady.canDeliver, false);
+  assert.ok(
+    skippedRequiredNodeReady.warnings.some(
+      (item) => item.id === "delivery.current-required-nodes-not-success",
+    ),
+  );
+  writePipelineState(path.join(systemOutput, "pipeline-state.json"), state);
 
   const skippedBatchReady = buildRealRunReadinessReport({
     args: { systems: "adp" },
@@ -16498,6 +16638,7 @@ test("package manifest whitelists only skill runtime assets", () => {
     "scripts/build-database-model.js",
     "scripts/build-function-universe.js",
     "scripts/build-verified-claims.js",
+    "scripts/check-agent-isolation.js",
     "scripts/check-batch-acceptance.js",
     "scripts/check-delivery-readiness.js",
     "scripts/check-real-run-readiness.js",
@@ -16567,6 +16708,7 @@ test("npm pack dry-run excludes private and process-only assets", () => {
     "scripts/build-database-model.js",
     "scripts/build-function-universe.js",
     "scripts/build-verified-claims.js",
+    "scripts/check-agent-isolation.js",
     "scripts/check-batch-acceptance.js",
     "scripts/check-delivery-readiness.js",
     "scripts/check-real-run-readiness.js",
@@ -16655,6 +16797,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
       "scripts/build-database-model.js",
       "scripts/build-function-universe.js",
       "scripts/build-verified-claims.js",
+      "scripts/check-agent-isolation.js",
       "scripts/check-batch-acceptance.js",
       "scripts/check-delivery-readiness.js",
       "scripts/check-real-run-readiness.js",
@@ -16685,6 +16828,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
           'require("./scripts/build-database-model");',
           'require("./scripts/build-function-universe");',
           'require("./scripts/build-verified-claims");',
+          'require("./scripts/check-agent-isolation");',
           'require("./scripts/check-batch-acceptance");',
           'require("./scripts/check-delivery-readiness");',
           'require("./scripts/check-real-run-readiness");',
