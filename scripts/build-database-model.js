@@ -305,6 +305,16 @@ function buildDatabaseModelFromDir(inputDir, options = {}) {
   return { ...artifacts, dataDictionaryPath, entityModelPath };
 }
 
+module.exports = {
+  buildDataDictionary,
+  buildDatabaseModelArtifacts,
+  buildDatabaseModelFromDir,
+  buildSourceArtifacts,
+  buildEntityModel,
+  fingerprintFile,
+  inferEntityRelations,
+};
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.input) {
@@ -327,13 +337,3 @@ if (require.main === module) {
     process.exit(1);
   }
 }
-
-module.exports = {
-  buildDataDictionary,
-  buildDatabaseModelArtifacts,
-  buildDatabaseModelFromDir,
-  buildSourceArtifacts,
-  buildEntityModel,
-  fingerprintFile,
-  inferEntityRelations,
-};

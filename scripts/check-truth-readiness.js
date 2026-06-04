@@ -971,6 +971,96 @@ function validateFunctionUniverseAgainstCurrentSources(value = {}, artifacts = {
   return failures;
 }
 
+function dataDictionaryProjection(value = {}) {
+  return {
+    system: value.system || null,
+    source: value.source || {},
+    tables: sortByStableKey(
+      Array.isArray(value.tables) ? value.tables : [],
+      (item) => `${item.table || ""}::${item.schema || ""}::${item.name || ""}`,
+    ),
+    columns: sortByStableKey(
+      Array.isArray(value.columns) ? value.columns : [],
+      (item) => `${item.table || ""}::${item.name || ""}`,
+    ),
+    metrics: value.metrics || {},
+    safety: value.safety || {},
+  };
+}
+
+function entityModelProjection(value = {}) {
+  return {
+    system: value.system || null,
+    source: value.source || {},
+    entities: sortByStableKey(
+      Array.isArray(value.entities) ? value.entities : [],
+      (item) => `${item.table || ""}::${item.entity || ""}`,
+    ),
+    relations: sortByStableKey(
+      Array.isArray(value.relations) ? value.relations : [],
+      (item) => `${item.from || ""}::${item.to || ""}::${item.type || ""}::${(item.columns || []).join(",")}`,
+    ),
+    metrics: value.metrics || {},
+    safety: value.safety || {},
+  };
+}
+
+function findDatabaseDerivedSourceMismatches(artifacts = {}) {
+  const failures = [];
+  const checks = [
+    ["databaseProfile", artifacts.dataDictionary, artifacts.databaseProfile, "data-dictionary.json"],
+    ["databaseProfile", artifacts.entityModel, artifacts.databaseProfile, "entity-model.json"],
+    ["dataDictionary", artifacts.entityModel, artifacts.dataDictionary, "entity-model.json"],
+  ];
+  for (const [key, artifact, current, ownerFile] of checks) {
+    if (artifact?.status !== "ok" || !artifact?.fingerprint?.exists) continue;
+    const recorded = artifact?.value?.sourceArtifacts?.[key];
+    const recordedSourceExists = normalizeSourceFingerprint(recorded || {}).exists;
+    if (!recorded && !current?.fingerprint?.exists) continue;
+    if (!recordedSourceExists && !current?.fingerprint?.exists) continue;
+    const failure = lineageMismatch(key, artifact, current, ownerFile);
+    if (failure) failures.push(failure);
+  }
+  return failures;
+}
+
+function validateDatabaseDerivedAgainstCurrentProfile(artifacts = {}) {
+  const failures = [];
+  const dataDictionary = artifacts.dataDictionary || {};
+  const entityModel = artifacts.entityModel || {};
+  const hasDerivedArtifacts = dataDictionary.fingerprint?.exists || entityModel.fingerprint?.exists;
+  if (!hasDerivedArtifacts) return failures;
+  if (findDatabaseDerivedSourceMismatches(artifacts).length) return failures;
+  const profile = artifacts.databaseProfile || {};
+  if (profile.status !== "ok" || !profile.fingerprint?.exists) {
+    failures.push("database-derived artifacts could not be recomputed because current database-profile.json is missing or invalid.");
+    return failures;
+  }
+  let recomputed;
+  try {
+    const { buildDatabaseModelArtifacts } = require("./build-database-model");
+    recomputed = buildDatabaseModelArtifacts(profile.value || {});
+  } catch (error) {
+    failures.push(`database-derived artifacts could not be recomputed from current database-profile.json: ${error.message}`);
+    return failures;
+  }
+  if (
+    dataDictionary.status === "ok" &&
+    dataDictionary.fingerprint?.exists &&
+    stableJson(dataDictionaryProjection(dataDictionary.value || {})) !== stableJson(dataDictionaryProjection(recomputed.dataDictionary || {}))
+  ) {
+    failures.push("data-dictionary.json must match deterministic database model recomputation from current database-profile.json.");
+  }
+  if (
+    entityModel.status === "ok" &&
+    entityModel.fingerprint?.exists &&
+    stableJson(entityModelProjection(entityModel.value || {})) !== stableJson(entityModelProjection(recomputed.entityModel || {}))
+  ) {
+    failures.push("entity-model.json must match deterministic database model recomputation from current database-profile.json.");
+  }
+  return failures;
+}
+
 function validateClaimsAgainstCurrentFunctionUniverse(value = {}, artifacts = {}) {
   const failures = [];
   const functionUniverse = artifacts.functionUniverse || {};
@@ -1553,6 +1643,11 @@ function buildDatabaseGate(artifacts, options = {}) {
   const profileAvailable = profile.status === "ok" && isValidDatabaseProfile(profile.value, { code: expectedSystemCode });
   const profileSafety = profile.status === "ok" ? scanDatabaseProfileSafety(profile.value || {}) : { pass: true, failures: [], warnings: [] };
   const safeProfileAvailable = profileAvailable && profileSafety.pass;
+  contractFailures.push(...validateDatabaseDerivedAgainstCurrentProfile({
+    databaseProfile: profile,
+    dataDictionary: dataDictionaryArtifact,
+    entityModel: entityModelArtifact,
+  }));
   const derivedArtifactsPresent = [dataDictionaryArtifact, entityModelArtifact, universeArtifact].some(
     (artifact) => artifact.status === "ok" || artifact.fingerprint?.exists,
   );
@@ -1562,9 +1657,10 @@ function buildDatabaseGate(artifacts, options = {}) {
   };
   const derivedArtifactContractsPass =
     !derivedArtifactsPresent ||
-    derivedArtifactContractPass(dataDictionaryArtifact, dataDictionaryContractValid) &&
+    (contractFailures.length === 0 &&
+      derivedArtifactContractPass(dataDictionaryArtifact, dataDictionaryContractValid) &&
       derivedArtifactContractPass(entityModelArtifact, entityModelContractValid) &&
-      derivedArtifactContractPass(universeArtifact, functionUniverseContractValid);
+      derivedArtifactContractPass(universeArtifact, functionUniverseContractValid));
   const available = safeProfileAvailable || entityCount > 0 || columnCount > 0;
   const pass = profileSafety.pass && derivedArtifactContractsPass;
   const score = available && pass ? 1 : 0;

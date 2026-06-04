@@ -14219,6 +14219,144 @@ test("truth readiness rejects stale database truth lineage", () => {
   assert.ok(stale.blockers.some((item) => item.id === "truth.lineage-stale"));
 });
 
+test("truth readiness rejects forged database model artifacts against current profile", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    buildDatabaseModelFromDir,
+    fingerprintFile: fingerprintDatabaseModelFile,
+  } = require("./build-database-model");
+  const { buildFunctionUniverseFromDir } = require("./build-function-universe");
+  const { buildVerifiedClaimsFromDir } = require("./build-verified-claims");
+  const { runFactCheck } = require("./fact-check-whitepaper");
+  const { runNarrativeCheck } = require("./check-narrative");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-forged-db-model-current-profile-"));
+  writeQualityReportFixture(dir);
+  fs.writeFileSync(
+    path.join(dir, "evidence-summary.json"),
+    JSON.stringify({
+      system: { code: "adp", name: "AI保单数据闭环平台" },
+      modules: [{ name: "保单任务", entry: "保单任务 > 任务列表" }],
+      functions: [
+        {
+          module: "保单任务",
+          name: "任务列表",
+          menuPath: "保单任务 > 任务列表",
+          queryFields: ["保单号", "任务状态"],
+          tableColumns: ["保单号", "状态"],
+          screenshots: [{ id: "shot-1", file: "screenshots/task.png" }],
+        },
+      ],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "database-profile.json"),
+    JSON.stringify({
+      artifactType: "database-profile",
+      system: { code: "adp", name: "AI保单数据闭环平台" },
+      safety: { secretRedacted: true },
+      tables: [
+        {
+          schema: "adp_test",
+          name: "policy_task",
+          comment: "保单任务",
+          columns: [
+            { name: "id", type: "bigint", comment: "主键", primaryKey: true },
+            { name: "status", type: "varchar", comment: "任务状态", dictionary: ["INIT", "DONE"] },
+          ],
+        },
+      ],
+    }),
+    "utf8",
+  );
+  buildDatabaseModelFromDir(dir, { generatedAt: "2026-06-03T00:00:00.000Z" });
+  const dataDictionaryPath = path.join(dir, "data-dictionary.json");
+  const entityModelPath = path.join(dir, "entity-model.json");
+  const dataDictionary = JSON.parse(fs.readFileSync(dataDictionaryPath, "utf8"));
+  const entityModel = JSON.parse(fs.readFileSync(entityModelPath, "utf8"));
+  dataDictionary.tables.push({
+    table: "adp_test.claim_payment",
+    schema: "adp_test",
+    name: "claim_payment",
+    entity: "赔付审核台账",
+    comment: "赔付审核台账",
+    rowCount: null,
+    columns: [],
+    statusFields: [],
+    timeFields: [],
+    identifierFields: [],
+    sensitiveFieldCount: 0,
+    sampleRowsIncluded: false,
+    sampleFieldNames: [],
+    indexes: [],
+    foreignKeys: [],
+    sources: [{ type: "db-table", id: "adp_test.claim_payment", label: "赔付审核台账" }],
+  });
+  dataDictionary.metrics.tableCount = dataDictionary.tables.length;
+  entityModel.entities.push({
+    entity: "赔付审核台账",
+    table: "adp_test.claim_payment",
+    comment: "赔付审核台账",
+    confidence: "medium",
+    statusFields: [],
+    timeFields: [],
+    identifierFields: [],
+    evidence: {
+      rowCount: null,
+      sampleRowsIncluded: false,
+      sampleFieldNames: [],
+      sensitiveFieldCount: 0,
+    },
+    sources: [{ type: "db-table", id: "adp_test.claim_payment", label: "赔付审核台账" }],
+  });
+  entityModel.metrics.entityCount = entityModel.entities.length;
+  fs.writeFileSync(dataDictionaryPath, JSON.stringify(dataDictionary), "utf8");
+  entityModel.sourceArtifacts.dataDictionary = {
+    file: "data-dictionary.json",
+    fingerprint: fingerprintDatabaseModelFile(dataDictionaryPath),
+  };
+  fs.writeFileSync(entityModelPath, JSON.stringify(entityModel), "utf8");
+  buildFunctionUniverseFromDir(dir);
+  buildVerifiedClaimsFromDir(dir);
+  const verifiedClaims = JSON.parse(fs.readFileSync(path.join(dir, "verified-claims.json"), "utf8"));
+  const writableClaimLines = verifiedClaims.claims
+    .filter((claim) => claim.writable)
+    .map((claim) => `${claim.module || claim.subject || ""} ${claim.subject || claim.function || claim.entity || ""} [claim:${claim.id}]`);
+  fs.writeFileSync(
+    path.join(dir, "whitepaper.pending-review.md"),
+    [passingUiOnlyNarrativeMarkdown(), "", "## 5. 已验证声明索引", ...writableClaimLines].join("\n"),
+    "utf8",
+  );
+  runFactCheck({ inputDir: dir });
+  runNarrativeCheck({ inputDir: dir });
+
+  const report = runTruthReadinessCheck({
+    inputDir: dir,
+    requireDatabaseEvidence: true,
+    systemCode: "adp",
+  });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.claims.pass, true);
+  assert.equal(report.gates.lineage.pass, true);
+  assert.equal(report.gates.database.pass, false);
+  assert.equal(report.gates.database.derivedArtifactContractsPass, false);
+  assert.ok(
+    report.gates.database.failures.some((item) =>
+      /data-dictionary\.json must match deterministic database model recomputation/.test(item),
+    ),
+  );
+  assert.ok(
+    report.gates.database.failures.some((item) =>
+      /entity-model\.json must match deterministic database model recomputation/.test(item),
+    ),
+  );
+  assert.ok(report.blockers.some((item) => item.id === "database.derived-artifact-invalid"));
+});
+
 test("truth readiness rejects forged function universe against current sources", () => {
   const fs = require("node:fs");
   const os = require("node:os");
