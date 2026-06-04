@@ -21,6 +21,7 @@ const {
   assertValidRepairClosureArtifact,
   assertValidRepairFollowUpPlanArtifact,
 } = require("./repair-artifacts");
+const { outputPathHasE2eSegment } = require("./approval-guard");
 
 const DEFAULT_TARGET_TRUTH_SCORE_PERCENT = 95;
 const ACCEPTED_BATCH_STATUSES = new Set(["success", "review-pending", "finalized"]);
@@ -259,6 +260,15 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
   let minWritableClaimCoverage = null;
   let databaseEvidenceAvailable = isSafeDatabaseProfileForSystem(databaseProfile, { code });
   let databaseProfileUnsafe = false;
+
+  if (outputPathHasE2eSegment(outputDir)) {
+    blockers.push(
+      blocker("truth-readiness.output-under-e2e", "System output is under an _e2e smoke directory, not a real batch output.", {
+        systemCode: code,
+        rerunNodes: ["truth-readiness"],
+      }),
+    );
+  }
 
   if (!truth) {
     blockers.push(

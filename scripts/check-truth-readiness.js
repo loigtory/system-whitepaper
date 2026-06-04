@@ -8,6 +8,8 @@ const {
   buildQualityReport,
   computeEvidenceMetrics,
   parseArgs,
+  parseSystemsConfig,
+  resolveConfigRelativePath,
   writeJson,
 } = require("./system-whitepaper-lib");
 const {
@@ -2233,38 +2235,95 @@ function buildTruthReadinessReport(input = {}) {
   };
 }
 
+function resolveTruthReadinessConfigSystem(options = {}) {
+  const configPath = options.configPath || options.config;
+  if (!configPath) return null;
+  const resolvedConfigPath = path.resolve(String(configPath));
+  const config = parseSystemsConfig(fs.readFileSync(resolvedConfigPath, "utf8"));
+  const systemCode = String(options.systemCode || options.system || "").trim();
+  const systemName = String(options.systemName || "").trim();
+  const inputDir = options.inputDir || options.input;
+  const inputSystemCode = inputDir ? path.basename(path.resolve(String(inputDir))) : "";
+  const systems = Array.isArray(config.systems) ? config.systems : [];
+  const system =
+    systems.find((item) => systemCode && String(item.code || "") === systemCode) ||
+    systems.find((item) => systemName && String(item.name || "") === systemName) ||
+    systems.find((item) => inputSystemCode && String(item.code || "") === inputSystemCode) ||
+    (systems.length === 1 ? systems[0] : null);
+  if (!system) {
+    throw new Error(
+      systemCode
+        ? `System not found in config for truth readiness: ${systemCode}`
+        : "Truth readiness config lookup requires --system when config contains multiple systems.",
+    );
+  }
+  return {
+    configPath: resolvedConfigPath,
+    configDir: path.dirname(resolvedConfigPath),
+    config,
+    system,
+  };
+}
+
+function resolveTruthReadinessOptions(options = {}) {
+  const configSystem = resolveTruthReadinessConfigSystem(options);
+  if (!configSystem) return options;
+  const { system } = configSystem;
+  const databaseProfile = system.databaseProfile || {};
+  const requireDatabaseEvidence =
+    options.requireDatabaseEvidence !== undefined
+      ? options.requireDatabaseEvidence
+      : Boolean(databaseProfile.enabled);
+  return {
+    ...options,
+    inputDir:
+      options.inputDir ||
+      options.input ||
+      resolveConfigRelativePath(
+        configSystem.configDir,
+        system.outputDir || path.join(configSystem.config.runtime?.outputDir || "outputs", system.code),
+      ),
+    requireDatabaseEvidence,
+    systemCode: options.systemCode || options.system || system.code,
+    systemName: options.systemName || system.name,
+  };
+}
+
 function runTruthReadinessCheck(options = {}) {
-  const inputDir = path.resolve(String(options.inputDir || options.input || "."));
+  const resolvedOptions = resolveTruthReadinessOptions(options);
+  const inputDir = path.resolve(String(resolvedOptions.inputDir || resolvedOptions.input || "."));
   const artifacts = loadReadinessInputs(inputDir);
-  const expectedSystem = options.expectedSystem || {
-    code: options.systemCode || options.system,
-    name: options.systemName,
+  const expectedSystem = resolvedOptions.expectedSystem || {
+    code: resolvedOptions.systemCode || resolvedOptions.system,
+    name: resolvedOptions.systemName,
   };
   const report = buildTruthReadinessReport({
     artifacts,
-    threshold: options.threshold,
-    requireDatabaseEvidence: options.requireDatabaseEvidence,
+    threshold: resolvedOptions.threshold,
+    requireDatabaseEvidence: resolvedOptions.requireDatabaseEvidence,
     expectedSystem,
   });
-  const outputPath = options.outputPath || path.join(inputDir, "truth-readiness-report.json");
+  const outputPath = resolvedOptions.outputPath || path.join(inputDir, "truth-readiness-report.json");
   writeJson(outputPath, report);
   return report;
 }
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (!args.input) {
-    throw new Error("Usage: node scripts/check-truth-readiness.js --input outputs/system");
+  if (!args.input && !args.config) {
+    throw new Error("Usage: node scripts/check-truth-readiness.js --input outputs/system [--config config/systems.local.yaml --system adp]");
   }
-  const report = runTruthReadinessCheck({
+  const options = resolveTruthReadinessOptions({
     inputDir: args.input,
     outputPath: args.output,
     threshold: args.threshold,
     requireDatabaseEvidence: args["require-database-evidence"],
     systemCode: args["system-code"] || args.system,
     systemName: args["system-name"],
+    configPath: args.config,
   });
-  const outputPath = args.output || path.join(path.resolve(args.input), "truth-readiness-report.json");
+  const report = runTruthReadinessCheck(options);
+  const outputPath = options.outputPath || path.join(path.resolve(options.inputDir || options.input), "truth-readiness-report.json");
   console.log(`Truth readiness report written: ${outputPath}`);
   console.log(`Truth readiness: ${report.scorePercent}% canSubmitReview=${report.canSubmitReview}`);
   if (!report.canSubmitReview) {

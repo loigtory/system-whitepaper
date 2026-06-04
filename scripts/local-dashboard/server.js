@@ -33,7 +33,8 @@ const {
   killProjectPipelineProcesses,
   listProjectPipelinePids,
 } = require("./process-control");
-const { assertApprovalTruthReadiness, runReviewDecision } = require("../run-review-decision");
+const { assertApprovalTruthReadiness } = require("../approval-guard");
+const { runReviewDecision } = require("../run-review-decision");
 const { findStaleReadinessSources } = require("../check-truth-readiness");
 const { validateFinalDocx } = require("../check-delivery-readiness");
 const { isCursorSdkConfigured, resolveNarrativeProvider } = require("../narrative/resolve-provider");
@@ -688,6 +689,9 @@ function buildEvidenceSnapshot(systemOutput) {
 }
 
 function resolveArtifactDownloadPath(systemOutput, artifactKey, state, system = {}) {
+  if (artifactKey === "final") {
+    assertDashboardFinalDeliveryAllowed(systemOutput, state || {}, system);
+  }
   const snapshot = buildArtifactSnapshot(systemOutput, state, system);
   const artifact = snapshot[artifactKey];
   if (!artifact?.exists || !artifact.path) {

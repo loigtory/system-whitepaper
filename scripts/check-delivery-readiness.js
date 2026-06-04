@@ -394,6 +394,7 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
   const code = String(systemReport.code || "").trim();
   const outputDir = path.join(context.outputRoot || "", code);
   const state = readOptionalJsonObject(path.join(outputDir, "pipeline-state.json"));
+  const reviewDecision = readOptionalJsonObject(path.join(outputDir, "review-decision.json"));
   const truth = readOptionalJsonObject(path.join(outputDir, "truth-readiness-report.json"));
   const pendingPath = path.join(outputDir, "whitepaper.pending-review.md");
   const finalPath = path.join(outputDir, "whitepaper.final.md");
@@ -414,6 +415,10 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
   let scorePercent = 0;
   let canSubmitReview = false;
   let databaseEvidenceAvailable = false;
+  const reviewApproved =
+    state?.overallStatus === "finalized" ||
+    state?.review?.status === "approved" ||
+    reviewDecision?.status === "approved";
 
   if (!systemReport.accepted) {
     blockers.push(
@@ -438,11 +443,11 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
     );
   } else {
     blockers.push(...collectNodeBlockers(state, systemReport));
-    if (!["review-pending", "finalized"].includes(String(state.overallStatus || ""))) {
+    if (String(state.overallStatus || "") !== "finalized") {
       warnings.push(
         warning(
           "delivery.pipeline-status-not-terminal",
-          `Pipeline overallStatus is ${state.overallStatus || "unknown"}; expected review-pending or finalized.`,
+          `Pipeline overallStatus is ${state.overallStatus || "unknown"}; expected finalized.`,
           { systemCode: code },
         ),
       );
@@ -559,6 +564,30 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
       blocker("delivery.whitepaper-missing", "No pending-review or final whitepaper Markdown exists.", {
         systemCode: code,
         rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+      }),
+    );
+  }
+  if (!pendingReviewExists) {
+    blockers.push(
+      blocker("delivery.pending-review-missing", "Pending-review whitepaper Markdown is required for final approval traceability.", {
+        systemCode: code,
+        rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+      }),
+    );
+  }
+  if (!finalExists) {
+    blockers.push(
+      blocker("delivery.final-missing", "Final whitepaper Markdown is required for delivery.", {
+        systemCode: code,
+        rerunNodes: ["review"],
+      }),
+    );
+  }
+  if (!reviewApproved) {
+    blockers.push(
+      blocker("delivery.review-not-approved", "Final delivery requires approved review state or review decision.", {
+        systemCode: code,
+        rerunNodes: ["review"],
       }),
     );
   }

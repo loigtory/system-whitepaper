@@ -8466,6 +8466,47 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   assert.equal(smokeTruth.summary.smokeEvidence, 1);
   assert.ok(smokeTruth.blockers.some((item) => item.id === "truth-readiness.smoke-report"));
 
+  const e2eOutputRoot = path.join(dir, "outputs", "_e2e");
+  const e2eSystemOutput = path.join(e2eOutputRoot, "adp");
+  fs.mkdirSync(e2eSystemOutput, { recursive: true });
+  for (const file of fs.readdirSync(systemOutput)) {
+    const source = path.join(systemOutput, file);
+    const target = path.join(e2eSystemOutput, file);
+    if (fs.statSync(source).isFile()) {
+      fs.copyFileSync(source, target);
+    }
+  }
+  fs.mkdirSync(path.join(e2eOutputRoot, "_batch"), { recursive: true });
+  for (const file of fs.readdirSync(path.join(outputRoot, "_batch"))) {
+    const source = path.join(outputRoot, "_batch", file);
+    const target = path.join(e2eOutputRoot, "_batch", file);
+    if (fs.statSync(source).isFile()) {
+      fs.copyFileSync(source, target);
+    }
+  }
+  fs.writeFileSync(
+    path.join(e2eSystemOutput, "truth-readiness-report.json"),
+    JSON.stringify({
+      ...JSON.parse(fs.readFileSync(path.join(e2eSystemOutput, "truth-readiness-report.json"), "utf8")),
+      mode: "",
+      sourceArtifacts: buildReadinessSourceArtifacts(loadReadinessInputs(e2eSystemOutput)),
+    }),
+    "utf8",
+  );
+  const e2eAcceptance = buildBatchAcceptanceReport({
+    context: {
+      configPath,
+      outputRoot: e2eOutputRoot,
+      config: {
+        systems: [{ code: "adp", name: "AI保单数据闭环平台", databaseProfile: { enabled: true } }],
+      },
+    },
+    systems: [{ code: "adp", name: "AI保单数据闭环平台", databaseProfile: { enabled: true } }],
+  });
+  assert.equal(e2eAcceptance.status, "blocked");
+  assert.equal(e2eAcceptance.canSubmitAll, false);
+  assert.ok(e2eAcceptance.blockers.some((item) => item.id === "truth-readiness.output-under-e2e"));
+
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
     JSON.stringify({
@@ -8665,19 +8706,21 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
     ],
   };
 
-  const ready = buildDeliveryReadinessReport({ acceptanceReport });
-  assert.equal(ready.status, "ready");
-  assert.equal(ready.canDeliver, true);
-  assert.equal(ready.configPath, configPath);
-  assert.equal(ready.outputRoot, outputRoot);
-  assert.equal(ready.summary.ready, 1);
-  assert.equal(ready.summary.whitepapers, 1);
-  assert.equal(ready.summary.staleSystems, 0);
-  assert.equal(ready.systems[0].whitepaperExists, true);
-  assert.equal(ready.systems[0].pendingReviewExists, true);
-  assert.equal(ready.systems[0].finalExists, false);
-  assert.equal(ready.systems[0].docxCurrent, false);
-  assert.match(renderDeliveryReadinessMarkdown(ready), /Delivery Readiness Report/);
+  const pendingOnly = buildDeliveryReadinessReport({ acceptanceReport });
+  assert.equal(pendingOnly.status, "blocked");
+  assert.equal(pendingOnly.canDeliver, false);
+  assert.equal(pendingOnly.configPath, configPath);
+  assert.equal(pendingOnly.outputRoot, outputRoot);
+  assert.equal(pendingOnly.summary.ready, 0);
+  assert.equal(pendingOnly.summary.whitepapers, 1);
+  assert.equal(pendingOnly.summary.staleSystems, 0);
+  assert.equal(pendingOnly.systems[0].whitepaperExists, true);
+  assert.equal(pendingOnly.systems[0].pendingReviewExists, true);
+  assert.equal(pendingOnly.systems[0].finalExists, false);
+  assert.equal(pendingOnly.systems[0].docxCurrent, false);
+  assert.ok(pendingOnly.blockers.some((item) => item.id === "delivery.final-missing"));
+  assert.ok(pendingOnly.blockers.some((item) => item.id === "delivery.review-not-approved"));
+  assert.match(renderDeliveryReadinessMarkdown(pendingOnly), /Delivery Readiness Report/);
 
   fs.writeFileSync(
     path.join(systemOutput, "truth-readiness-report.json"),
@@ -8723,10 +8766,10 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.ok(unsafeDbReady.blockers.some((item) => item.id === "delivery.current-truth-gate-failed"));
   writePassingTruthArtifacts(systemOutput, { requireDatabaseEvidence: true });
 
-  const artifacts = writeDeliveryReadinessReport(outputRoot, ready);
-  const stateSummary = buildDeliveryReadinessStateSummary(ready, artifacts);
-  assert.equal(stateSummary.status, "ready");
-  assert.equal(stateSummary.canDeliver, true);
+  const artifacts = writeDeliveryReadinessReport(outputRoot, pendingOnly);
+  const stateSummary = buildDeliveryReadinessStateSummary(pendingOnly, artifacts);
+  assert.equal(stateSummary.status, "blocked");
+  assert.equal(stateSummary.canDeliver, false);
   assert.equal(stateSummary.artifacts.deliveryReadinessMarkdown, "delivery-readiness-report.md");
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.json")), true);
   assert.equal(fs.existsSync(path.join(outputRoot, "_batch", "delivery-readiness-report.md")), true);
@@ -8742,6 +8785,18 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
     systemName: "AI保单数据闭环平台",
     date: "2026-06-03",
   });
+  state = {
+    ...state,
+    overallStatus: "finalized",
+    review: { status: "approved" },
+    artifacts: {
+      ...(state.artifacts || {}),
+      final: "whitepaper.final.md",
+      docx: path.basename(word.outputPath),
+      docxManifest: path.basename(word.manifestPath),
+    },
+  };
+  writePipelineState(path.join(systemOutput, "pipeline-state.json"), state);
   const finalReady = buildDeliveryReadinessReport({ acceptanceReport });
   assert.equal(finalReady.status, "ready");
   assert.equal(finalReady.canDeliver, true);
@@ -10830,6 +10885,60 @@ test("word exporter writes a docx package from final markdown", () => {
   assert.equal(result.manifest.output.fingerprint.exists, true);
 });
 
+test("word exporter approval guard requires approved truth-gated final markdown", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { assertApprovedWhitepaperWordInput } = require("./export-whitepaper-word");
+  const { finalizeWhitepaperMarkdown } = require("./system-whitepaper-lib");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "word-export-guard-"));
+  const pendingPath = path.join(dir, "whitepaper.pending-review.md");
+  const finalPath = path.join(dir, "whitepaper.final.md");
+  const pendingMarkdown = passingNarrativeMarkdown();
+  const finalMarkdown = finalizeWhitepaperMarkdown(pendingMarkdown, {
+    systemName: "AI保单数据闭环平台",
+  });
+  fs.writeFileSync(pendingPath, pendingMarkdown, "utf8");
+  fs.writeFileSync(finalPath, finalMarkdown, "utf8");
+
+  assert.throws(
+    () =>
+      assertApprovedWhitepaperWordInput(finalPath, {
+        systemCode: "adp",
+        systemName: "AI保单数据闭环平台",
+      }),
+    /approved review state/,
+  );
+
+  fs.writeFileSync(
+    path.join(dir, "pipeline-state.json"),
+    JSON.stringify({
+      code: "adp",
+      name: "AI保单数据闭环平台",
+      overallStatus: "finalized",
+      review: { status: "approved" },
+    }),
+    "utf8",
+  );
+  writePassingTruthReadinessReport(dir);
+  const allowed = assertApprovedWhitepaperWordInput(finalPath, {
+    systemCode: "adp",
+    systemName: "AI保单数据闭环平台",
+  });
+  assert.equal(allowed.finalPath, finalPath);
+
+  fs.appendFileSync(finalPath, "\n\n## 未审定追加内容\n该内容绕过待审稿。", "utf8");
+  assert.throws(
+    () =>
+      assertApprovedWhitepaperWordInput(finalPath, {
+        systemCode: "adp",
+        systemName: "AI保单数据闭环平台",
+      }),
+    /match the approved pending-review Markdown/,
+  );
+});
+
 test("approved review creates final markdown and word output", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -11531,10 +11640,10 @@ test("dashboard download route serves docx artifact", async () => {
   const server = createDashboardServer({ configPath });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
-  const downloadDocx = () =>
+  const downloadArtifact = (artifact) =>
     new Promise((resolve, reject) => {
       http
-        .get(`http://127.0.0.1:${port}/api/download?system=adp&artifact=docx`, (res) => {
+        .get(`http://127.0.0.1:${port}/api/download?system=adp&artifact=${artifact}`, (res) => {
           const chunks = [];
           res.on("data", (chunk) => chunks.push(chunk));
           res.on("end", () =>
@@ -11547,6 +11656,7 @@ test("dashboard download route serves docx artifact", async () => {
         })
         .on("error", reject);
     });
+  const downloadDocx = () => downloadArtifact("docx");
 
   try {
     const response = await downloadDocx();
@@ -11566,6 +11676,9 @@ test("dashboard download route serves docx artifact", async () => {
     const blocked = await downloadDocx();
     assert.equal(blocked.statusCode, 400);
     assert.match(blocked.body.toString("utf8"), /Artifact not found: docx/);
+    const blockedFinal = await downloadArtifact("final");
+    assert.equal(blockedFinal.statusCode, 400);
+    assert.match(blockedFinal.body.toString("utf8"), /Final delivery requires final Markdown/);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -15020,6 +15133,50 @@ test("truth readiness rejects invalid database-derived artifact files", () => {
   assert.ok(report.gates.database.failures.some((item) => /data-dictionary\.json is invalid/.test(item)));
 });
 
+test("truth readiness config system requires database evidence when database profile is enabled", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-config-db-required-"));
+  const outputRoot = path.join(dir, "custom-outputs");
+  const systemOutput = path.join(outputRoot, "adp");
+  fs.mkdirSync(systemOutput, { recursive: true });
+  const configPath = path.join(dir, "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: custom-outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+      "    databaseProfile:",
+      "      enabled: true",
+      "      mode: metadata-file",
+      "      readOnly: true",
+      "      secretFile: ./secrets/db/adp.json",
+      "      metadataFile: ./secrets/db/adp-metadata.json",
+    ].join("\n"),
+    "utf8",
+  );
+  writePassingTruthArtifacts(systemOutput, { databaseProfile: false });
+  fs.rmSync(path.join(systemOutput, "database-profile.json"), { force: true });
+
+  const report = runTruthReadinessCheck({
+    configPath,
+    system: "adp",
+  });
+
+  assert.equal(report.requirements.databaseEvidenceRequired, true);
+  assert.equal(report.gates.database.required, true);
+  assert.equal(report.gates.database.profileAvailable, false);
+  assert.equal(report.canSubmitReview, false);
+  assert.ok(report.blockers.some((item) => item.id === "database.required-profile-missing"));
+});
+
 test("truth readiness rejects unsafe database profile evidence", () => {
   const { buildTruthReadinessReport, scanDatabaseProfileSafety } = require("./check-truth-readiness");
   const artifacts = {
@@ -16173,6 +16330,7 @@ test("package manifest whitelists only skill runtime assets", () => {
     "safety-rules.md",
     "whitepaper-template.md",
     "examples/",
+    "scripts/approval-guard.js",
     "scripts/build-database-model.js",
     "scripts/build-function-universe.js",
     "scripts/build-verified-claims.js",

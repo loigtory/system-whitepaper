@@ -4,6 +4,8 @@
 > 状态：**M1-M10 已实现（adp 试点 cursor-sdk 写稿通过）；H5 停止/重头、登录快路径、产物预览与约定命名已落地**  
 > 试点：以 `systems-registry.xlsx` 中**新维护的页面较少系统**为准（不再以财务中台 fin-center 为主试点；fin-center 保留为大规模回归样本）
 
+> 当前说明：本文件是历史路线图，不作为当前流程或验收依据。当前主线以 `SKILL.md`、`check-truth-readiness.js`、`check-batch-acceptance.js` 和 `check-delivery-readiness.js` 为准：数据库证据只读脱敏进入 Truth Pipeline，review/final/Word 必须通过 Truth gate，Word 交付必须有 `.docx.manifest.json`。
+
 ---
 
 ## 1. 目标

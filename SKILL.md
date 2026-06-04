@@ -60,6 +60,8 @@ Delivery note: approval also creates a `.docx.manifest.json` sidecar for the Wor
 Use the 4-thread model for unattended multi-system development:
 
 - Run different systems in parallel. Each system must write to its own `outputs/<system-code>/` directory.
+- For Codex/Agent development work, the main Agent is the coordinator and reviewer. Worker Agents must either be read-only auditors or write in isolated worktrees/branches with disjoint file ownership; never let multiple Agents edit the same worktree or output directory concurrently.
+- Integrate worker results only through the main Agent after review, tests, and conflict resolution. Treat shared config, `scripts/`, `SKILL.md`, and `_batch` state as coordinator-owned unless a worker is explicitly assigned a narrow, isolated patch.
 - Do not run the same system twice at the same time. Duplicate system codes or duplicate batch requests are invalid because they can overwrite screenshots, state, prompts, and review artifacts.
 - The batch runner owns `outputs/_batch/run-state.json`. Single-system child pipelines are started with `--no-batch-state` so they cannot overwrite the aggregate batch state.
 - The local dashboard reads the same batch state and shows each running system's status, current phase/node, pid, per-system log path, truth-readiness summary, writable-claim coverage, coverage-repair status, failure category, retry plan, batch diagnosis summary, and repair-queue summary.

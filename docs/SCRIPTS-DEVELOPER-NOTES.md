@@ -61,22 +61,16 @@ node scripts/sync-systems-registry.js --config config/systems.local.yaml --expor
 ## 建议命令
 
 ```bash
-node scripts/collect-evidence.js --config examples/systems.example.yaml --system contract --init-only
-node scripts/collect-evidence.js --config examples/systems.example.yaml --system contract --max-pages 10
-node scripts/collect-evidence.js --config config/systems.local.yaml --system pilot --resume --max-pages 50
-# 默认无头（runtime.headless: true）；仅排查登录问题时加 --headed
-node scripts/refresh-huntian-cookie.js --config config/systems.local.yaml --system pilot --persistent-profile
-node scripts/generate-whitepaper.js --input outputs/contract/evidence.json --output outputs/contract/whitepaper.draft.md
-node scripts/build-evidence-summary.js --input outputs/contract/evidence.json
-node scripts/run-phase3b.js --config config/systems.local.yaml --system contract --provider manual
-node scripts/run-phase3b.js --config config/systems.local.yaml --system contract --provider manual --narrative-part overview-flow --review-rerun
-node scripts/run-whitepaper-pipeline.js --config config/systems.local.yaml --system contract --nodes draft,summary,narrative --provider manual --reset
-node scripts/validate-write.js --system contract --system-output outputs/contract
-# 后续无人值守流水线会继续执行：摘要 -> 写稿 -> 质检 -> 审阅
-node scripts/check-quality.js --input outputs/contract
-node scripts/check-narrative.js --input outputs/contract
-node scripts/run-review-decision.js --input outputs/contract --status rejected --comment "系统定位需要更业务化"
-node scripts/export-whitepaper-word.js --input outputs/contract/whitepaper.final.md
+npm run pipeline -- --system contract --provider manual --reset
+npm run batch
+npm run truth:readiness -- --system contract
+npm run batch:acceptance
+npm run delivery:check
+npm run real:check
+# 只在局部补稿/驳回重写时使用 phase3b；不要绕过 Truth Pipeline 直接交付。
+npm run phase3b -- --system contract --provider manual --narrative-part overview-flow --review-rerun
+# 审定通过会先校验当前 Truth gate，再生成 final/Word/manifest。
+node scripts/run-review-decision.js --input outputs/contract --status approved
 node scripts/local-dashboard/server.js --config config/systems.local.yaml --port 3920
 node scripts/run-local-e2e-smoke.js --config config/systems.local.yaml --system adp --date 2026-05-20
 ```
@@ -384,7 +378,7 @@ ADP 真实联调记录：
 ## run-review-decision.js 职责
 
 - 执行 **审定 · 审阅** 的通过/驳回决策落盘。
-- 审核通过：复制 `whitepaper.pending-review.md` 为 `whitepaper.final.md`，并立即生成 Word。
+- 审核通过：先验证当前 `truth-readiness-report.json`，再将 `whitepaper.pending-review.md` 晋级为 `whitepaper.final.md`，同步展示命名稿，并立即生成带 manifest 的 Word。
 - 审核驳回：必须填写审核意见，并输出建议重跑节点到 `review-decision.json`。
 - CLI 推荐使用 `--status approved|rejected`；`--decision` 仅保留为旧调用兼容输入，不会写入 `review-decision.json`。
 - `review-decision.json` 字段以脚本 schema 为准：`status`、`comment`、`rerunNodes`、`rewriteScope`、`targetSections`、`targetModules`、`narrativePart`、`instructions`、`decidedAt`。
@@ -394,20 +388,21 @@ ADP 真实联调记录：
 
 ## export-whitepaper-word.js 职责
 
-- 将 `whitepaper.final.md` 导出为同目录 `.docx`。
+- 将已审定的 `whitepaper.final.md` 导出为同目录 `.docx`。
 - 默认文件名：`{系统名称}_系统功能白皮书_{YYYYMMDD}.docx`。
 - 导出器使用 Node 内置能力生成最小 Word OOXML 包，不依赖外部 Office 服务。
-- 审核通过时由 `run-review-decision.js` 自动调用；也可手工执行：
+- 审核通过时由 `run-review-decision.js` 自动调用。CLI 默认会校验：输入必须是内部 `whitepaper.final.md`，审核状态已通过，终稿等于已审定待审稿，且当前 Truth gate 仍通过。
+- 仅排查 OOXML 生成问题时才使用显式不安全开关；该输出不能作为交付依据：
 
 ```bash
-node scripts/export-whitepaper-word.js --input outputs/adp/whitepaper.final.md
+node scripts/export-whitepaper-word.js --input outputs/adp/whitepaper.final.md --unsafe-allow-unapproved-export
 ```
 
 ## local-dashboard/server.js 职责
 
 - 启动本地 H5 看板：`http://127.0.0.1:3920`。
 - 读取 `outputs/_batch/run-state.json` 和各系统 `pipeline-state.json`。
-- 展示 **准备 / 取证 / 成稿 / 审定** 四阶段和两字小步状态。
+- 展示 **准备 / 取证 / 真相 / 成稿 / 审定** 阶段、两字小步状态、Truth readiness、批量验收和交付就绪摘要。
 - 支持单系统“从头再来”“继续执行”“重试当前”“停止当前任务”。
 - 支持 **审定 · 审阅**：通过时生成 `whitepaper.final.md`；驳回时必填意见并生成 `review-decision.json`。
 - 写稿消耗卡片会读取 `phase3b-usage.json` / `phase3b-usage-history.json`，展示实际发送 prompt、SDK 发送目标、生成/发送分片数量、分片节省比例、参考费用估算，以及审核驳回重写的依据摘要。

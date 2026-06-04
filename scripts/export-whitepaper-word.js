@@ -4,10 +4,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const {
+  finalizeWhitepaperMarkdown,
   formatWhitepaperDate,
   parseArgs,
   resolveWhitepaperFileName,
 } = require("./system-whitepaper-lib");
+const { assertApprovalTruthReadiness } = require("./approval-guard");
 
 const CRC_TABLE = new Uint32Array(256).map((_, index) => {
   let value = index;
@@ -253,6 +255,61 @@ function buildDocxManifest(options = {}) {
   };
 }
 
+function readJsonObjectIfExists(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return {};
+    const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function reviewStateApproved(state = {}, decision = {}) {
+  return (
+    state.overallStatus === "finalized" ||
+    state.review?.status === "approved" ||
+    decision.status === "approved"
+  );
+}
+
+function assertApprovedWhitepaperWordInput(inputPath, options = {}) {
+  const finalPath = path.resolve(String(inputPath || ""));
+  if (path.basename(finalPath) !== "whitepaper.final.md") {
+    throw new Error("Approved Word export must use the internal whitepaper.final.md artifact.");
+  }
+  if (!fs.existsSync(finalPath)) {
+    throw new Error(`Final markdown not found: ${finalPath}`);
+  }
+  const outputDir = path.dirname(finalPath);
+  const pendingPath = path.join(outputDir, "whitepaper.pending-review.md");
+  if (!fs.existsSync(pendingPath)) {
+    throw new Error(`Pending review markdown not found: ${pendingPath}`);
+  }
+
+  const state = readJsonObjectIfExists(path.join(outputDir, "pipeline-state.json"));
+  const decision = readJsonObjectIfExists(path.join(outputDir, "review-decision.json"));
+  if (!reviewStateApproved(state, decision)) {
+    throw new Error("Approved Word export requires approved review state.");
+  }
+
+  const expectedFinal = finalizeWhitepaperMarkdown(fs.readFileSync(pendingPath, "utf8"), {
+    systemName: options.systemName || state.name || decision.systemName || "",
+  });
+  if (fs.readFileSync(finalPath, "utf8") !== expectedFinal) {
+    throw new Error("Approved Word export requires final Markdown to match the approved pending-review Markdown.");
+  }
+
+  assertApprovalTruthReadiness(outputDir, {
+    ...options,
+    state,
+    systemCode: options.systemCode || state.code || "",
+    systemName: options.systemName || state.name || decision.systemName || "",
+  });
+
+  return { finalPath, pendingPath, outputDir, state, decision };
+}
+
 function exportWhitepaperWord(options = {}) {
   const inputPath = path.resolve(String(options.inputPath || options.input || "whitepaper.final.md"));
   if (!fs.existsSync(inputPath)) {
@@ -284,7 +341,15 @@ function exportWhitepaperWord(options = {}) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.input) {
-    throw new Error("Usage: node scripts/export-whitepaper-word.js --input outputs/system/whitepaper.final.md [--output xxx.docx]");
+    throw new Error(
+      "Usage: node scripts/export-whitepaper-word.js --input outputs/system/whitepaper.final.md [--output xxx.docx] [--unsafe-allow-unapproved-export]",
+    );
+  }
+  if (!args["unsafe-allow-unapproved-export"]) {
+    assertApprovedWhitepaperWordInput(args.input, {
+      systemCode: args["system-code"] || args.system,
+      systemName: args["system-name"],
+    });
   }
   const result = exportWhitepaperWord({
     inputPath: args.input,
@@ -305,6 +370,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  assertApprovedWhitepaperWordInput,
   buildDocxManifest,
   buildDocxFiles,
   createZip,
