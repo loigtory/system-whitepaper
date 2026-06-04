@@ -150,15 +150,11 @@ function buildSystemPreparation(system = {}, context = {}) {
     const secretFile = databaseProfile.secretFile || "";
     let databaseSecret = null;
     let secretPathAllowed = true;
-    if (!secretFile) {
-      blockers.push(issue("database.secret-missing", "databaseProfile.enabled=true but the private database secret is missing.", { systemCode: code }));
-    } else {
-      try {
-        assertPrivateDatabaseSecretPath(system, context.configDir, databaseProfile);
-      } catch (error) {
-        secretPathAllowed = false;
-        blockers.push(issue("database.secret-path-unsafe", error.message, { systemCode: code }));
-      }
+    try {
+      assertPrivateDatabaseSecretPath(system, context.configDir, databaseProfile);
+    } catch (error) {
+      secretPathAllowed = false;
+      blockers.push(issue("database.secret-path-unsafe", error.message, { systemCode: code }));
     }
     if (secretFile && secretPathAllowed) {
       if (!fs.existsSync(secretFile)) {

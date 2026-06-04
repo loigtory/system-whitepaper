@@ -168,19 +168,11 @@ function validateSystem(system, index, seenCodes, failures, warnings, checks, co
     const databaseProfile = resolveDatabaseProfileConfig(system, configDir);
     let databaseSecret = null;
     let secretPathAllowed = true;
-    if (!databaseProfile.secretFile) {
-      pushIssue(
-        failures,
-        "system.database-secret-missing",
-        `${label}: databaseProfile.enabled is true but secretFile is not configured.`,
-      );
-    } else {
-      try {
-        assertPrivateDatabaseSecretPath(system, configDir, databaseProfile);
-      } catch (error) {
-        secretPathAllowed = false;
-        pushIssue(failures, "system.database-secret-path-unsafe", `${label}: ${error.message}`);
-      }
+    try {
+      assertPrivateDatabaseSecretPath(system, configDir, databaseProfile);
+    } catch (error) {
+      secretPathAllowed = false;
+      pushIssue(failures, "system.database-secret-path-unsafe", `${label}: ${error.message}`);
     }
     if (databaseProfile.secretFile && secretPathAllowed) {
       if (!fs.existsSync(databaseProfile.secretFile)) {

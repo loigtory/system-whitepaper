@@ -583,9 +583,17 @@ function normalizeDatabaseProfile(input = {}, context = {}) {
 
 function resolveDatabaseProfileConfig(system = {}, configDir) {
   const profile = system.databaseProfile || {};
+  const secretDir = profile.secretDir
+    ? resolveConfigRelativePath(configDir, profile.secretDir)
+    : resolvePrivateDatabaseSecretsDir(configDir);
+  const secretFile = profile.secretFile
+    ? resolveConfigRelativePath(configDir, profile.secretFile)
+    : resolveExpectedDatabaseSecretPath(system, configDir, { secretDir });
   return {
     enabled: Boolean(profile.enabled),
-    secretFile: profile.secretFile ? resolveConfigRelativePath(configDir, profile.secretFile) : "",
+    secretDir,
+    secretFile,
+    secretFileSource: profile.secretFile ? "secretFile" : "secretDir",
     metadataFile: profile.metadataFile ? resolveConfigRelativePath(configDir, profile.metadataFile) : "",
     mode: String(profile.mode || "").trim(),
     type: profile.type || "",
@@ -625,23 +633,26 @@ function allowUnsafeExternalDbPaths(options = {}) {
   );
 }
 
-function resolvePrivateDatabaseSecretsDir(configDir) {
-  return resolveConfigRelativePath(configDir, "secrets/db");
+function resolvePrivateDatabaseSecretsDir(configDir, profileConfig = {}) {
+  return profileConfig.secretDir
+    ? resolveConfigRelativePath(configDir, profileConfig.secretDir)
+    : resolveConfigRelativePath(configDir, "secrets/db");
 }
 
-function resolveExpectedDatabaseSecretPath(system = {}, configDir) {
+function resolveExpectedDatabaseSecretPath(system = {}, configDir, profileConfig = {}) {
   const code = String(system.code || system.systemCode || "").trim();
   if (!code) return "";
-  return path.join(resolvePrivateDatabaseSecretsDir(configDir), `${code}.json`);
+  return path.join(resolvePrivateDatabaseSecretsDir(configDir, profileConfig), `${code}.json`);
 }
 
 function assertPrivateDatabaseSecretPath(system = {}, configDir, profileConfig = {}, options = {}) {
   const secretFile = profileConfig.secretFile || "";
   if (!secretFile || allowUnsafeExternalDbPaths(options)) return secretFile;
-  const expectedPath = resolveExpectedDatabaseSecretPath(system, configDir);
+  const expectedPath = resolveExpectedDatabaseSecretPath(system, configDir, profileConfig);
   if (!sameResolvedPath(secretFile, expectedPath)) {
+    const relativeExpected = path.join("secrets", "db", `${system.code}.json`).replace(/\\/g, "/");
     throw new Error(
-      `databaseProfile.secretFile must be secrets/db/${system.code}.json for system ${system.code}; actual=${secretFile}`,
+      `databaseProfile secret for system ${system.code} must resolve to ${relativeExpected}; configure databaseProfile.secretDir=./secrets/db or legacy secretFile=${relativeExpected}; actual=${secretFile}`,
     );
   }
   return secretFile;
@@ -652,7 +663,7 @@ function assertPrivateDatabaseMetadataPath(system = {}, configDir, metadataFile,
     return metadataFile ? resolveConfigRelativePath(configDir, metadataFile) : "";
   }
   const metadataPath = resolveConfigRelativePath(configDir, metadataFile);
-  const secretsDir = resolvePrivateDatabaseSecretsDir(configDir);
+  const secretsDir = resolvePrivateDatabaseSecretsDir(configDir, system.databaseProfile || {});
   if (!isPathInsideDirectory(metadataPath, secretsDir)) {
     throw new Error(
       `database metadata file for system ${system.code} must stay under secrets/db/: actual=${metadataPath}`,
@@ -672,9 +683,6 @@ async function collectDatabaseProfile(options = {}) {
   const profileConfig = resolveDatabaseProfileConfig(system, configDir);
   if (!profileConfig.enabled) {
     throw new Error(`databaseProfile is not enabled for system: ${systemCode}`);
-  }
-  if (!profileConfig.secretFile) {
-    throw new Error(`databaseProfile.secretFile is required for system: ${systemCode}`);
   }
   assertPrivateDatabaseSecretPath(system, configDir, profileConfig, options);
   const secret = readRequiredJsonObject(profileConfig.secretFile, {

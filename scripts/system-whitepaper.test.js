@@ -13432,7 +13432,7 @@ test("doctor validates enabled database profile secret under private secrets", (
       "    url: https://pre-adp.hzins.com/",
       "    databaseProfile:",
       "      enabled: true",
-      "      secretFile: ./secrets/db/adp.json",
+      "      secretDir: ./secrets/db",
       "      metadataFile: ./secrets/db/adp-metadata.json",
       "      allowSampleData: true",
       "",
@@ -13650,6 +13650,74 @@ test("collect database profile writes redacted schema evidence from private meta
   );
 });
 
+test("collect database profile resolves secret from databaseProfile secretDir and system code", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    collectDatabaseProfile,
+    resolveDatabaseProfileConfig,
+    resolveExpectedDatabaseSecretPath,
+  } = require("./collect-database-profile");
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "system-whitepaper-db-secretdir-"));
+  fs.mkdirSync(path.join(projectRoot, "config"), { recursive: true });
+  fs.mkdirSync(path.join(projectRoot, "secrets", "db"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, "secrets", "db", "adp.json"),
+    JSON.stringify({
+      type: "mysql",
+      database: "adp_test",
+      user: "readonly",
+      password: "secret",
+      readOnly: true,
+    }),
+    "utf8",
+  );
+  const configPath = path.join(projectRoot, "config", "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: ./outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://pre-adp.hzins.com/",
+      "    databaseProfile:",
+      "      enabled: true",
+      "      mode: connector",
+      "      secretDir: ./secrets/db",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const profileConfig = resolveDatabaseProfileConfig(
+    {
+      code: "adp",
+      databaseProfile: {
+        enabled: true,
+        mode: "connector",
+        secretDir: "./secrets/db",
+      },
+    },
+    path.dirname(configPath),
+  );
+  const { profile } = await collectDatabaseProfile({
+    config: configPath,
+    system: "adp",
+    adapter: async () => ({
+      databaseType: "mysql",
+      tables: [{ schema: "adp_test", name: "policy_task", columns: [] }],
+    }),
+  });
+
+  assert.equal(profileConfig.secretFile, path.join(projectRoot, "secrets", "db", "adp.json"));
+  assert.equal(resolveExpectedDatabaseSecretPath({ code: "adp" }, path.dirname(configPath), profileConfig), profileConfig.secretFile);
+  assert.equal(profile.source.secret.readOnly, true);
+  assert.equal(profile.tables[0].name, "policy_task");
+});
+
 test("collect database profile rejects private database files outside secrets db", async () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -13684,7 +13752,7 @@ test("collect database profile rejects private database files outside secrets db
 
   await assert.rejects(
     () => collectDatabaseProfile({ config: configPath, system: "adp" }),
-    /databaseProfile\.secretFile must be secrets\/db\/adp\.json/,
+    /databaseProfile secret for system adp must resolve to secrets\/db\/adp\.json/,
   );
 });
 
