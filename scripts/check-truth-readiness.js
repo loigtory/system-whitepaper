@@ -3,7 +3,12 @@
 const fs = require("node:fs");
 const crypto = require("node:crypto");
 const path = require("node:path");
-const { parseArgs, writeJson } = require("./system-whitepaper-lib");
+const {
+  buildQualityReport,
+  computeEvidenceMetrics,
+  parseArgs,
+  writeJson,
+} = require("./system-whitepaper-lib");
 const {
   assertValidFactCheckReportArtifact,
   assertValidVerifiedClaimsArtifact,
@@ -680,6 +685,99 @@ function action(id, message, rerunNodes = [], extra = {}) {
   return { id, message, rerunNodes, ...extra };
 }
 
+function findQualitySourceMismatches(artifacts = {}) {
+  const quality = artifacts.quality || {};
+  const checks = [
+    ["evidence", artifacts.evidence],
+    ["operationSpec", artifacts.operationSpec],
+    ["operationGuideGate", artifacts.operationGuideGate],
+  ];
+  const mismatches = [];
+  for (const [key, current] of checks) {
+    const recorded = quality?.value?.sourceArtifacts?.[key];
+    const recordedSourceExists = normalizeSourceFingerprint(recorded || {}).exists;
+    if (!recorded && !current?.fingerprint?.exists) continue;
+    if (!recordedSourceExists && !current?.fingerprint?.exists) continue;
+    const failure = lineageMismatch(key, quality, current, "quality-report.json");
+    if (failure) mismatches.push(failure);
+  }
+  return mismatches;
+}
+
+function buildQualityReportFromCurrentArtifacts(artifacts = {}) {
+  const evidence = artifacts.evidence || {};
+  if (evidence.status !== "ok") return null;
+  const evidenceValue = JSON.parse(JSON.stringify(evidence.value || {}));
+  const metrics = computeEvidenceMetrics(evidenceValue);
+  const report = buildQualityReport({
+    ...metrics,
+    blockedItems: evidenceValue.blockedItems || [],
+  });
+  const operationSpec = artifacts.operationSpec || {};
+  if (operationSpec.status && operationSpec.status !== "missing") {
+    if (operationSpec.status !== "ok") return null;
+    try {
+      assertValidOperationSpecArtifact(operationSpec.value);
+    } catch (error) {
+      report.canFinalize = false;
+      report.failures.push(`operation-spec: ${error.message}`);
+    }
+  }
+  const operationGuideGate = artifacts.operationGuideGate || {};
+  if (operationGuideGate.status && operationGuideGate.status !== "missing") {
+    if (operationGuideGate.status !== "ok") return null;
+    try {
+      assertValidOperationGuideGateArtifact(operationGuideGate.value, operationSpec.value || null);
+    } catch (error) {
+      report.canFinalize = false;
+      report.failures.push(`operation-guide: ${error.message}`);
+    }
+    report.operationGuideGate = operationGuideGate.value;
+    report.canComposeGuide = Boolean(operationGuideGate.value?.canComposeGuide);
+    if (!operationGuideGate.value?.canComposeGuide) {
+      report.canFinalize = false;
+      for (const failure of operationGuideGate.value?.failures || []) {
+        report.failures.push(`operation-guide: ${failure}`);
+      }
+    }
+  }
+  return { ...report, counts: metrics.counts };
+}
+
+function validateQualityAgainstCurrentEvidence(value = {}, artifacts = {}) {
+  const failures = [];
+  const evidence = artifacts.evidence || {};
+  if (evidence.status !== "ok" || !evidence.path || !fs.existsSync(evidence.path)) return failures;
+  if (findQualitySourceMismatches(artifacts).length) return failures;
+  let recomputed;
+  try {
+    recomputed = buildQualityReportFromCurrentArtifacts(artifacts);
+  } catch (error) {
+    failures.push(`quality-report.json could not be recomputed from current evidence.json: ${error.message}`);
+    return failures;
+  }
+  if (!recomputed) return failures;
+  for (const key of [
+    "menuCoverage",
+    "corePageScreenshotCoverage",
+    "coreFunctionClassificationCoverage",
+    "writeOperationSafetyCompliance",
+    "unverifiedContentLabeling",
+    "coreConclusionTraceability",
+  ]) {
+    if (!numbersMatch(value[key], recomputed[key])) {
+      failures.push(`quality-report.json ${key} must match deterministic quality recomputation from current evidence.json.`);
+    }
+  }
+  if (value.canFinalize === true && recomputed.canFinalize !== true) {
+    failures.push("quality-report.json canFinalize=true must match deterministic quality recomputation from current evidence.json.");
+  }
+  if (!sameStringSet(value.failures || [], recomputed.failures || [])) {
+    failures.push("quality-report.json failures must match deterministic quality recomputation from current evidence.json.");
+  }
+  return failures;
+}
+
 function buildEvidenceGate(artifact, artifacts = {}) {
   const value = artifact.value || {};
   const contractFailures = [];
@@ -689,6 +787,7 @@ function buildEvidenceGate(artifact, artifacts = {}) {
     } catch (error) {
       contractFailures.push(error.message);
     }
+    contractFailures.push(...validateQualityAgainstCurrentEvidence(value, artifacts));
   }
   const operationSpec = artifacts.operationSpec || {};
   if (operationSpec.status === "ok" || operationSpec.fingerprint?.exists) {

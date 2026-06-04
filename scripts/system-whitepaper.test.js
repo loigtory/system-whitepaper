@@ -14894,6 +14894,50 @@ test("truth readiness rejects invalid quality report artifact contract", () => {
   assert.ok(report.blockers.some((item) => item.id === "evidence.invalid-artifact"));
 });
 
+test("truth readiness rejects forged quality reports against current evidence", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { buildQualitySourceArtifacts } = require("./check-quality");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-forged-quality-current-evidence-"));
+  writePassingTruthArtifacts(dir, { databaseProfile: false });
+  const evidencePath = path.join(dir, "evidence.json");
+  fs.writeFileSync(
+    evidencePath,
+    JSON.stringify({
+      menuMap: [{ title: "保单任务", menuPath: "保单任务 > 任务列表", url: "/task", status: "observed" }],
+      pageInventory: [],
+      actionInventory: [],
+      blockedItems: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(dir, "quality-report.json"),
+    JSON.stringify(qualityReportFixture({
+      sourceArtifacts: buildQualitySourceArtifacts({
+        evidencePath,
+        operationSpecPath: path.join(dir, "operation-spec.json"),
+        operationGuideGatePath: path.join(dir, "operation-guide-gate.json"),
+      }),
+    })),
+    "utf8",
+  );
+
+  const report = runTruthReadinessCheck({ inputDir: dir });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.evidence.pass, false);
+  assert.equal(report.gates.evidence.artifactContractValid, false);
+  assert.ok(
+    report.gates.evidence.failures.some((item) =>
+      /deterministic quality recomputation from current evidence\.json/.test(item),
+    ),
+  );
+  assert.ok(report.blockers.some((item) => item.id === "evidence.invalid-artifact"));
+});
+
 test("truth readiness rejects forged operation spec evidence artifacts", () => {
   const { buildTruthReadinessReport } = require("./check-truth-readiness");
   const forgedSpec = operationSpecFixture({ metrics: { flowCount: 5 } });
