@@ -15319,6 +15319,80 @@ test("truth readiness rejects forged operation spec against current evidence", (
   assert.ok(blocker.rerunNodes.includes("compose-guide"));
 });
 
+test("truth readiness rejects forged operation guide gate against current spec", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { buildQualitySourceArtifacts } = require("./check-quality");
+  const {
+    buildOperationSpec,
+    buildOperationSpecSourceArtifacts,
+    fingerprintFile,
+  } = require("./operation-spec/lib");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-forged-operation-guide-gate-"));
+  writePassingTruthArtifacts(dir, { databaseProfile: false });
+  const evidencePath = path.join(dir, "evidence.json");
+  const operationSpecPath = path.join(dir, "operation-spec.json");
+  const operationGuideGatePath = path.join(dir, "operation-guide-gate.json");
+  const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
+  const { spec } = buildOperationSpec({
+    evidence,
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    sourceArtifacts: buildOperationSpecSourceArtifacts({ evidencePath }),
+  });
+  fs.writeFileSync(operationSpecPath, JSON.stringify(spec), "utf8");
+  const forgedGate = {
+    artifactType: "operation-guide-gate",
+    version: 1,
+    generatedAt: "2026-06-03T00:00:00.000Z",
+    canComposeGuide: true,
+    readinessPercent: 100,
+    failures: [],
+    checks: [
+      { id: "business-modules", pass: true, actual: 1, expected: 1 },
+      { id: "module-surface", pass: true, actual: 1, expected: 1 },
+      { id: "spec-size", pass: true, actual: 1, expected: 51200 },
+    ],
+    counts: {
+      modules: spec.metrics.moduleCount,
+      modulesWithSurface: spec.metrics.moduleCount,
+      specBytes: 1,
+    },
+    sourceArtifacts: {
+      operationSpec: {
+        file: "operation-spec.json",
+        status: "ok",
+        fingerprint: fingerprintFile(operationSpecPath),
+      },
+    },
+  };
+  fs.writeFileSync(operationGuideGatePath, JSON.stringify(forgedGate), "utf8");
+  fs.writeFileSync(
+    path.join(dir, "quality-report.json"),
+    JSON.stringify(qualityReportFixture({
+      sourceArtifacts: buildQualitySourceArtifacts({
+        evidencePath,
+        operationSpecPath,
+        operationGuideGatePath,
+      }),
+    })),
+    "utf8",
+  );
+
+  const report = runTruthReadinessCheck({ inputDir: dir });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.evidence.pass, true);
+  assert.equal(report.gates.lineage.pass, false);
+  assert.ok(
+    report.gates.lineage.failures.some((item) =>
+      /operation-guide-gate\.json must match deterministic operation-guide gate recomputation from current operation-spec\.json/.test(item),
+    ),
+  );
+  assert.ok(report.blockers.some((item) => item.id === "truth.lineage-stale"));
+});
+
 test("truth readiness rejects invalid fact-check report artifact contract", () => {
   const { buildTruthReadinessReport } = require("./check-truth-readiness");
   const artifacts = {

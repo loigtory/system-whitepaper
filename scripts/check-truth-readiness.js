@@ -24,6 +24,7 @@ const {
   assertValidOperationGuideGateArtifact,
   assertValidOperationSpecArtifact,
   buildOperationSpec,
+  evaluateOperationGuideGate,
 } = require("./operation-spec/lib");
 
 const DEFAULT_THRESHOLD = 0.95;
@@ -534,6 +535,7 @@ function buildLineageGate(artifacts = {}) {
     if (failure) failures.push(failure);
   }
   failures.push(...validateOperationSpecAgainstCurrentSources(artifacts));
+  failures.push(...validateOperationGuideGateAgainstCurrentSpec(artifacts));
   failures.push(...validateEvidenceSummaryAgainstCurrentEvidence(artifacts));
   failures.push(...validateFunctionUniverseAgainstCurrentSources(artifacts.functionUniverse?.value || {}, artifacts));
   return {
@@ -1039,6 +1041,61 @@ function validateOperationSpecAgainstCurrentSources(artifacts = {}) {
   }
   if (stableJson(operationSpecProjection(operationSpec.value || {})) !== stableJson(operationSpecProjection(recomputed))) {
     failures.push("operation-spec.json must match deterministic operation-spec recomputation from current evidence/write-validation/network inputs.");
+  }
+  return failures;
+}
+
+function operationGuideGateProjection(value = {}) {
+  return {
+    artifactType: value.artifactType || "",
+    version: value.version || null,
+    canComposeGuide: Boolean(value.canComposeGuide),
+    readinessPercent: Number(value.readinessPercent || 0),
+    failures: Array.isArray(value.failures) ? [...value.failures].map(String).sort() : [],
+    checks: sortByStableKey(
+      (Array.isArray(value.checks) ? value.checks : []).map((check) => ({
+        id: check?.id || "",
+        pass: Boolean(check?.pass),
+        actual: check?.actual ?? null,
+        expected: check?.expected ?? null,
+      })),
+      (item) => item.id,
+    ),
+    counts: value.counts || {},
+  };
+}
+
+function findOperationGuideGateSourceMismatches(artifacts = {}) {
+  const operationGuideGate = artifacts.operationGuideGate || {};
+  if (operationGuideGate.status !== "ok" || !operationGuideGate.fingerprint?.exists) return [];
+  const operationSpec = artifacts.operationSpec || {};
+  const recorded = operationGuideGate?.value?.sourceArtifacts?.operationSpec;
+  const recordedSourceExists = normalizeSourceFingerprint(recorded || {}).exists;
+  if (!recorded && !operationSpec?.fingerprint?.exists) return [];
+  if (!recordedSourceExists && !operationSpec?.fingerprint?.exists) return [];
+  const failure = lineageMismatch("operationSpec", operationGuideGate, operationSpec, "operation-guide-gate.json");
+  return failure ? [failure] : [];
+}
+
+function validateOperationGuideGateAgainstCurrentSpec(artifacts = {}) {
+  const failures = [];
+  const operationGuideGate = artifacts.operationGuideGate || {};
+  if (operationGuideGate.status !== "ok" || !operationGuideGate.fingerprint?.exists) return failures;
+  if (findOperationGuideGateSourceMismatches(artifacts).length) return failures;
+  const operationSpec = artifacts.operationSpec || {};
+  if (operationSpec.status !== "ok" || !operationSpec.fingerprint?.exists) {
+    failures.push("operation-guide-gate.json could not be recomputed because current operation-spec.json is missing or invalid.");
+    return failures;
+  }
+  let recomputed;
+  try {
+    recomputed = evaluateOperationGuideGate(operationSpec.value || {});
+  } catch (error) {
+    failures.push(`operation-guide-gate.json could not be recomputed from current operation-spec.json: ${error.message}`);
+    return failures;
+  }
+  if (stableJson(operationGuideGateProjection(operationGuideGate.value || {})) !== stableJson(operationGuideGateProjection(recomputed))) {
+    failures.push("operation-guide-gate.json must match deterministic operation-guide gate recomputation from current operation-spec.json.");
   }
   return failures;
 }
