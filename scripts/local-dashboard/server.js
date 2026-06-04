@@ -35,6 +35,10 @@ const {
 } = require("./process-control");
 const { assertApprovalTruthReadiness } = require("../approval-guard");
 const { runReviewDecision } = require("../run-review-decision");
+const {
+  terminateBatchInFlightSystems,
+  writeBatchRunState,
+} = require("../run-whitepaper-batch");
 const { findStaleReadinessSources } = require("../check-truth-readiness");
 const { validateFinalDocx } = require("../check-delivery-readiness");
 const { isCursorSdkConfigured, resolveNarrativeProvider } = require("../narrative/resolve-provider");
@@ -1052,6 +1056,41 @@ function pauseRunningStatesOnDisk(configPath, options = {}) {
   return paused;
 }
 
+function terminateBatchRunStateOnDisk(configPath, options = {}) {
+  const { outputRoot } = resolveDashboardPaths({ configPath });
+  const batchPath = path.join(outputRoot, "_batch", "run-state.json");
+  const state = readOptionalJsonObject(batchPath);
+  if (!state || !Array.isArray(state.systems)) {
+    return { changed: false, terminatedSystems: [], state: null };
+  }
+  const before = state.systems.map((item) => ({
+    code: item.code,
+    runStatus: item.runStatus,
+    status: item.status,
+  }));
+  const next = terminateBatchInFlightSystems(state, {
+    message: options.message || "用户手动停止",
+    stopReason: options.stopReason || "dashboard-stop",
+  });
+  const terminatedSystems = next.systems
+    .filter((item, index) => {
+      const previous = before[index] || {};
+      return (
+        previous.code === item.code &&
+        (previous.runStatus !== item.runStatus || previous.status !== item.status) &&
+        item.runStatus === "failed" &&
+        item.status === "paused"
+      );
+    })
+    .map((item) => item.code)
+    .filter(Boolean);
+  if (!terminatedSystems.length) {
+    return { changed: false, terminatedSystems: [], state };
+  }
+  writeBatchRunState(outputRoot, next);
+  return { changed: true, terminatedSystems, state: next };
+}
+
 function resetPipelineStateOnDisk(systemCode, configPath) {
   const { config, outputRoot } = resolveDashboardPaths({ configPath });
   const system = (config.systems || []).find((item) => item.code === systemCode);
@@ -1403,7 +1442,15 @@ function forceStopPipelineSync(options = {}) {
     system: options.system,
     message: options.message || "用户手动停止",
   });
-  return { killedPids: [...new Set(killedPids)], pausedSystems };
+  const batchTermination = terminateBatchRunStateOnDisk(options.configPath, {
+    message: options.message || "用户手动停止",
+    stopReason: "dashboard-stop",
+  });
+  return {
+    killedPids: [...new Set(killedPids)],
+    pausedSystems,
+    terminatedBatchSystems: batchTermination.terminatedSystems,
+  };
 }
 
 function schedulePipelineProcessCleanup(skipPids = []) {
@@ -1505,19 +1552,20 @@ function runPipeline(options = {}) {
 function stopPipeline(options = {}) {
   const configPath = options.configPath || currentRun?.configPath || "config/systems.local.yaml";
   const targetSystem = currentRun?.mode === "batch" ? "" : options.system;
-  const { killedPids, pausedSystems } = forceStopPipelineSync({
+  const { killedPids, pausedSystems, terminatedBatchSystems } = forceStopPipelineSync({
     configPath,
     system: targetSystem,
     message: options.message || "用户手动停止",
   });
   schedulePipelineProcessCleanup(killedPids);
-  if (!killedPids.length && !pausedSystems.length) {
-    return { status: "idle", killedPids, pausedSystems };
+  if (!killedPids.length && !pausedSystems.length && !terminatedBatchSystems.length) {
+    return { status: "idle", killedPids, pausedSystems, terminatedBatchSystems };
   }
   return {
     status: "stopped",
     killedPids,
     pausedSystems,
+    terminatedBatchSystems,
     staleStateCleared: pausedSystems.length > 0 && killedPids.length === 0,
   };
 }
@@ -1842,4 +1890,5 @@ module.exports = {
   routeRequest,
   startDashboardServer,
   stopPipeline,
+  terminateBatchRunStateOnDisk,
 };

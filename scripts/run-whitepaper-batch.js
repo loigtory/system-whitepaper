@@ -370,6 +370,16 @@ function isFailedSystemStatus(status) {
   return ["failed", "paused"].includes(status);
 }
 
+function normalizeBatchSystemRunStatus(item = {}) {
+  const status = String(item.status || "");
+  const runStatus = String(item.runStatus || "");
+  if (isFailedSystemStatus(status)) return "failed";
+  if (isCompleteSystemStatus(status)) return "completed";
+  if (status === "running") return "running";
+  if (status === "pending") return "queued";
+  return runStatus || "queued";
+}
+
 function classifyBatchFailure(item = {}, pipelineState = null, options = {}) {
   const currentNode = pipelineState?.currentNode || item.currentNode || "";
   const currentPhase = pipelineState?.currentPhase || item.currentPhase || "";
@@ -380,7 +390,7 @@ function classifyBatchFailure(item = {}, pipelineState = null, options = {}) {
   const lower = message.toLowerCase();
   let category = "unknown";
 
-  if (item.signal || /interrupted|sigint|sigterm|paused/.test(lower)) {
+  if (item.signal || item.stopReason || /interrupted|sigint|sigterm|paused|手动停止|停止/.test(lower)) {
     category = "interrupted";
   } else if (
     currentNode === "session" ||
@@ -459,25 +469,23 @@ function recomputeBatchState(state, options = {}) {
   };
 
   for (const item of next.systems) {
-    if (item.runStatus === "queued") summary.queued += 1;
-    if (item.runStatus === "running") summary.running += 1;
-    if (item.runStatus === "completed") summary.completed += 1;
-    if (item.runStatus === "failed") summary.failed += 1;
+    const effectiveRunStatus = normalizeBatchSystemRunStatus(item);
+    if (effectiveRunStatus === "queued") summary.queued += 1;
+    if (effectiveRunStatus === "running") summary.running += 1;
+    if (effectiveRunStatus === "completed") summary.completed += 1;
+    if (effectiveRunStatus === "failed") summary.failed += 1;
     if (item.status === "pending") summary.pending += 1;
     if (item.status === "review-pending") summary.reviewPending += 1;
     if (item.status === "finalized") summary.finalized += 1;
     if (item.status === "paused") summary.paused += 1;
     if (item.status === "success") summary.success += 1;
-    if (isFailedSystemStatus(item.status) && item.runStatus !== "failed") {
-      summary.failed += 1;
-    }
   }
 
-  const runningItem = next.systems.find((item) => item.runStatus === "running");
+  const runningItem = next.systems.find((item) => normalizeBatchSystemRunStatus(item) === "running");
   const failedItem = next.systems.find(
-    (item) => item.runStatus === "failed" || isFailedSystemStatus(item.status),
+    (item) => normalizeBatchSystemRunStatus(item) === "failed" || isFailedSystemStatus(item.status),
   );
-  const queuedItem = next.systems.find((item) => item.runStatus === "queued");
+  const queuedItem = next.systems.find((item) => normalizeBatchSystemRunStatus(item) === "queued");
 
   if (runningItem || (next.startedAt && queuedItem)) {
     next.status = "running";
@@ -514,6 +522,38 @@ function updateBatchSystem(state, systemCode, patch = {}, options = {}) {
   return recomputeBatchState({ ...state, systems }, { now: timestamp });
 }
 
+function terminateBatchInFlightSystems(state = {}, options = {}) {
+  const timestamp = nowIso(options.now);
+  const message = options.message || "Batch run was interrupted.";
+  const signal = options.signal || "";
+  const stopReason = options.stopReason || (signal ? `interrupted:${signal}` : "interrupted");
+  const systems = (Array.isArray(state.systems) ? state.systems : []).map((item) => {
+    const runStatus = String(item.runStatus || "");
+    const status = String(item.status || "");
+    if (!["running", "queued"].includes(runStatus) && status !== "running") return item;
+    const next = {
+      ...item,
+      runStatus: "failed",
+      status: "paused",
+      pid: null,
+      finishedAt: item.finishedAt || timestamp,
+      signal: signal || item.signal || "",
+      stopReason,
+      lastError: item.lastError || message,
+      updatedAt: timestamp,
+    };
+    const failure = classifyBatchFailure(next, null, { args: options.args || {}, message });
+    return {
+      ...next,
+      failure,
+      failureCategory: failure.category,
+      recoverable: failure.recoverable,
+      retryPlan: failure.retryPlan,
+    };
+  });
+  return recomputeBatchState({ ...state, systems }, { now: timestamp });
+}
+
 function applyPipelineSnapshot(item, pipelineState, options = {}) {
   if (!pipelineState) return item;
   const currentNode = pipelineState.nodes?.[pipelineState.currentNode] || {};
@@ -525,7 +565,7 @@ function applyPipelineSnapshot(item, pipelineState, options = {}) {
     lastError: currentNode.lastError || item.lastError || "",
     updatedAt: pipelineState.updatedAt || item.updatedAt,
   };
-  if (item.runStatus !== "running") {
+  if (item.runStatus !== "running" || isFailedSystemStatus(next.status)) {
     if (isFailedSystemStatus(next.status)) next.runStatus = "failed";
     else if (isCompleteSystemStatus(next.status)) next.runStatus = "completed";
   }
@@ -1368,16 +1408,11 @@ async function runBatchPipeline(options = {}) {
             // Best-effort shutdown.
           }
         }
-        state = recomputeBatchState(
-          {
-            ...state,
-            systems: state.systems.map((item) =>
-              item.runStatus === "running"
-                ? { ...item, runStatus: "failed", status: "paused", lastError: `Interrupted by ${signal}` }
-                : item,
-            ),
-          },
-        );
+        state = terminateBatchInFlightSystems(state, {
+          signal,
+          message: `Interrupted by ${signal}`,
+          stopReason: `signal:${signal}`,
+        });
         const { diagnosis, artifacts } = writeBatchDiagnosis(context.outputRoot, state);
         const { repairQueue, artifacts: repairQueueArtifacts } = writeBatchRepairQueue(
           context.outputRoot,
@@ -1446,7 +1481,9 @@ module.exports = {
   resolveBatchLogFile,
   runBatchPipeline,
   selectBatchSystems,
+  normalizeBatchSystemRunStatus,
   summarizeBatchFailures,
+  terminateBatchInFlightSystems,
   updateBatchSystem,
   renderBatchDiagnosisMarkdown,
   writeBatchDiagnosis,

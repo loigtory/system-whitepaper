@@ -5391,6 +5391,82 @@ test("stopPipeline clears stale running state without tracked child", () => {
   assert.equal(next.overallStatus, "paused");
 });
 
+test("stopPipeline terminalizes stale batch run-state without tracked child", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { stopPipeline, buildDashboardSnapshot } = require("./local-dashboard/server");
+  const { writeBatchRunState } = require("./run-whitepaper-batch");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-stop-batch-"));
+  const configPath = path.join(dir, "systems.local.yaml");
+  const outputRoot = path.join(dir, "outputs");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: demo",
+      "    url: https://x/",
+      "  - code: claim",
+      "    name: claim",
+      "    url: https://claim/",
+    ].join("\n"),
+    "utf8",
+  );
+  writeBatchRunState(outputRoot, {
+    artifactType: "batch-run-state",
+    version: 1,
+    status: "running",
+    startedAt: "2026-06-03T00:00:00.000Z",
+    summary: { total: 2, queued: 1, running: 1, completed: 0, failed: 0 },
+    systems: [
+      {
+        code: "adp",
+        name: "demo",
+        status: "running",
+        runStatus: "running",
+        pid: 123,
+        currentPhase: "compose",
+        currentNode: "narrative",
+      },
+      {
+        code: "claim",
+        name: "claim",
+        status: "pending",
+        runStatus: "queued",
+        pid: null,
+        currentPhase: "prepare",
+        currentNode: "sync",
+      },
+    ],
+  });
+
+  const result = stopPipeline({ configPath });
+  const batch = JSON.parse(fs.readFileSync(path.join(outputRoot, "_batch", "run-state.json"), "utf8"));
+  const snapshot = buildDashboardSnapshot({ configPath });
+
+  assert.equal(result.status, "stopped");
+  assert.deepEqual(result.terminatedBatchSystems, ["adp", "claim"]);
+  assert.equal(batch.status, "failed");
+  assert.equal(batch.summary.running, 0);
+  assert.equal(batch.summary.queued, 0);
+  assert.equal(batch.summary.failed, 2);
+  assert.ok(batch.finishedAt);
+  assert.equal(batch.systems.some((item) => ["running", "queued"].includes(item.runStatus)), false);
+  assert.equal(batch.systems[0].status, "paused");
+  assert.equal(batch.systems[0].runStatus, "failed");
+  assert.equal(batch.systems[0].pid, null);
+  assert.equal(batch.systems[0].failureCategory, "interrupted");
+  assert.equal(batch.systems[1].status, "paused");
+  assert.equal(batch.systems[1].runStatus, "failed");
+  assert.equal(snapshot.running, false);
+  assert.equal(snapshot.activeRun, null);
+  assert.equal(snapshot.batch.status, "failed");
+});
+
 test("resetPipelineStateOnDisk restores fresh pending state", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -7010,15 +7086,19 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
     buildRetryNodes,
     classifyBatchFailure,
     createBatchState,
+    refreshBatchStateFromDisk,
     renderBatchDiagnosisMarkdown,
     renderBatchRepairQueueMarkdown,
     resolveBatchConcurrency,
     resolveBatchRetries,
     selectBatchSystems,
+    recomputeBatchState,
+    terminateBatchInFlightSystems,
     updateBatchSystem,
     writeBatchDiagnosis,
     writeBatchRepairQueue,
   } = require("./run-whitepaper-batch");
+  const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
   const config = {
     runtime: {},
     systems: [
@@ -7153,6 +7233,78 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
   );
   assert.equal(completed.summary.completed, 1);
   assert.equal(completed.summary.reviewPending, 1);
+
+  const dirtyPaused = recomputeBatchState({
+    ...running,
+    systems: [
+      {
+        ...running.systems[0],
+        status: "paused",
+        runStatus: "running",
+      },
+      {
+        ...running.systems[1],
+        status: "paused",
+        runStatus: "queued",
+      },
+    ],
+  });
+  assert.equal(dirtyPaused.status, "failed");
+  assert.equal(dirtyPaused.summary.running, 0);
+  assert.equal(dirtyPaused.summary.queued, 0);
+  assert.equal(dirtyPaused.summary.failed, 2);
+
+  const dirtyCompleted = recomputeBatchState({
+    ...running,
+    systems: [
+      {
+        ...running.systems[0],
+        status: "pending",
+        runStatus: "completed",
+      },
+    ],
+  });
+  assert.equal(dirtyCompleted.status, "running");
+  assert.equal(dirtyCompleted.summary.completed, 0);
+  assert.equal(dirtyCompleted.summary.queued, 1);
+
+  const interrupted = terminateBatchInFlightSystems(running, {
+    signal: "SIGINT",
+    message: "Interrupted by SIGINT",
+    stopReason: "signal:SIGINT",
+    now: "2026-06-03T00:03:00.000Z",
+    args: { "with-whitepaper": true },
+  });
+  assert.equal(interrupted.status, "failed");
+  assert.equal(interrupted.summary.running, 0);
+  assert.equal(interrupted.summary.queued, 0);
+  assert.equal(interrupted.summary.failed, 2);
+  assert.ok(interrupted.finishedAt);
+  assert.equal(interrupted.systems.some((item) => ["running", "queued"].includes(item.runStatus)), false);
+  assert.equal(interrupted.systems[0].runStatus, "failed");
+  assert.equal(interrupted.systems[0].status, "paused");
+  assert.equal(interrupted.systems[0].pid, null);
+  assert.equal(interrupted.systems[0].failureCategory, "interrupted");
+  assert.equal(interrupted.systems[0].recoverable, true);
+  assert.equal(interrupted.systems[1].runStatus, "failed");
+  assert.equal(interrupted.systems[1].status, "paused");
+
+  const refreshRoot = fs.mkdtempSync(path.join(os.tmpdir(), "whitepaper-batch-refresh-"));
+  const adpOutput = path.join(refreshRoot, "adp");
+  let pausedState = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
+  pausedState = updateNodeStatus(pausedState, "narrative", "running");
+  pausedState = updateNodeStatus(pausedState, "narrative", "paused", {
+    lastError: "用户手动停止",
+  });
+  writePipelineState(path.join(adpOutput, "pipeline-state.json"), pausedState);
+  const refreshed = refreshBatchStateFromDisk(running, refreshRoot, {
+    now: "2026-06-03T00:04:00.000Z",
+    args: { "with-whitepaper": true },
+  });
+  assert.equal(refreshed.systems[0].runStatus, "failed");
+  assert.equal(refreshed.systems[0].status, "paused");
+  assert.equal(refreshed.systems[0].failureCategory, "interrupted");
+  assert.equal(refreshed.summary.running, 0);
 
   const diagnosisInput = {
     batchId: "batch-test",
