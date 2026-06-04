@@ -2948,7 +2948,7 @@ test("manual phase3b assembles pending review from split fragments", async () =>
   fs.writeFileSync(
     path.join(dir, "evidence-summary.json"),
     JSON.stringify({
-      system: { code: "adp", name: "AI保单数据闭环平台" },
+      system: { code: "adp", name: "AI保单数据闭环平台", collectedAt: "2026-05-21T08:00:00.000Z" },
       metrics: { counts: { pages: 2 } },
       modules: [{ name: "AI任务", entry: "AI任务" }],
       functions: [
@@ -2964,6 +2964,9 @@ test("manual phase3b assembles pending review from split fragments", async () =>
   );
   fs.writeFileSync(path.join(dir, "quality-report.json"), "{}", "utf8");
   writeVerifiedClaimsFixture(dir);
+  const staleNamedFinalPath = path.join(dir, "AI保单数据闭环平台_系统功能白皮书_20260521.md");
+  fs.writeFileSync(path.join(dir, "whitepaper.final.md"), "# stale internal final", "utf8");
+  fs.writeFileSync(staleNamedFinalPath, "# stale named final", "utf8");
   fs.mkdirSync(path.join(dir, "narrative-fragments"), { recursive: true });
   fs.writeFileSync(
     path.join(dir, "narrative-fragments", "overview-flow.md"),
@@ -3002,6 +3005,9 @@ test("manual phase3b assembles pending review from split fragments", async () =>
   assert.match(pending, /## 3\. 核心功能说明/);
   assert.match(pending, /#### 任务列表/);
   assert.match(pending, /## 7\. 附录：证据索引/);
+  assert.equal(fs.readFileSync(path.join(dir, "whitepaper.final.md"), "utf8"), "# stale internal final");
+  assert.equal(fs.readFileSync(staleNamedFinalPath, "utf8"), "# stale named final");
+  assert.equal(fs.existsSync(path.join(dir, "AI保单数据闭环平台_系统功能白皮书_20260521_待审.md")), true);
 });
 
 test("phase3b part assembly replaces selected fragments while preserving baseline sections", async () => {

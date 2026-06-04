@@ -1051,6 +1051,7 @@ function assembleIfFragmentsExist(context = {}, evidenceSummary, parts = [], sel
   syncWhitepaperNamedArtifacts({
     systemOutput: paths.outputDir,
     systemName: context.systemName,
+    syncFinal: false,
   });
   return { outputPath: paths.outputPath, chars: markdown.length };
 }
