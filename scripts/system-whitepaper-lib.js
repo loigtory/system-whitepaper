@@ -109,12 +109,13 @@ function syncWhitepaperNamedArtifacts(options = {}) {
   const result = { pendingReview: "", final: "" };
   const pendingInternal = path.join(systemOutput, "whitepaper.pending-review.md");
   const finalInternal = path.join(systemOutput, "whitepaper.final.md");
+  const syncFinal = options.syncFinal !== false;
   if (fs.existsSync(pendingInternal)) {
     const pendingName = resolveWhitepaperPendingReviewFileName(evidence, nameOptions);
     fs.copyFileSync(pendingInternal, path.join(systemOutput, pendingName));
     result.pendingReview = pendingName;
   }
-  if (fs.existsSync(finalInternal)) {
+  if (syncFinal && fs.existsSync(finalInternal)) {
     const finalName = resolveWhitepaperFileName(evidence, nameOptions);
     const finalized = finalizeWhitepaperMarkdown(fs.readFileSync(finalInternal, "utf8"), {
       systemName: evidence.systemInfo?.name || options.systemName,

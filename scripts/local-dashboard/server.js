@@ -144,10 +144,14 @@ function dashboardFinalDeliveryAllowed(systemOutput, state = {}, system = {}) {
   }
 }
 
-function ensureDocxArtifact(systemOutput, state, system = {}) {
+function ensureDocxArtifact(systemOutput, state, system = {}, options = {}) {
   let docxPath = resolveDocxArtifact(systemOutput, state.artifacts?.docx);
   const mdPath = resolveFinalMarkdownPath(systemOutput, state, system);
-  if (!dashboardFinalDeliveryAllowed(systemOutput, state, system)) return "";
+  const finalDeliveryAllowed =
+    options.finalDeliveryAllowed !== undefined
+      ? Boolean(options.finalDeliveryAllowed)
+      : dashboardFinalDeliveryAllowed(systemOutput, state, system);
+  if (!finalDeliveryAllowed) return "";
   if (docxPath && fs.existsSync(docxPath)) {
     if (!mdPath) return docxPath;
     const docxState = {
@@ -185,9 +189,11 @@ function resolveArtifactFileInfo(systemOutput, options = {}) {
 }
 
 function buildArtifactSnapshot(systemOutput, state, system = {}) {
+  const finalDeliveryAllowed = dashboardFinalDeliveryAllowed(systemOutput, state, system);
   syncWhitepaperNamedArtifacts({
     systemOutput,
     systemName: system.name || state?.name,
+    syncFinal: finalDeliveryAllowed,
   });
   const artifacts = state.artifacts || {};
   return {
@@ -220,12 +226,14 @@ function buildArtifactSnapshot(systemOutput, state, system = {}) {
       internalName: artifacts.pendingReview || "whitepaper.pending-review.md",
       displayNameResolver: resolveWhitepaperPendingReviewFileName,
     }),
-    final: resolveArtifactFileInfo(systemOutput, {
-      systemName: system.name || state?.name,
-      internalName: artifacts.final || "whitepaper.final.md",
-      displayNameResolver: resolveWhitepaperFileName,
-    }),
-    docx: fileInfo(ensureDocxArtifact(systemOutput, state, system)),
+    final: finalDeliveryAllowed
+      ? resolveArtifactFileInfo(systemOutput, {
+          systemName: system.name || state?.name,
+          internalName: artifacts.final || "whitepaper.final.md",
+          displayNameResolver: resolveWhitepaperFileName,
+        })
+      : fileInfo(path.join(systemOutput, artifacts.final || "whitepaper.final.md")),
+    docx: fileInfo(ensureDocxArtifact(systemOutput, state, system, { finalDeliveryAllowed })),
     operationGuide: fileInfo(path.join(systemOutput, "operation-guide.md")),
     operationSpec: fileInfo(path.join(systemOutput, "operation-spec.json")),
   };

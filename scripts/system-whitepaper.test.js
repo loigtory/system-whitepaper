@@ -1868,6 +1868,28 @@ test("syncWhitepaperNamedArtifacts mirrors internal files to display names", () 
   assert.ok(fs.existsSync(path.join(dir, named.final)));
 });
 
+test("syncWhitepaperNamedArtifacts can skip final display artifact", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { syncWhitepaperNamedArtifacts } = require("./system-whitepaper-lib");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "whitepaper-sync-skip-final-"));
+  fs.writeFileSync(path.join(dir, "whitepaper.pending-review.md"), "# pending", "utf8");
+  fs.writeFileSync(path.join(dir, "whitepaper.final.md"), "# final", "utf8");
+
+  const named = syncWhitepaperNamedArtifacts({
+    systemOutput: dir,
+    systemName: "试点系统",
+    date: "2026-05-21T08:00:00.000Z",
+    syncFinal: false,
+  });
+
+  assert.equal(named.pendingReview, "试点系统_系统功能白皮书_20260521_待审.md");
+  assert.equal(named.final, "");
+  assert.ok(fs.existsSync(path.join(dir, named.pendingReview)));
+  assert.equal(fs.existsSync(path.join(dir, "试点系统_系统功能白皮书_20260521.md")), false);
+});
+
 test("syncWhitepaperNamedArtifacts tolerates malformed evidence summary", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -4969,6 +4991,8 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
   adpState = { ...adpState, overallStatus: "finalized" };
   writePipelineState(path.join(adpOutput, "pipeline-state.json"), adpState);
   fs.writeFileSync(path.join(adpOutput, "whitepaper.final.md"), "# final", "utf8");
+  const staleNamedFinalPath = path.join(adpOutput, "AI保单数据闭环平台_系统功能白皮书_20260521.md");
+  fs.writeFileSync(staleNamedFinalPath, "# stale named final", "utf8");
   fs.writeFileSync(path.join(adpOutput, "AI保单数据闭环平台_系统功能白皮书_20260521.docx"), "docx", "utf8");
   fs.writeFileSync(path.join(adpOutput, "database-profile.json"), "{}", "utf8");
   fs.writeFileSync(path.join(adpOutput, "function-universe.json"), "{}", "utf8");
@@ -4987,6 +5011,8 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
   );
   assert.equal(snapshot.systems[0].progress.completed, 18);
   assert.equal(snapshot.systems[0].artifacts.final.exists, true);
+  assert.equal(snapshot.systems[0].artifacts.final.file, "whitepaper.final.md");
+  assert.equal(fs.readFileSync(staleNamedFinalPath, "utf8"), "# stale named final");
   assert.equal(snapshot.systems[0].artifacts.docx.exists, false);
   assert.equal(snapshot.systems[0].artifacts.databaseProfile.exists, true);
   assert.equal(snapshot.systems[0].artifacts.dataDictionary.exists, false);
