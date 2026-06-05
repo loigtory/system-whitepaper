@@ -1000,6 +1000,11 @@ function buildQualityReport(input) {
   };
 
   const failures = [];
+  const counts = input.counts || {};
+  const hasExplorationEvidence =
+    Number(counts.pages || 0) > 0 ||
+    Number(counts.actions || 0) > 0 ||
+    Number(counts.visitedMenus || 0) > 0;
 
   for (const [key, threshold] of Object.entries(DEFAULT_THRESHOLDS)) {
     if (metrics[key] < threshold) {
@@ -1008,7 +1013,10 @@ function buildQualityReport(input) {
   }
 
   const p0Items = (input.blockedItems || []).filter(
-    (item) => item.severity === "P0",
+    (item) =>
+      item.severity === "P0" &&
+      item.resolved !== true &&
+      !(hasExplorationEvidence && /尚未执行 Playwright 页面探索/.test(String(item.reason || ""))),
   );
   for (const item of p0Items) {
     failures.push(`P0 blocker: ${item.reason || item.function || "unknown"}`);

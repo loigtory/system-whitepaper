@@ -92,6 +92,7 @@ function selectedNodes(args) {
       "collect",
       "inspect",
       "validate-write",
+      "summary",
       "db-profile",
       "db-model",
       "truth-universe",
@@ -99,7 +100,6 @@ function selectedNodes(args) {
       "build-spec",
       "compose-guide",
       "draft",
-      "summary",
       "narrative",
       "fact-check",
       "quality",
@@ -127,6 +127,29 @@ function resolvePipelineCollectProfile(context) {
 
 function databaseProfileEnabled(system = {}) {
   return Boolean(system.databaseProfile?.enabled);
+}
+
+function evidenceSummaryNeedsRefresh(systemOutput) {
+  const evidencePath = path.join(systemOutput, "evidence.json");
+  const summaryPath = path.join(systemOutput, "evidence-summary.json");
+  if (!fs.existsSync(summaryPath)) return fs.existsSync(evidencePath);
+  if (!fs.existsSync(evidencePath)) return false;
+  const evidenceMtime = fs.statSync(evidencePath).mtimeMs;
+  const summaryMtime = fs.statSync(summaryPath).mtimeMs;
+  return summaryMtime < evidenceMtime;
+}
+
+function ensureFreshEvidenceSummary(context) {
+  const { systemOutput, projectRoot } = context;
+  if (!evidenceSummaryNeedsRefresh(systemOutput)) return null;
+  return runNodeScript(
+    [
+      "scripts/build-evidence-summary.js",
+      "--input",
+      path.join(systemOutput, "evidence.json"),
+    ],
+    { cwd: projectRoot },
+  );
 }
 
 function buildCollectNodeArgs(context) {
@@ -408,7 +431,8 @@ async function runPipelineNode(nodeId, context) {
     );
   }
   if (nodeId === "truth-universe") {
-    return runNodeScript(
+    const summaryRefresh = ensureFreshEvidenceSummary(context);
+    const result = runNodeScript(
       [
         "scripts/build-function-universe.js",
         "--input",
@@ -416,6 +440,7 @@ async function runPipelineNode(nodeId, context) {
       ],
       { cwd: projectRoot },
     );
+    return summaryRefresh ? { ...result, summaryRefresh } : result;
   }
   if (nodeId === "truth-claims") {
     return runNodeScript(
@@ -688,6 +713,8 @@ if (require.main === module) {
 module.exports = {
   buildCoverageRepairPlan,
   buildCollectNodeArgs,
+  ensureFreshEvidenceSummary,
+  evidenceSummaryNeedsRefresh,
   loadSystem,
   resolveNodeMaxAttempts,
   runPipelineNodeWithState,

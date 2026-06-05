@@ -406,7 +406,11 @@ function enforceSpecSizeLimit(spec) {
 }
 
 function evaluateOperationGuideGate(spec, system = {}) {
-  const minMenus = Number(system.operationGuideMinMenus || 3);
+  const minMenus = Number(
+    system.operationGuideMinMenus ||
+      spec.gateCriteria?.operationGuideMinMenus ||
+      3,
+  );
   const modules = (spec.modules || []).filter((module) => !isHomeModuleName(module.name));
   const failures = [];
   const checks = [];
@@ -624,6 +628,10 @@ function buildOperationSpec(options = {}) {
     networkEntryCount: (networkIndex?.entries || []).length,
     pending: [],
     metrics: {},
+    gateCriteria: {
+      operationGuideMinMenus: Number(system.operationGuideMinMenus || 3),
+      maxSpecBytes: MAX_SPEC_BYTES,
+    },
     sourceArtifacts: options.sourceArtifacts || {},
   };
 

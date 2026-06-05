@@ -391,10 +391,24 @@ function buildFactCheckReport(input = {}) {
     }
     if (inCodeBlock) continue;
 
-    if (/^#{1,6}\s+/.test(line)) {
-      inPendingSection = PENDING_SECTION_PATTERN.test(line);
+    const headingMatch = line.match(/^(#{1,6})\s+/);
+    if (headingMatch) {
+      const headingLevel = headingMatch[1].length;
+      const isPendingHeading = PENDING_SECTION_PATTERN.test(line);
+      if (isPendingHeading) {
+        inPendingSection = true;
+      } else if (headingLevel <= 2) {
+        inPendingSection = false;
+      }
       const heading = extractHeadingCandidate(line);
-      if (heading && shouldTrackTerm(heading) && !allTerms.has(heading)) {
+      const isPendingSubheading = inPendingSection && headingLevel >= 3;
+      if (
+        !isPendingHeading &&
+        !isPendingSubheading &&
+        heading &&
+        shouldTrackTerm(heading) &&
+        !allTerms.has(heading)
+      ) {
         unsupportedHeadings.push({ line: lineNumber, term: heading });
       }
     }

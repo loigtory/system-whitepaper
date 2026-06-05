@@ -1721,6 +1721,33 @@ test("buildQualityReport blocks finalization when gates fail", () => {
   assert.match(report.failures.join("\n"), /P0/);
 });
 
+test("buildQualityReport ignores obsolete initial exploration blocker after evidence exists", () => {
+  const report = buildQualityReport({
+    menuCoverage: 1,
+    corePageScreenshotCoverage: 1,
+    coreFunctionClassificationCoverage: 1,
+    writeOperationSafetyCompliance: 1,
+    unverifiedContentLabeling: 1,
+    coreConclusionTraceability: 1,
+    counts: {
+      visitedMenus: 4,
+      pages: 4,
+      actions: 52,
+    },
+    blockedItems: [
+      {
+        severity: "P0",
+        reason: "尚未执行 Playwright 页面探索",
+        resolved: false,
+      },
+    ],
+  });
+
+  assert.equal(report.canFinalize, true);
+  assert.deepEqual(report.failures, []);
+  assert.deepEqual(report.blockingIssues, []);
+});
+
 test("readOperationGuideGate skips missing gate but rejects malformed gate", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -2136,6 +2163,7 @@ test("buildPhase3bPrompt uses low-token inline inputs without reading large repo
   assert.match(prompt, /function:ai-task:list/);
   assert.match(prompt, /writable-claim-coverage-gap/);
   assert.match(prompt, /missingWritableClaims/);
+  assert.match(prompt, /待确认事项使用扁平 bullet/);
   assert.doesNotMatch(prompt, /SKILL\.md/);
   assert.doesNotMatch(prompt, /docs\/narrative-guide\.md/);
   assert.doesNotMatch(prompt, /whitepaper\.draft\.md/);
@@ -2285,6 +2313,7 @@ test("narrative brief and assembly keep business sections while appendix is scri
   assert.match(brief, /不要读取 evidence\.json/);
   assert.match(brief, /不要读取.*secrets\//);
   assert.match(brief, /不要读取.*\.playwright-\*/);
+  assert.match(brief, /不要新增 `### P0`/);
   assert.match(skeleton, /本骨架由脚本基于 evidence-summary 生成/);
   assert.match(skeleton, /\[待升华：业务定位/);
   assert.match(skeleton, /#### 任务列表/);
@@ -2344,6 +2373,7 @@ test("phase3b split prompts scope overview and module writing separately", () =>
     ["AI任务", "发布管理"],
   );
   assert.match(overviewPrompt, /不要写 ## 3 核心功能说明/);
+  assert.match(overviewPrompt, /待确认事项使用扁平 bullet/);
   assert.match(overviewPrompt, /不要读取.*secrets\//);
   assert.match(overviewPrompt, /不要读取.*\.playwright-\*/);
   assert.match(modulePrompt, /只写模块「AI任务」/);
@@ -4163,6 +4193,7 @@ test("reconcilePipelineStateFromArtifacts clears stale narrative running when ar
     "collect",
     "inspect",
     "validate-write",
+    "summary",
     "db-profile",
     "db-model",
     "truth-universe",
@@ -4170,7 +4201,6 @@ test("reconcilePipelineStateFromArtifacts clears stale narrative running when ar
     "build-spec",
     "compose-guide",
     "draft",
-    "summary",
     "fact-check",
     "quality",
   ]) {
@@ -5003,6 +5033,7 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
     "collect",
     "inspect",
     "validate-write",
+    "summary",
     "db-profile",
     "db-model",
     "truth-universe",
@@ -5010,7 +5041,6 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
     "build-spec",
     "compose-guide",
     "draft",
-    "summary",
     "narrative",
     "fact-check",
     "quality",
@@ -5267,6 +5297,7 @@ test("dashboard snapshot regenerates missing docx for finalized system", () => {
     "collect",
     "inspect",
     "validate-write",
+    "summary",
     "db-profile",
     "db-model",
     "truth-universe",
@@ -5274,7 +5305,6 @@ test("dashboard snapshot regenerates missing docx for finalized system", () => {
     "build-spec",
     "compose-guide",
     "draft",
-    "summary",
     "narrative",
     "fact-check",
     "quality",
@@ -11258,6 +11288,7 @@ test("pipeline default node list uses operation guide path before whitepaper", (
     "collect",
     "inspect",
     "validate-write",
+    "summary",
     "db-profile",
     "db-model",
     "truth-universe",
@@ -11265,12 +11296,101 @@ test("pipeline default node list uses operation guide path before whitepaper", (
     "build-spec",
     "compose-guide",
     "draft",
-    "summary",
     "narrative",
     "fact-check",
     "quality",
     "truth-readiness",
   ]);
+});
+
+test("truth-universe refreshes stale evidence summary before building claims universe", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runPipelineNode } = require("./run-whitepaper-pipeline");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "truth-universe-refresh-summary-"));
+  const systemOutput = path.join(tempRoot, "outputs", "adp");
+  fs.mkdirSync(systemOutput, { recursive: true });
+  const summaryPath = path.join(systemOutput, "evidence-summary.json");
+  const evidencePath = path.join(systemOutput, "evidence.json");
+  fs.writeFileSync(
+    summaryPath,
+    JSON.stringify({
+      system: {
+        code: "adp",
+        name: "AI保单数据闭环平台",
+        testUrl: "https://pre-adp.hzins.com/",
+      },
+      modules: [{ name: "旧模块", entry: "旧模块" }],
+      functions: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    evidencePath,
+    JSON.stringify({
+      systemInfo: {
+        code: "adp",
+        name: "AI保单数据闭环平台",
+        testUrl: "https://sit-adp.hzins.com/",
+        loginRole: "全权限测试账号",
+        collectedAt: "2026-06-05T00:00:00.000Z",
+      },
+      menuMap: [
+        {
+          id: "task",
+          title: "AI任务管理",
+          menuPath: "AI任务管理",
+          url: "/task",
+          status: "visited",
+        },
+      ],
+      pageInventory: [
+        {
+          id: "task-list",
+          type: "page",
+          title: "任务列表",
+          menuPath: "AI任务管理 > 任务列表",
+          url: "/task",
+          screenshot: "screenshots/task.png",
+          evidenceRefs: ["shot-task"],
+        },
+      ],
+      screenshotIndex: [
+        {
+          id: "shot-task",
+          file: "screenshots/task.png",
+          module: "AI任务管理",
+          function: "任务列表",
+        },
+      ],
+      actionInventory: [],
+      formInventory: [],
+      tableInventory: [],
+      failedPages: [],
+      pendingItems: [],
+    }),
+    "utf8",
+  );
+  const old = new Date(Date.now() - 60_000);
+  const fresh = new Date();
+  fs.utimesSync(summaryPath, old, old);
+  fs.utimesSync(evidencePath, fresh, fresh);
+
+  await runPipelineNode("truth-universe", {
+    args: {},
+    config: {},
+    configPath: path.join(tempRoot, "config", "systems.local.yaml"),
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    systemOutput,
+    projectRoot: path.resolve(__dirname, ".."),
+  });
+
+  const refreshedSummary = JSON.parse(fs.readFileSync(summaryPath, "utf8"));
+  const universe = JSON.parse(fs.readFileSync(path.join(systemOutput, "function-universe.json"), "utf8"));
+  assert.equal(refreshedSummary.system.testUrl, "https://sit-adp.hzins.com/");
+  assert.equal(universe.system.testUrl, "https://sit-adp.hzins.com/");
+  assert.equal(universe.sourceArtifacts.evidenceSummary.fingerprint.sha256.length, 64);
 });
 
 test("pipeline and dashboard resolve outputDir from project root for config-local defaults", () => {
@@ -15124,6 +15244,54 @@ test("fact check passes writable claims and allows weak claims only in pending s
   assert.ok(report.supported.some((item) => item.claimId === "function:保单任务:任务列表"));
   assert.equal(report.metrics.writableClaimCoverageRatio, 1);
   assert.deepEqual(report.missingWritableClaimIds, []);
+});
+
+test("fact check allows pending-section subgroup headings but still blocks unknown body headings", () => {
+  const { buildFactCheckReport } = require("./fact-check-whitepaper");
+  const claimsArtifact = verifiedClaimsFixture([
+    {
+      id: "function:保单任务:任务列表",
+      type: "function-presence",
+      subject: "任务列表",
+      module: "保单任务",
+      writable: true,
+      status: "confirmed",
+    },
+    {
+      id: "status:adp-test-policy-task:status",
+      type: "status-field",
+      subject: "status",
+      entity: "保单任务",
+      writable: false,
+      status: "weak",
+    },
+  ]);
+  const pendingMarkdown = [
+    "# AI保单数据闭环平台功能白皮书",
+    "### 任务列表",
+    "保单任务模块提供任务列表，用于查看保单任务。",
+    "## 6. 待确认事项",
+    "### P0 - 阻塞成稿完整性",
+    "- status 字段含义仍需结合页面流程确认。",
+    "### 模块与功能",
+    "- 自动理赔审批仅为待确认事项，不得写为正文结论。",
+    "",
+  ].join("\n");
+
+  const pendingReport = buildFactCheckReport({ markdown: pendingMarkdown, claimsArtifact });
+  assert.equal(pendingReport.canFinalize, true);
+  assert.deepEqual(pendingReport.unsupportedHeadings, []);
+  assert.equal(pendingReport.pendingReferences.length, 1);
+
+  const bodyMarkdown = [
+    "# AI保单数据闭环平台功能白皮书",
+    "### 自动理赔审批",
+    "保单任务模块提供任务列表，用于查看保单任务。",
+    "",
+  ].join("\n");
+  const bodyReport = buildFactCheckReport({ markdown: bodyMarkdown, claimsArtifact });
+  assert.equal(bodyReport.canFinalize, false);
+  assert.equal(bodyReport.unsupportedHeadings[0].term, "自动理赔审批");
 });
 
 test("fact check blocks low writable claim coverage", () => {

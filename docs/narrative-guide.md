@@ -170,5 +170,6 @@ Agent 的任务不是把按钮和字段重新排列，而是把证据翻译成�
 - 不手写完整附录；附录由脚本根据 `evidence-summary` 生成，正文只保留必要截图和证据引用。
 - 正式待审核稿写入 `whitepaper.pending-review.md`。
 - 不覆盖 `whitepaper.draft.md`。
+- 只使用固定 `## 1` 至 `## 6` 正文章节；第 6 章“待确认事项”使用扁平 bullet，不新增 `### P0`、`### 模块与功能` 等自定义分组标题。
 - 审核通过且当前 `truth-readiness-report.json` 达标、指纹非 stale、非 smoke/e2e 后，才生成 `whitepaper.final.md` 和 Word。
 - Word 必须带 `.docx.manifest.json`，用于证明当前 `.docx` 绑定当前 `whitepaper.final.md`。

@@ -389,6 +389,7 @@ function buildNarrativeBrief(context = {}) {
     "  - ## 4. 典型业务流程",
     "  - ## 5. 使用角色与权限边界",
     "  - ## 6. 待确认事项",
+    "- 第 6 章只用扁平 bullet 列待确认项；不要新增 `### P0`、`### 模块与功能` 等自定义子标题。",
     "- 不要生成附录；附录由脚本根据 evidence-summary 机械生成。",
   ].join("\n");
 }
@@ -733,6 +734,7 @@ function buildPhase3bPrompt(context = {}) {
     "- 证据不足时写入待确认事项，不要编造。",
     "- 避免模板句、按钮堆砌和每页重复验证噪声。",
     "- 写操作只有存在 AI_AUTO_TEST_ 证据和 ledger 时才能写为已验证。",
+    "- 只使用固定 `## 1` 到 `## 6` 章节；第 6 章待确认事项使用扁平 bullet，不新增 `###` 分组标题。",
     "",
     "quality 摘要：",
     "```json",
@@ -842,6 +844,7 @@ function buildPhase3bPartPrompt(context = {}) {
     ...sectionInstruction.map((item) => `- ${item}`),
     "- 证据不足时写入待确认事项，不要编造。",
     "- 写操作只有存在 AI_AUTO_TEST_ 证据和 ledger 时才能写为已验证。",
+    "- 第 6 章待确认事项使用扁平 bullet，不新增 `###` 分组标题；模块分片只允许为真实模块/功能使用 `###/####`。",
     "",
     "quality 摘要：",
     "```json",

@@ -26,7 +26,6 @@ const {
   assertValidOperationGuideGateArtifact,
   assertValidOperationSpecArtifact,
   buildOperationSpec,
-  evaluateOperationGuideGate,
 } = require("./operation-spec/lib");
 
 const DEFAULT_THRESHOLD = 0.95;
@@ -952,6 +951,7 @@ function operationSpecProjection(value = {}) {
     networkEntryCount: Number(value.networkEntryCount || 0),
     pending: sortByStableKey(Array.isArray(value.pending) ? value.pending : [], (item) => `${item.topic || ""}::${item.reason || ""}`),
     metrics: value.metrics || {},
+    gateCriteria: value.gateCriteria || {},
     gate: value.gate || {},
   };
 }
@@ -986,6 +986,7 @@ function operationSpecSystemForRecompute(value = {}) {
     code: value.systemCode || "",
     name: value.systemName || "",
     url: value.testUrl || "",
+    operationGuideMinMenus: value.gateCriteria?.operationGuideMinMenus,
     moduleBusinessHints,
   };
 }
@@ -1048,6 +1049,7 @@ function validateOperationSpecAgainstCurrentSources(artifacts = {}) {
 }
 
 function operationGuideGateProjection(value = {}) {
+  const counts = value.counts || {};
   return {
     artifactType: value.artifactType || "",
     version: value.version || null,
@@ -1058,12 +1060,15 @@ function operationGuideGateProjection(value = {}) {
       (Array.isArray(value.checks) ? value.checks : []).map((check) => ({
         id: check?.id || "",
         pass: Boolean(check?.pass),
-        actual: check?.actual ?? null,
+        actual: check?.id === "spec-size" ? null : check?.actual ?? null,
         expected: check?.expected ?? null,
       })),
       (item) => item.id,
     ),
-    counts: value.counts || {},
+    counts: {
+      modules: counts.modules ?? null,
+      modulesWithSurface: counts.modulesWithSurface ?? null,
+    },
   };
 }
 
@@ -1089,11 +1094,25 @@ function validateOperationGuideGateAgainstCurrentSpec(artifacts = {}) {
     failures.push("operation-guide-gate.json could not be recomputed because current operation-spec.json is missing or invalid.");
     return failures;
   }
+  const evidence = artifacts.evidence || {};
+  if (evidence.status !== "ok" || !evidence.fingerprint?.exists) {
+    failures.push("operation-guide-gate.json could not be recomputed because current evidence.json is missing or invalid.");
+    return failures;
+  }
+  const writeValidation = currentSiblingJsonArtifact(operationSpec, "write-validation-result.json");
+  const networkIndex = currentSiblingJsonArtifact(operationSpec, "network-index.json");
   let recomputed;
   try {
-    recomputed = evaluateOperationGuideGate(operationSpec.value || {});
+    recomputed = buildOperationSpec({
+      evidence: JSON.parse(JSON.stringify(evidence.value || {})),
+      system: operationSpecSystemForRecompute(operationSpec.value || {}),
+      writeValidation: operationSpecOptionalSourceValue(writeValidation, "write-validation-result.json"),
+      networkIndex: operationSpecOptionalSourceValue(networkIndex, "network-index.json"),
+      sourceArtifacts: operationSpec.value?.sourceArtifacts || {},
+      allowDraft: Boolean(operationSpec.value?.gate?.canComposeGuide && (operationSpec.value?.gate?.failures || []).length),
+    }).gate;
   } catch (error) {
-    failures.push(`operation-guide-gate.json could not be recomputed from current operation-spec.json: ${error.message}`);
+    failures.push(`operation-guide-gate.json could not be recomputed from current operation-spec/evidence inputs: ${error.message}`);
     return failures;
   }
   if (stableJson(operationGuideGateProjection(operationGuideGate.value || {})) !== stableJson(operationGuideGateProjection(recomputed))) {
