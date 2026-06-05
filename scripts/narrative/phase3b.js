@@ -32,6 +32,8 @@ function resolvePhase3bPaths(context = {}) {
   const outputDir = resolveOutputDir(context);
   return {
     outputDir,
+    businessProcessModelPath:
+      context.businessProcessModelPath || path.join(outputDir, "business-process-model.json"),
     briefPath: context.briefPath || path.join(outputDir, "narrative-brief.md"),
     promptPath: context.promptOutputPath || path.join(outputDir, "phase3b-prompt.md"),
     skeletonPath: context.skeletonPath || path.join(outputDir, "whitepaper.skeleton.md"),
@@ -106,6 +108,16 @@ function loadOperationSpec(context = {}) {
   const specPath = context.operationSpecPath || path.join(outputDir, "operation-spec.json");
   if (!context.operationSpecPath && !fs.existsSync(specPath)) return {};
   return readExistingJsonObject(specPath, {}, { label: "Operation spec" });
+}
+
+function loadBusinessProcessModel(context = {}) {
+  if (context.businessProcessModel) {
+    return ensureJsonObject(context.businessProcessModel, "Business process model");
+  }
+  const paths = resolvePhase3bPaths(context);
+  const modelPath = context.businessProcessModelPath || paths.businessProcessModelPath;
+  if (!context.businessProcessModelPath && !fs.existsSync(modelPath)) return {};
+  return readExistingJsonObject(modelPath, {}, { label: "Business process model" });
 }
 
 function compactWritableClaimGap(factCheckReport = null, claimsArtifact = {}, options = {}) {
@@ -236,6 +248,196 @@ function compactOperationSpec(spec = {}, options = {}) {
     })),
     modules,
     pending: compactList(spec.pending, 30, (item) => item),
+  };
+}
+
+const BUSINESS_PROCESS_MODEL_METADATA_KEYS = new Set([
+  "artifactType",
+  "version",
+  "schemaVersion",
+  "generatedAt",
+  "sourceArtifacts",
+  "sources",
+]);
+
+const BUSINESS_PROCESS_MODEL_DROP_KEYS = new Set([
+  "base64",
+  "buffer",
+  "dom",
+  "domSnapshot",
+  "html",
+  "imageBase64",
+  "rawHtml",
+  "screenshotBase64",
+]);
+
+const BUSINESS_PROCESS_MODEL_PRIORITY_KEYS = [
+  "artifactType",
+  "version",
+  "schemaVersion",
+  "generatedAt",
+  "system",
+  "systemCode",
+  "systemName",
+  "summary",
+  "positioning",
+  "businessObjects",
+  "objects",
+  "entities",
+  "processes",
+  "flows",
+  "stateFlows",
+  "statusFlows",
+  "states",
+  "moduleResponsibilities",
+  "responsibilities",
+  "modules",
+  "feedbackLoops",
+  "closedLoops",
+  "evidenceBasis",
+  "evidence",
+  "pending",
+  "sourceArtifacts",
+];
+
+function hasCompactContent(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "number" || typeof value === "boolean") return true;
+  if (Array.isArray(value)) return value.some((item) => hasCompactContent(item));
+  if (typeof value === "object") {
+    return Object.keys(value).some((key) => {
+      if (BUSINESS_PROCESS_MODEL_METADATA_KEYS.has(key)) return false;
+      return hasCompactContent(value[key]);
+    });
+  }
+  return false;
+}
+
+function compactText(value, limit = 500) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(0, limit - 15)).trim()}... [truncated]`;
+}
+
+function compactArrayLimit(key = "", options = {}) {
+  const lowered = String(key || "").toLowerCase();
+  if (/process|flow|loop|responsibilit|module/.test(lowered)) return options.majorArrayLimit || 24;
+  if (/object|entity|state|status/.test(lowered)) return options.majorArrayLimit || 24;
+  if (/evidence|source|screenshot|pending/.test(lowered)) return options.evidenceArrayLimit || 16;
+  return options.arrayLimit || 30;
+}
+
+function orderedBusinessProcessEntries(value = {}) {
+  const entries = Object.entries(value).filter(([key]) => {
+    return !BUSINESS_PROCESS_MODEL_DROP_KEYS.has(key) && !BUSINESS_PROCESS_MODEL_DROP_KEYS.has(key.toLowerCase());
+  });
+  const priority = new Map(BUSINESS_PROCESS_MODEL_PRIORITY_KEYS.map((key, index) => [key, index]));
+  return entries.sort(([left], [right]) => {
+    const leftRank = priority.has(left) ? priority.get(left) : 999;
+    const rightRank = priority.has(right) ? priority.get(right) : 999;
+    if (leftRank !== rightRank) return leftRank - rightRank;
+    return 0;
+  });
+}
+
+function compactBusinessProcessValue(value, options = {}, depth = 0, key = "") {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") return compactText(value, options.stringLimit || 500);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  const maxDepth = options.maxDepth || 7;
+  if (depth >= maxDepth) return "[truncated]";
+  if (Array.isArray(value)) {
+    const limit = compactArrayLimit(key, options);
+    const items = value
+      .slice(0, limit)
+      .map((item) => compactBusinessProcessValue(item, options, depth + 1, key))
+      .filter((item) => hasCompactContent(item) || typeof item === "number" || typeof item === "boolean");
+    if (value.length > limit) {
+      items.push({ omittedItemCount: value.length - limit });
+    }
+    return items;
+  }
+  if (typeof value !== "object") return String(value);
+
+  const objectKeyLimit = options.objectKeyLimit || 80;
+  const result = {};
+  const entries = orderedBusinessProcessEntries(value).slice(0, objectKeyLimit);
+  for (const [entryKey, entryValue] of entries) {
+    const compacted = compactBusinessProcessValue(entryValue, options, depth + 1, entryKey);
+    if (
+      hasCompactContent(compacted) ||
+      BUSINESS_PROCESS_MODEL_METADATA_KEYS.has(entryKey) ||
+      typeof compacted === "number" ||
+      typeof compacted === "boolean"
+    ) {
+      result[entryKey] = compacted;
+    }
+  }
+  const totalEntries = orderedBusinessProcessEntries(value).length;
+  if (totalEntries > objectKeyLimit) result.omittedKeyCount = totalEntries - objectKeyLimit;
+  return result;
+}
+
+function compactValueContainsText(value, text) {
+  if (!text) return true;
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.includes(text);
+  if (typeof value === "number" || typeof value === "boolean") return false;
+  if (Array.isArray(value)) return value.some((item) => compactValueContainsText(item, text));
+  if (typeof value === "object") {
+    return Object.values(value).some((item) => compactValueContainsText(item, text));
+  }
+  return false;
+}
+
+function filterCompactBusinessProcessByModule(value, moduleName) {
+  const targetModule = String(moduleName || "").trim();
+  if (!targetModule) return value;
+  if (Array.isArray(value)) {
+    const hits = value.filter((item) => compactValueContainsText(item, targetModule));
+    return (hits.length ? hits : value).map((item) => filterCompactBusinessProcessByModule(item, targetModule));
+  }
+  if (!value || typeof value !== "object") return value;
+  const result = {};
+  for (const [key, item] of Object.entries(value)) {
+    const filtered = filterCompactBusinessProcessByModule(item, targetModule);
+    if (
+      hasCompactContent(filtered) ||
+      BUSINESS_PROCESS_MODEL_METADATA_KEYS.has(key) ||
+      typeof filtered === "number" ||
+      typeof filtered === "boolean"
+    ) {
+      result[key] = filtered;
+    }
+  }
+  return result;
+}
+
+function compactBusinessProcessModel(model = {}, options = {}) {
+  const available = hasCompactContent(model);
+  const targetModule = String(options.moduleName || "").trim();
+  const compacted = available
+    ? filterCompactBusinessProcessByModule(
+        compactBusinessProcessValue(model, {
+          maxDepth: 7,
+          stringLimit: 500,
+          arrayLimit: options.limit || 30,
+          majorArrayLimit: options.majorLimit || 24,
+          evidenceArrayLimit: options.evidenceLimit || 16,
+        }),
+        targetModule,
+      )
+    : {};
+  return {
+    artifactType: "business-process-model-compact",
+    available,
+    scope: targetModule ? { module: targetModule } : { module: "" },
+    priority:
+      "highest for chapters 1/2/3/4; use before operation-spec and ordinary menu/field evidence",
+    fallbackWhenMissing:
+      "If unavailable or uncovered, fall back to operation-spec with reasonable inference plus explicit evidence basis.",
+    model: compacted,
   };
 }
 
@@ -396,7 +598,7 @@ function buildWhitepaperSkeleton(input = {}) {
   const lines = [
     `# ${systemName}功能白皮书（待审核）`,
     "",
-    "> 本骨架由脚本基于 evidence-summary / operation-spec 生成；`[待升华]` 占位由成稿 Agent 填写，附录由脚本生成。",
+    "> 本骨架由脚本基于 evidence-summary / operation-spec 生成；若存在 business-process-model，成稿优先消费业务流程模型；`[待升华]` 占位由成稿 Agent 填写，附录由脚本生成。",
     "",
     "## 1. 系统概览",
     "",
@@ -430,7 +632,7 @@ function buildWhitepaperSkeleton(input = {}) {
   lines.push(
     "## 4. 典型业务流程",
     "",
-    "[待升华：围绕业务目标归纳流程，不写成点击步骤]",
+    "[待升华：围绕业务对象 -> 状态流转 -> 模块职责 -> 回流闭环归纳流程，不写成点击步骤]",
     "",
     "## 5. 使用角色与权限边界",
     "",
@@ -456,12 +658,14 @@ function buildWhitepaperSkeleton(input = {}) {
 function buildNarrativeBrief(context = {}) {
   const summary = context.evidenceSummary || {};
   const operationSpec = context.operationSpec || {};
+  const businessProcessModel = context.businessProcessModel || {};
   const system = summary.system || {};
   const systemName = context.systemName || system.name || "";
   const moduleNames = (operationSpec.modules || [])
     .map((item) => item.name)
     .filter(Boolean)
     .slice(0, 12);
+  const hasBusinessProcessModel = hasCompactContent(businessProcessModel);
   return [
     "# 低 Token 白皮书成稿规程",
     "",
@@ -469,8 +673,10 @@ function buildNarrativeBrief(context = {}) {
     "",
     "## 工作边界",
     "",
-    "- 只基于 prompt 内联的 evidence-summary 和 quality 摘要写作。",
+    "- 只基于 prompt 内联的 business-process-model、operation-spec、verified-claims、evidence-summary 和 quality 摘要写作。",
+    "- 若 prompt 内联 business-process-model，它是第 1/2/3/4 章最高优先级业务流程证据，高于普通菜单、按钮和字段证据。",
     "- 若 prompt 内联 operation-spec，模块、业务定位、字段和截图以 operation-spec 为优先业务证据。",
+    "- 若 business-process-model 缺失或未覆盖，才 fallback 到 operation-spec；此时必须写明“合理推理 + 推理依据”。",
     "- 不要读取 evidence.json、whitepaper.draft.md、截图二进制、仓库脚本、项目根目录文件、secrets/ 或 .playwright-*。",
     "- 不要编造证据里没有的模块、字段、流程、权限或写操作结果。",
     "- 写操作只有出现 AI_AUTO_TEST_ 测试数据、ledger 和结果证据时，才能描述为已验证。",
@@ -480,8 +686,11 @@ function buildNarrativeBrief(context = {}) {
     "- 系统概览必须写成业务定位：说明系统位于哪条业务链路、解决什么问题、服务哪些角色。",
     "- 功能模块说明要写业务对象和使用目的，不要堆按钮清单。",
     "- 核心功能说明优先回答谁使用、处理什么对象、关键字段表达什么、哪些操作已验证。",
-    "- 典型业务流程围绕业务目标，不写成点击步骤。",
+    "- 典型业务流程必须围绕 `业务对象 -> 状态流转 -> 模块职责 -> 回流闭环`，不是点击步骤。",
     "- 证据不足、写操作未验证、截图缺口必须进入待确认事项。",
+    hasBusinessProcessModel
+      ? "- 本轮存在 business-process-model：第 1/2/3/4 章先按业务流程模型组织，再用菜单/字段证据佐证。"
+      : "- 本轮未发现 business-process-model：允许基于 operation-spec 合理推理流程，但每条推理必须给出依据。",
     moduleNames.length ? `- 本轮必须覆盖这些业务模块：${moduleNames.join("、")}。` : "",
     "",
     "## 输出要求",
@@ -856,10 +1065,12 @@ function buildPhase3bPrompt(context = {}) {
     reviewComment,
   } = context;
   const paths = resolvePhase3bPaths(context);
+  const businessProcessModelArtifact = loadBusinessProcessModel(context);
   const operationSpecArtifact = loadOperationSpec(context);
   const evidenceSummary = compactEvidenceSummary(
     operationSpecToEvidenceSummary(loadEvidenceSummary(context), operationSpecArtifact),
   );
+  const businessProcessModel = compactBusinessProcessModel(businessProcessModelArtifact);
   const operationSpec = compactOperationSpec(operationSpecArtifact);
   const qualitySummary = loadQualitySummary(context);
   const verifiedClaimsArtifact = loadVerifiedClaims(context);
@@ -867,6 +1078,7 @@ function buildPhase3bPrompt(context = {}) {
   const writableClaimGap = compactWritableClaimGap(loadFactCheckReport(context), verifiedClaimsArtifact);
   const reviewDecision = loadReviewDecision(context);
   const inlineSummary = JSON.stringify(evidenceSummary, null, 2);
+  const inlineBusinessProcessModel = JSON.stringify(businessProcessModel, null, 2);
   const inlineOperationSpec = JSON.stringify(operationSpec, null, 2);
   const inlineQuality = JSON.stringify(qualitySummary, null, 2);
   const inlineVerifiedClaims = JSON.stringify(verifiedClaims, null, 2);
@@ -887,17 +1099,25 @@ function buildPhase3bPrompt(context = {}) {
     "写作要求：",
     "- 只输出 narrative-fragments.md，不要生成完整附录。",
     "- 重点写业务定位、业务价值、模块用途、核心功能说明和典型业务流程。",
+    "- business-process-model 是第 1/2/3/4 章最高优先级业务流程模型；若 available=true，必须先消费它，再用 operation-spec / evidence-summary 的菜单、字段、按钮作佐证。",
+    "- 第 1 章用 business-process-model 说明业务链路、业务对象和闭环价值；第 2 章用它说明模块职责；第 3 章用它解释功能在流程中的职责；第 4 章按 `业务对象 -> 状态流转 -> 模块职责 -> 回流闭环` 组织。",
     "- operation-spec 是优先业务证据；如果它包含模块、字段、截图、定位，不要再写“functions 为空”“无法撰写核心功能”。",
-    "- 必须围绕 operation-spec.modules 展开模块概览与核心功能说明；不得把「本地」作为唯一模块，除非 operation-spec 也只有该模块。",
+    "- business-process-model 缺失或未覆盖时才 fallback 到 operation-spec；必须写明“合理推理 + 推理依据”，依据可来自模块名、字段、状态列、操作项、截图或页面入口。",
+    "- 必须围绕 business-process-model 的模块职责或 operation-spec.modules 展开模块概览与核心功能说明；不得把「本地」作为唯一模块，除非优先证据也只有该模块。",
     "- 证据不足时写入待确认事项，不要编造。",
     "- 避免模板句、按钮堆砌和每页重复验证噪声。",
     "- 写操作只有存在 AI_AUTO_TEST_ 证据和 ledger 时才能写为已验证。",
     "- 只使用固定 `## 1` 到 `## 6` 章节；第 6 章待确认事项使用扁平 bullet，不新增 `###` 分组标题。",
-    "- 不要输出任何 `#` 一级标题；不要在第 4/5/6 章使用 `###` 子标题，流程场景请用加粗段落或编号列表表达。",
+    "- 不要输出任何 `#` 一级标题；不要在第 4/5/6 章使用 `###` 子标题；第 4 章不是点击步骤，流程场景请用加粗段落或编号列表表达业务对象、状态流转、模块职责和回流闭环。",
     "",
     "quality 摘要：",
     "```json",
     inlineQuality,
+    "```",
+    "",
+    "business-process-model（最高优先级业务流程证据；available=false 时按 fallback 规则使用 operation-spec）：",
+    "```json",
+    inlineBusinessProcessModel,
     "```",
     "",
     "operation-spec（优先业务证据，来自页面/表格/截图/网络摘要）：",
@@ -911,10 +1131,10 @@ function buildPhase3bPrompt(context = {}) {
     "```",
     "",
     "Verified-claims writing rules:",
-    "- Body sections may only assert claims with writable=true.",
+    "- Verified claim facts and `[claim:<id>]` markers in body sections may only use claims with writable=true; business-process-model synthesis must not borrow non-writable claim ids.",
     "- Claims with writable=false must only appear under pending/unverified confirmation items and must never use `[claim:<id>]` markers.",
     "- The compact claims input redacts non-writable claim ids; only claims with claimReferenceAllowed=true may be cited with `[claim:<id>]`.",
-    "- Do not invent business flow, purpose, role, status, or automation claims outside verified-claims.",
+    "- Do not invent business flow, purpose, role, status, or automation claims outside business-process-model, operation-spec fallback reasoning, or verified-claims.",
     "- Cover each writable claim with its subject/function plus module/entity/evidence context; automatic repair may add `[claim:<id>]` markers for precise traceability.",
     "- If writable-claim-coverage-gap lists missingWritableClaims, write those writable claims into the relevant body sections before considering the draft complete.",
     "",
@@ -961,6 +1181,7 @@ function buildPhase3bPartPrompt(context = {}) {
   } = context;
   const paths = resolvePhase3bPaths(context);
   const qualitySummary = loadQualitySummary(context);
+  const businessProcessModelArtifact = loadBusinessProcessModel(context);
   const operationSpecArtifact = loadOperationSpec(context);
   const verifiedClaimsArtifact = loadVerifiedClaims(context);
   const reviewDecision = loadReviewDecision(context);
@@ -971,6 +1192,9 @@ function buildPhase3bPartPrompt(context = {}) {
   const writableClaimGap = compactWritableClaimGap(loadFactCheckReport(context), verifiedClaimsArtifact, {
     moduleName: partInfo.type === "module" ? partInfo.moduleName : "",
   });
+  const inlineBusinessProcessModel = JSON.stringify(compactBusinessProcessModel(businessProcessModelArtifact, {
+    moduleName: partInfo.type === "module" ? partInfo.moduleName : "",
+  }), null, 2);
   const inlineSummary = JSON.stringify(partInfo.summary || {}, null, 2);
   const inlineOperationSpec = JSON.stringify(compactOperationSpec(operationSpecArtifact, {
     moduleName: partInfo.type === "module" ? partInfo.moduleName : "",
@@ -984,11 +1208,12 @@ function buildPhase3bPartPrompt(context = {}) {
       ? [
           `你只写模块「${partInfo.moduleName || "未命名模块"}」的局部片段：## 2 功能模块概览中的该模块条目，以及 ## 3 核心功能说明中的该模块小节。`,
           "输出可以包含 `## 2. 功能模块概览`，但只写该模块的一条概览，不要写其他模块。",
-          "输出必须包含该模块的 `## 3. 核心功能说明` 片段，下面从三级标题开始，例如 `### 模块名`，并为该模块下每个核心功能写 5-8 行。",
+          "输出必须包含该模块的 `## 3. 核心功能说明` 片段，下面从三级标题开始，例如 `### 模块名`，并优先解释该模块在业务对象、状态流转和回流闭环中的职责，再写每个核心功能 5-8 行。",
           "不要写系统概览、典型流程、权限边界、待确认事项或附录。",
         ]
       : [
           "你只写非功能明细章节：## 1 系统概览、## 2 功能模块概览、## 4 典型业务流程、## 5 使用角色与权限边界、## 6 待确认事项。",
+          "第 4 章必须按 `业务对象 -> 状态流转 -> 模块职责 -> 回流闭环` 组织，不要写成页面点击步骤。",
           "不要写 ## 3 核心功能说明，也不要生成附录。",
         ];
 
@@ -1011,6 +1236,8 @@ function buildPhase3bPartPrompt(context = {}) {
     "",
     "写作范围：",
     ...sectionInstruction.map((item) => `- ${item}`),
+    "- business-process-model 是第 1/2/3/4 章最高优先级业务流程模型；若 available=true，必须先消费它，再用 operation-spec / evidence-summary 的菜单、字段、按钮作佐证。",
+    "- business-process-model 缺失或未覆盖本分片时才 fallback 到 operation-spec；必须写明“合理推理 + 推理依据”，依据可来自模块名、字段、状态列、操作项、截图或页面入口。",
     "- operation-spec 是优先业务证据；必须用其中的模块名、字段、截图和业务提示写，不要输出“functions 为空/无法撰写”。",
     "- 证据不足时写入待确认事项，不要编造。",
     "- 写操作只有存在 AI_AUTO_TEST_ 证据和 ledger 时才能写为已验证。",
@@ -1020,6 +1247,11 @@ function buildPhase3bPartPrompt(context = {}) {
     "quality 摘要：",
     "```json",
     inlineQuality,
+    "```",
+    "",
+    "business-process-model（最高优先级业务流程证据，按本分片过滤；available=false 时按 fallback 规则使用 operation-spec）：",
+    "```json",
+    inlineBusinessProcessModel,
     "```",
     "",
     "operation-spec（优先业务证据，按本分片过滤）：",
@@ -1033,10 +1265,10 @@ function buildPhase3bPartPrompt(context = {}) {
     "```",
     "",
     "Verified-claims writing rules:",
-    "- Body sections may only assert claims with writable=true.",
+    "- Verified claim facts and `[claim:<id>]` markers in body sections may only use claims with writable=true; business-process-model synthesis must not borrow non-writable claim ids.",
     "- Claims with writable=false must only appear under pending/unverified confirmation items and must never use `[claim:<id>]` markers.",
     "- The compact claims input redacts non-writable claim ids; only claims with claimReferenceAllowed=true may be cited with `[claim:<id>]`.",
-    "- Do not invent business flow, purpose, role, status, or automation claims outside verified-claims.",
+    "- Do not invent business flow, purpose, role, status, or automation claims outside business-process-model, operation-spec fallback reasoning, or verified-claims.",
     "- Cover each writable claim with its subject/function plus module/entity/evidence context; automatic repair may add `[claim:<id>]` markers for precise traceability.",
     "- If writable-claim-coverage-gap lists missingWritableClaims for this part, cover those claims in this fragment.",
     "",
@@ -1158,6 +1390,7 @@ function resolveCursorApiKey(context = {}) {
 function writePreparationFiles(context = {}) {
   const paths = resolvePhase3bPaths(context);
   const evidenceSummary = loadEvidenceSummary(context);
+  const businessProcessModel = loadBusinessProcessModel(context);
   const operationSpec = loadOperationSpec(context);
   const writingEvidenceSummary = operationSpecToEvidenceSummary(evidenceSummary, operationSpec);
   const qualitySummary = loadQualitySummary(context);
@@ -1171,12 +1404,14 @@ function writePreparationFiles(context = {}) {
   const brief = buildNarrativeBrief({
     ...context,
     evidenceSummary: writingEvidenceSummary,
+    businessProcessModel,
     operationSpec,
     qualityReport: qualitySummary,
   });
   const prompt = buildPhase3bPrompt({
     ...context,
     evidenceSummary: writingEvidenceSummary,
+    businessProcessModel,
     operationSpec,
     qualityReport: qualitySummary,
     verifiedClaims,
@@ -1200,6 +1435,7 @@ function writePreparationFiles(context = {}) {
       ...context,
       part,
       evidenceSummary: writingEvidenceSummary,
+      businessProcessModel,
       operationSpec,
       qualityReport: qualitySummary,
       verifiedClaims,
@@ -1212,6 +1448,7 @@ function writePreparationFiles(context = {}) {
     paths,
     evidenceSummary: writingEvidenceSummary,
     sourceEvidenceSummary: evidenceSummary,
+    businessProcessModel,
     operationSpec,
     qualitySummary,
     skeleton,
@@ -1735,11 +1972,13 @@ module.exports = {
   buildPhase3bPartPrompt,
   buildPhase3bPrompt,
   buildWhitepaperSkeleton,
+  compactBusinessProcessModel,
   compactEvidenceSummary,
   compactModuleSummary,
   compactOperationSpec,
   compactOverviewSummary,
   compactWritableClaimGap,
+  loadBusinessProcessModel,
   normalizeNarrativePartSelector,
   operationSpecToEvidenceSummary,
   resolveCursorApiKey,

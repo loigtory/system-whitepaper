@@ -29,13 +29,19 @@ function appendNarrativeGuardNodes(nodes) {
   for (const node of nodes || []) {
     result.push(node);
     if (node === "summary") {
-      result.push("db-model", "truth-universe", "truth-claims");
+      result.push("db-model", "truth-universe", "truth-claims", "business-process");
     }
     if (node === "db-profile") {
-      result.push("db-model", "truth-universe", "truth-claims");
+      result.push("db-model", "truth-universe", "truth-claims", "business-process");
     }
     if (node === "db-model") {
-      result.push("truth-universe", "truth-claims");
+      result.push("truth-universe", "truth-claims", "business-process");
+    }
+    if (node === "truth-universe") {
+      result.push("truth-claims", "business-process");
+    }
+    if (node === "truth-claims") {
+      result.push("business-process");
     }
     if (node === "narrative") {
       result.push("fact-check");
@@ -44,7 +50,7 @@ function appendNarrativeGuardNodes(nodes) {
       result.push("truth-readiness");
     }
   }
-  if (result.some((node) => ["truth-claims", "narrative", "fact-check"].includes(node))) {
+  if (result.some((node) => ["truth-claims", "business-process", "narrative", "fact-check"].includes(node))) {
     result.push("truth-readiness");
   }
   return unique(result);

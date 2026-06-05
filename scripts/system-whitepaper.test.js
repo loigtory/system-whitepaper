@@ -103,15 +103,12 @@ function passingNarrativeMarkdown() {
     "用途总结聚焦已观察到的页面能力：一是帮助业务人员快速定位保单任务，二是辅助核对任务处理状态，三是为后续人工处理或问题排查提供页面入口。",
     "如果后续数据库画像显示存在任务表、状态字段或保单关联字段，这些内容只能作为解释业务对象的辅助证据，不能替代浏览器页面证据直接证明审批、写入或自动流转能力。",
     "",
-    "## 3. 典型业务流程",
-    "典型业务流程为：业务人员进入保单任务菜单，按保单任务条件查询任务列表，查看任务状态，并基于页面展示结果进行后续处理判断。",
-    "流程说明依据菜单、页面和截图证据组织，未被浏览器证据覆盖的审批、写入或自动处理能力保持为待确认。",
-    "当页面只提供列表和查询证据时，白皮书只描述查询、查看和核对流程；当页面后续补充详情页、弹窗或操作按钮证据后，才能把更深层的处理步骤写入业务流程。",
-    "该规则保证白皮书的业务流程来自证据链，而不是根据模块名称或数据库字段进行过度推断。",
+    "## 3. 核心功能说明",
+    "任务列表围绕保单任务对象展示任务状态、创建时间和处理进展，当前证据只支持查询、查看和只读核对，不支持写入型审批结论。",
     "",
-    "## 4. 证据边界",
-    "本次取证包含菜单、页面截图和任务列表证据；未覆盖的数据库关系、隐藏接口和后台自动流转不作为最终确认结论。",
-    "白皮书生成过程需要保留证据边界说明，明确哪些功能是页面直接证明，哪些只是库表或名称上的合理推理，哪些仍需要后续补充取证。",
+    "## 4. 典型业务流程",
+    "端到端流程为：1. 业务人员接收保单任务后，在保单任务模块按保单号、任务状态等条件定位任务对象；2. 任务列表展示状态、创建时间、处理进展等状态与质量信号，供人员判断是否需要继续处理；3. 保单任务模块与后续人工处理入口、问题排查页面协同，把异常状态或质量不通过结果传递给复核人员；4. 对未覆盖的详情处理、审批写入或后台自动流转，流程进入待确认边界，问题回流给业务人员补充取证或人工确认。",
+    "流程说明依据菜单、页面、截图和任务列表证据组织，最终输出是保单任务状态核对结果；未被浏览器证据覆盖的审批、写入、自动处理和数据库关系不作为确认结论。",
   ].join("\n");
 }
 
@@ -128,14 +125,33 @@ function passingUiOnlyNarrativeMarkdown() {
     "功能总结依据菜单名称、页面入口和已采集截图组织，不写入未被页面证据覆盖的编辑、审批、自动流转或批量处理结论。",
     "用途总结强调该页面为业务人员提供统一入口：先进入保单任务菜单，再打开任务列表，再基于页面展示的结果判断下一步是否需要补充取证或人工处理。",
     "",
-    "## 3. 典型业务流程",
-    "典型业务流程为：业务人员进入保单任务菜单，打开任务列表页面，按页面提供的查询入口检索任务，查看列表结果，并根据页面可见信息进行后续业务判断。",
-    "流程说明只覆盖浏览器取证已经看到的页面路径；如果后续需要写入详情查看、弹窗处理或提交动作，必须先补充对应截图、按钮证据和安全操作记录。",
-    "该流程写法保证白皮书的业务流程来自证据链，而不是根据系统名称、菜单名称或后台资料进行过度外推。",
+    "## 3. 核心功能说明",
+    "任务列表把保单任务对象、处理状态和页面结果集中展示，适合描述为只读核对与问题识别入口。",
     "",
-    "## 4. 证据边界",
-    "本次取证能够支撑菜单入口、页面存在性、任务列表用途和只读核对场景。未覆盖的页面、按钮、自动处理规则和跨模块流转均保持为待确认事项。",
-    "白皮书生成时必须保留证据边界：页面直接证明的内容可以写为确认结论，辅助资料只能用于解释业务对象，缺少页面证据的能力不得写成确定功能。",
+    "## 4. 典型业务流程",
+    "端到端流程为：1. 业务人员围绕保单任务对象进入保单任务模块，使用保单号、处理状态等条件定位任务列表；2. 页面展示处理状态、创建时间和处理结果等状态/质量信号，帮助判断任务是否正常推进；3. 任务列表与后续人工处理入口、问题排查页面协同，异常状态或质量不通过结果需要传递给复核人员；4. 对详情页、弹窗处理、提交动作和自动流转尚未形成证据的部分，保持为待确认边界，并把问题回流到补采截图、按钮证据和安全操作记录。",
+    "该流程写法保证白皮书的业务流程来自证据链，而不是根据系统名称、菜单名称或后台资料进行过度外推。",
+  ].join("\n");
+}
+
+function passingTaskListOnlyNarrativeMarkdown() {
+  return [
+    "# AI保单数据闭环平台功能白皮书",
+    "",
+    "## 1. 系统定位",
+    "AI保单数据闭环平台当前可确认的是任务列表只读核对场景，白皮书只写页面证据能够支持的查询、查看和结果核对能力。",
+    "定位说明不把后台库表、隐藏规则或未打开页面推断为已确认业务功能。",
+    "",
+    "## 2. 核心功能说明",
+    "任务列表用于承接页面查询和结果查看，业务价值限定在定位任务列表记录、查看列表结果、辅助人员继续处理三个方向。",
+    "功能总结依据页面入口、查询字段和截图证据组织，不写入未验证的编辑、审批、自动流转或批量处理结论。",
+    "",
+    "## 3. 核心功能说明",
+    "任务列表记录、处理结果和质量提示共同构成只读核对入口，适合描述为问题识别和人工复核前置能力。",
+    "",
+    "## 4. 典型业务流程",
+    "端到端流程为：1. 业务人员围绕任务列表记录发起查询，使用列表提供的筛选条件定位对象；2. 页面展示处理结果、质量提示和核对结果，帮助判断记录是否正常推进；3. 列表页面与人工复核入口、问题排查页面协同，把异常结果或质量不通过信息传递给复核人员；4. 对详情处理、提交动作和自动流转尚未形成证据的部分，保持为待确认边界，并把问题回流到补采截图、按钮证据和安全操作记录。",
+    "该流程只描述页面证据支持的任务列表核对闭环，未覆盖的后台规则和写入动作不作为确认结论。",
   ].join("\n");
 }
 
@@ -4335,6 +4351,7 @@ test("pipeline state initializes truth phase and guarded whitepaper nodes for ad
   assert.equal(state.nodes["db-model"].label, "库表模型");
   assert.equal(state.nodes["truth-universe"].label, "功能宇宙");
   assert.equal(state.nodes["truth-claims"].label, "可信断言");
+  assert.equal(state.nodes["business-process"].label, "业务流程");
   assert.equal(state.nodes["build-spec"].label, "整理规格");
   assert.equal(state.nodes["compose-guide"].label, "操作指引");
   assert.equal(state.nodes.draft.label, "底稿");
@@ -4344,7 +4361,8 @@ test("pipeline state initializes truth phase and guarded whitepaper nodes for ad
   assert.equal(state.artifacts.truthReadiness, "truth-readiness-report.json");
   assert.equal(state.artifacts.dataDictionary, "data-dictionary.json");
   assert.equal(state.artifacts.entityModel, "entity-model.json");
-  assert.equal(Object.keys(state.nodes).length, 18);
+  assert.equal(state.artifacts.businessProcessModel, "business-process-model.json");
+  assert.equal(Object.keys(state.nodes).length, 19);
 });
 
 test("pipeline reset archives and clears existing system output before fresh collection", () => {
@@ -4395,6 +4413,7 @@ test("migratePipelineState backfills build-spec and compose-guide on legacy stat
   delete legacy.nodes["db-model"];
   delete legacy.nodes["truth-universe"];
   delete legacy.nodes["truth-claims"];
+  delete legacy.nodes["business-process"];
   delete legacy.nodes["build-spec"];
   delete legacy.nodes["compose-guide"];
   delete legacy.nodes["fact-check"];
@@ -4408,12 +4427,14 @@ test("migratePipelineState backfills build-spec and compose-guide on legacy stat
   assert.equal(state.nodes["db-model"].label, "库表模型");
   assert.equal(state.nodes["truth-universe"].label, "功能宇宙");
   assert.equal(state.nodes["truth-claims"].label, "可信断言");
+  assert.equal(state.nodes["business-process"].label, "业务流程");
   assert.equal(state.nodes["build-spec"].label, "整理规格");
   assert.equal(state.nodes["compose-guide"].label, "操作指引");
   assert.equal(state.nodes["fact-check"].label, "事实核验");
   assert.equal(state.nodes["truth-readiness"].label, "真实度门禁");
   assert.equal(state.nodes["db-profile"].status, "pending");
   assert.equal(state.nodes["db-model"].status, "pending");
+  assert.equal(state.nodes["business-process"].status, "pending");
   assert.equal(state.nodes["build-spec"].status, "pending");
   assert.equal(state.phases.truth.label, "真相");
   assert.equal(state.phases.compose.label, "成稿");
@@ -4527,6 +4548,7 @@ test("reconcilePipelineStateFromArtifacts clears stale narrative running when ar
     "db-model",
     "truth-universe",
     "truth-claims",
+    "business-process",
     "build-spec",
     "compose-guide",
     "draft",
@@ -4849,6 +4871,74 @@ test("narrative quality blocks placeholder draft when operation spec has busines
   assert.match(report.failures.join("\n"), /本地/);
 });
 
+test("narrative quality blocks chapter 4 that only describes menu clicks", () => {
+  const { buildNarrativeQualityReport } = require("./check-narrative");
+  const report = buildNarrativeQualityReport({
+    minChars: 100,
+    markdown: [
+      "# AI保单数据闭环平台功能白皮书",
+      "",
+      "## 1. 系统定位",
+      "系统定位说明覆盖保单数据闭环管理、页面证据来源和待确认边界。".repeat(10),
+      "",
+      "## 2. 核心功能说明",
+      "保单任务模块提供任务列表，用于页面查询和只读核对。".repeat(10),
+      "",
+      "## 3. 核心功能说明",
+      "任务列表页面用于保存已观察到的查询入口和截图证据。",
+      "",
+      "## 4. 典型业务流程",
+      "人员进入菜单，打开页面，点击查询按钮，查看列表页面，再返回菜单。".repeat(6),
+    ].join("\n"),
+  });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.match(report.failures.join("\n"), /疑似只是菜单\/页面操作说明/);
+  assert.match(report.failures.join("\n"), /业务对象/);
+  assert.match(report.failures.join("\n"), /状态或质量信号/);
+});
+
+test("narrative quality validates business process model coverage when present", () => {
+  const { buildNarrativeQualityReport } = require("./check-narrative");
+  const report = buildNarrativeQualityReport({
+    minChars: 100,
+    markdown: passingNarrativeMarkdown(),
+    businessProcessModelPresent: true,
+    businessProcessModel: {
+      processes: [
+        {
+          name: "保单任务状态核对",
+          businessObjects: ["保单任务"],
+          statusSignals: ["任务状态"],
+          feedbackLoops: ["问题回流"],
+        },
+        {
+          name: "赔付审核回流",
+          businessObjects: ["赔付案件"],
+          statusSignals: ["审核状态"],
+          feedbackLoops: ["驳回回流"],
+        },
+      ],
+    },
+  });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.match(report.failures.join("\n"), /business-process-model\.json 流程覆盖不足/);
+  assert.match(report.failures.join("\n"), /赔付审核回流/);
+});
+
+test("narrative quality warns when business process model is missing", () => {
+  const { buildNarrativeQualityReport } = require("./check-narrative");
+  const report = buildNarrativeQualityReport({
+    minChars: 100,
+    markdown: passingNarrativeMarkdown(),
+    businessProcessModelPresent: false,
+  });
+
+  assert.equal(report.canSubmitReview, true);
+  assert.ok(report.warnings.some((item) => /business-process-model\.json 不存在/.test(item)));
+});
+
 test("check-narrative fails on malformed evidence summary without writing report", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -4883,6 +4973,7 @@ test("review decision requires rejection comments and maps comments to rerun nod
     "db-model",
     "truth-universe",
     "truth-claims",
+    "business-process",
     "narrative",
     "fact-check",
     "quality",
@@ -4903,7 +4994,7 @@ test("review decision requires rejection comments and maps comments to rerun nod
   assert.deepEqual(decision.rerunNodes, evidenceRefreshNodes);
   assert.deepEqual(
     appendNarrativeGuardNodes(["summary", "truth-claims", "narrative", "fact-check", "quality"]),
-    ["summary", "db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+    ["summary", "db-model", "truth-universe", "truth-claims", "business-process", "narrative", "fact-check", "quality", "truth-readiness"],
   );
 
   const legacyDecision = buildReviewDecision({
@@ -5119,6 +5210,7 @@ test("review decision still refreshes evidence for missing pages and screenshots
     "db-model",
     "truth-universe",
     "truth-claims",
+    "business-process",
     "narrative",
     "fact-check",
     "quality",
@@ -5152,6 +5244,7 @@ test("review decision refreshes evidence when supplement asks for screenshots", 
     "db-model",
     "truth-universe",
     "truth-claims",
+    "business-process",
     "narrative",
     "fact-check",
     "quality",
@@ -5203,6 +5296,7 @@ test("review decision still refreshes evidence when field evidence is missing", 
     "db-model",
     "truth-universe",
     "truth-claims",
+    "business-process",
     "narrative",
     "fact-check",
     "quality",
@@ -5254,6 +5348,7 @@ test("review decision still refreshes evidence when modal screenshot is missing"
     "db-model",
     "truth-universe",
     "truth-claims",
+    "business-process",
     "narrative",
     "fact-check",
     "quality",
@@ -5415,6 +5510,7 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
     "db-model",
     "truth-universe",
     "truth-claims",
+    "business-process",
     "build-spec",
     "compose-guide",
     "draft",
@@ -5448,7 +5544,7 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
     snapshot.systems.map((system) => system.code),
     ["adp", "claim"],
   );
-  assert.equal(snapshot.systems[0].progress.completed, 18);
+  assert.equal(snapshot.systems[0].progress.completed, 19);
   assert.equal(snapshot.systems[0].artifacts.final.exists, true);
   assert.equal(snapshot.systems[0].artifacts.final.file, "whitepaper.final.md");
   assert.equal(fs.readFileSync(staleNamedFinalPath, "utf8"), "# stale named final");
@@ -5679,6 +5775,7 @@ test("dashboard snapshot regenerates missing docx for finalized system", () => {
     "db-model",
     "truth-universe",
     "truth-claims",
+    "business-process",
     "build-spec",
     "compose-guide",
     "draft",
@@ -5747,6 +5844,7 @@ test("dashboard snapshot regenerates stale docx for finalized system", () => {
     "db-model",
     "truth-universe",
     "truth-claims",
+    "business-process",
     "build-spec",
     "compose-guide",
     "draft",
@@ -6015,6 +6113,7 @@ test("dashboard snapshot marks manual review node as ready before approval", () 
     "db-model",
     "truth-universe",
     "truth-claims",
+    "business-process",
     "build-spec",
     "compose-guide",
     "draft",
@@ -8636,6 +8735,7 @@ test("batch runner classifies failed children and retries recoverable failures o
         "db-model",
         "truth-universe",
         "truth-claims",
+        "business-process",
         "build-spec",
         "compose-guide",
         "draft",
@@ -11633,6 +11733,7 @@ test("dashboard rejected evidence refresh auto reruns evidence then full narrati
       "db-model",
       "truth-universe",
       "truth-claims",
+      "business-process",
       "narrative",
       "fact-check",
       "quality",
@@ -11641,7 +11742,7 @@ test("dashboard rejected evidence refresh auto reruns evidence then full narrati
     assert.equal(payload.rerunNarrativePart, "");
     assert.ok(
       payload.rerun.args.includes(
-        "collect,inspect,summary,db-model,truth-universe,truth-claims,narrative,fact-check,quality,truth-readiness",
+        "collect,inspect,summary,db-model,truth-universe,truth-claims,business-process,narrative,fact-check,quality,truth-readiness",
       ),
     );
     assert.ok(payload.rerun.args.includes("--review-rerun"));
@@ -11674,6 +11775,7 @@ test("pipeline default node list uses operation guide path before whitepaper", (
     "db-model",
     "truth-universe",
     "truth-claims",
+    "business-process",
     "draft",
     "narrative",
     "fact-check",
@@ -11899,6 +12001,22 @@ test("pipeline truth nodes build claims and fact-check artifacts", async () => {
     "utf8",
   );
   fs.writeFileSync(
+    path.join(systemOutput, "evidence.json"),
+    JSON.stringify({
+      systemInfo: { code: "adp", name: "AI保单数据闭环平台", testUrl: "https://pre-adp.hzins.com/" },
+      menuMap: [{ title: "保单任务", menuPath: "保单任务", url: "https://pre-adp.hzins.com/#/policy-task" }],
+      menuInventory: [{ title: "保单任务", menuPath: "保单任务", status: "visited", url: "https://pre-adp.hzins.com/#/policy-task" }],
+      pageInventory: [
+        { id: "policy-task", type: "menu-page", menuPath: "保单任务", title: "任务列表", screenshot: "screenshots/task.png" },
+      ],
+      tableInventory: [{ pageId: "policy-task", columns: ["保单任务", "状态"] }],
+      formInventory: [{ pageId: "policy-task", fields: [{ label: "保单任务", type: "input" }] }],
+      actionInventory: [{ pageId: "policy-task", function: "任务列表", name: "查看", type: "query" }],
+      screenshotIndex: [{ pageId: "policy-task", module: "保单任务", function: "任务列表", file: "screenshots/task.png" }],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
     path.join(systemOutput, "evidence-summary.json"),
     JSON.stringify({
       system: { code: "adp", name: "AI保单数据闭环平台" },
@@ -11933,7 +12051,7 @@ test("pipeline truth nodes build claims and fact-check artifacts", async () => {
   assert.equal(dbResult.skipped, true);
 
   const context = {
-    args: {},
+    args: { "allow-draft": true },
     config: { systems: [system], runtime: { outputDir: "../outputs" } },
     configPath,
     system: {
@@ -11964,24 +12082,23 @@ test("pipeline truth nodes build claims and fact-check artifacts", async () => {
     }),
     "utf8",
   );
+  await runPipelineNode("summary", context);
+  await runPipelineNode("build-spec", context);
+  await runPipelineNode("compose-guide", context);
+  await runPipelineNode("summary", context);
   await runPipelineNode("db-model", context);
   await runPipelineNode("truth-universe", context);
   await runPipelineNode("truth-claims", context);
+  await runPipelineNode("business-process", context);
   await runPipelineNode("fact-check", context);
-  writeQualityReportFixture(systemOutput);
-  runNarrativeCheck({ inputDir: systemOutput });
-  await runPipelineNode("truth-readiness", context);
 
   assert.equal(fs.existsSync(path.join(systemOutput, "data-dictionary.json")), true);
   assert.equal(fs.existsSync(path.join(systemOutput, "entity-model.json")), true);
   assert.equal(fs.existsSync(path.join(systemOutput, "function-universe.json")), true);
   assert.equal(fs.existsSync(path.join(systemOutput, "verified-claims.json")), true);
+  assert.equal(fs.existsSync(path.join(systemOutput, "business-process-model.json")), true);
   const report = JSON.parse(fs.readFileSync(path.join(systemOutput, "fact-check-report.json"), "utf8"));
   assert.equal(report.canFinalize, true);
-  const readiness = JSON.parse(fs.readFileSync(path.join(systemOutput, "truth-readiness-report.json"), "utf8"));
-  assert.equal(readiness.canSubmitReview, true);
-  assert.equal(readiness.requirements.databaseEvidenceRequired, true);
-  assert.equal(readiness.gates.database.available, true);
 });
 
 test("pipeline truth-readiness requires database evidence when databaseProfile is enabled", async () => {
@@ -16312,7 +16429,7 @@ test("truth readiness rejects stale database truth lineage", () => {
     .map((claim) => `${claim.module || claim.subject || ""} ${claim.subject || claim.function || claim.entity || ""} [claim:${claim.id}]`);
   fs.writeFileSync(
     path.join(dir, "whitepaper.pending-review.md"),
-    [passingUiOnlyNarrativeMarkdown(), "", "## 5. 已验证声明索引", ...writableClaimLines].join("\n"),
+    [passingTaskListOnlyNarrativeMarkdown(), "", "## 5. 已验证声明索引", ...writableClaimLines].join("\n"),
     "utf8",
   );
   runFactCheck({ inputDir: dir });

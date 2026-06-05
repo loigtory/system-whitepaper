@@ -145,6 +145,7 @@ function selectedNodes(args) {
       "db-model",
       "truth-universe",
       "truth-claims",
+      "business-process",
       "draft",
       "narrative",
       "fact-check",
@@ -528,6 +529,16 @@ async function runPipelineNode(nodeId, context) {
       { cwd: projectRoot },
     );
   }
+  if (nodeId === "business-process") {
+    return runNodeScript(
+      [
+        "scripts/build-business-process-model.js",
+        "--input",
+        systemOutput,
+      ],
+      { cwd: projectRoot },
+    );
+  }
   if (nodeId === "build-spec") {
     const buildArgs = [
       "scripts/build-operation-spec.js",
@@ -575,6 +586,7 @@ async function runPipelineNode(nodeId, context) {
       qualityReportPath: path.join(systemOutput, "quality-report.json"),
       verifiedClaimsPath: path.join(systemOutput, "verified-claims.json"),
       operationSpecPath: path.join(systemOutput, "operation-spec.json"),
+      businessProcessModelPath: path.join(systemOutput, "business-process-model.json"),
       promptOutputPath: path.join(systemOutput, "phase3b-prompt.md"),
       briefPath: path.join(systemOutput, "narrative-brief.md"),
       fragmentsPath: path.join(systemOutput, "narrative-fragments.md"),

@@ -16,6 +16,7 @@
     "scripts/build-evidence-summary.js",
     "scripts/approval-guard.js",
     "scripts/build-database-model.js",
+    "scripts/build-business-process-model.js",
     "scripts/build-function-universe.js",
     "scripts/build-operation-spec.js",
     "scripts/build-verified-claims.js",

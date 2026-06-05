@@ -54,6 +54,7 @@ const OPTIONAL_ARTIFACTS = {
   evidenceSummary: "evidence-summary.json",
   operationSpec: "operation-spec.json",
   operationGuideGate: "operation-guide-gate.json",
+  businessProcessModel: "business-process-model.json",
   dataDictionary: "data-dictionary.json",
   entityModel: "entity-model.json",
   functionUniverse: "function-universe.json",
@@ -660,6 +661,7 @@ function findStaleNarrativeSources(artifacts = {}) {
     pendingReview: artifacts.pendingReview,
     evidenceSummary: artifacts.evidenceSummary,
     operationSpec: artifacts.operationSpec,
+    businessProcessModel: artifacts.businessProcessModel,
   };
   const presentRequired = Object.entries(required).filter(([, artifact]) => artifact?.fingerprint?.exists);
   if (!presentRequired.length) return [];
@@ -1632,6 +1634,9 @@ function validateNarrativeAgainstCurrentMarkdown(value = {}, artifacts = {}) {
       markdown: fs.readFileSync(pendingReview.path, "utf8"),
       evidenceSummary: artifacts.evidenceSummary?.status === "ok" ? artifacts.evidenceSummary.value : {},
       operationSpec: artifacts.operationSpec?.status === "ok" ? artifacts.operationSpec.value : {},
+      businessProcessModel:
+        artifacts.businessProcessModel?.status === "ok" ? artifacts.businessProcessModel.value : null,
+      businessProcessModelPresent: artifacts.businessProcessModel?.fingerprint?.exists === true,
     });
   } catch (error) {
     failures.push(

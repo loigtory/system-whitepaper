@@ -165,6 +165,594 @@ function inferModuleBusinessHint(module) {
   return `围绕${tokens.slice(0, 5).join("、")}等能力展开（依据页面结构归纳，待业务确认）。`;
 }
 
+function normalizeOperationText(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/([\u4e00-\u9fff])\s+([\u4e00-\u9fff])/g, "$1$2")
+    .trim();
+}
+
+function confidenceRank(value) {
+  return { high: 3, medium: 2, low: 1 }[value] || 0;
+}
+
+function maxConfidence(...values) {
+  return values.reduce(
+    (best, value) => (confidenceRank(value) > confidenceRank(best) ? value : best),
+    "low",
+  );
+}
+
+function containsColumn(columns = [], fieldName) {
+  const target = normalizeOperationText(fieldName);
+  return columns.some((column) => normalizeOperationText(column) === target);
+}
+
+function evidenceLine(kind, value) {
+  const text = normalizeOperationText(value);
+  return text ? `${kind}:${text}` : "";
+}
+
+const FILTER_OPTION_RULES = [
+  {
+    field: "需求状态",
+    semanticType: "lifecycle-status",
+    dimensionType: "demand-lifecycle",
+    options: ["需求已完成", "需求待生效", "需求生效"],
+  },
+  {
+    field: "配置质量",
+    semanticType: "quality-status",
+    dimensionType: "configuration-quality",
+    options: ["高风险", "需关注", "良好"],
+  },
+  {
+    field: "接口方式",
+    semanticType: "integration-mode",
+    dimensionType: "interface-mode",
+    options: ["实时回调", "查询接口", "获取文件", "分支共用"],
+  },
+  {
+    field: "任务类型",
+    semanticType: "business-type",
+    dimensionType: "task-type",
+    options: [
+      "保全退保",
+      "线下单退保",
+      "回访",
+      "续期",
+      "续保",
+      "保单状态",
+      "线下单承保",
+      "线下单回执",
+      "理赔",
+      "保全批改",
+      "星星-回访",
+      "fifi-续期",
+      "fifi续保",
+      "石花-回执",
+    ],
+  },
+];
+
+const BUSINESS_DIMENSION_RULES = [
+  {
+    field: "保险公司",
+    dimensionType: "insurance-company",
+    meaning: "保险公司/保司维度",
+  },
+  {
+    field: "任务类型",
+    dimensionType: "task-type",
+    meaning: "任务类型维度",
+  },
+  {
+    field: "接口方式",
+    dimensionType: "interface-mode",
+    meaning: "接口方式维度",
+  },
+];
+
+const KNOWN_ACTION_LABELS = [
+  "配置历史",
+  "新建AI任务",
+  "新增AI任务",
+  "新建",
+  "新增",
+  "编辑",
+  "查看",
+  "详情",
+  "质量",
+  "删除",
+  "启用",
+  "禁用",
+  "关闭",
+  "开启",
+  "处理",
+  "导出",
+  "下载",
+  "复制",
+  "发布",
+  "撤回",
+  "提交",
+  "审核",
+  "审批",
+  "重试",
+  "同步",
+  "查询",
+  "重置",
+  "保存",
+  "确定",
+  "取消",
+  "下一步",
+  "完成",
+];
+
+function stripSelectPlaceholder(raw) {
+  return normalizeOperationText(raw)
+    .replace(/^全部[（(][^)）]+[)）]/, "")
+    .replace(/^全部/, "")
+    .replace(/^请选择/, "")
+    .replace(/^请输入/, "")
+    .trim();
+}
+
+function normalizeControlType(value) {
+  const control = normalizeOperationText(value).toLowerCase();
+  if (control === "text" || control === "input") return "input";
+  if (control === "select" || control === "combobox") return "select";
+  return control || "unknown";
+}
+
+function optionsPresentInText(raw, options = []) {
+  const text = normalizeOperationText(raw);
+  return options.filter((option) => text.includes(option));
+}
+
+function filterEvidence(raw, fieldName) {
+  return uniqueStrings([
+    evidenceLine("列表列", fieldName),
+    evidenceLine("筛选控件", raw),
+  ]).slice(0, 4);
+}
+
+function inferFilterFromRawField(rawField = {}, columns = []) {
+  const raw = normalizeOperationText(rawField.label || rawField.name || rawField);
+  if (!raw) return null;
+  const control = normalizeControlType(rawField.type || rawField.control);
+  if (/输入关键字|关键字|搜索/.test(raw)) {
+    return {
+      field: "关键字",
+      label: "关键字",
+      control: control === "unknown" ? "input" : control,
+      semanticType: "keyword-search",
+      enumOptions: [],
+      confidence: "medium",
+      evidence: [evidenceLine("筛选控件", raw)].filter(Boolean),
+    };
+  }
+  if (/^(全部|请选择|请输入)$/.test(raw)) return null;
+
+  for (const rule of FILTER_OPTION_RULES) {
+    if (!containsColumn(columns, rule.field) && !raw.includes(rule.field)) continue;
+    const options = optionsPresentInText(raw, rule.options);
+    if (!options.length) continue;
+    const enumOptions = raw.startsWith("全部") ? uniqueStrings(["全部", ...options]) : options;
+    return {
+      field: rule.field,
+      label: rule.field,
+      control: control === "unknown" ? "select" : control,
+      semanticType: rule.semanticType,
+      dimensionType: rule.dimensionType,
+      enumOptions,
+      confidence: options.length >= 2 || containsColumn(columns, rule.field) ? "high" : "medium",
+      evidence: filterEvidence(raw, rule.field),
+    };
+  }
+
+  const remainder = stripSelectPlaceholder(raw);
+  if (
+    remainder &&
+    containsColumn(columns, "保险公司") &&
+    /^(全部|请选择)/.test(raw) &&
+    remainder.length <= 24 &&
+    /[\u4e00-\u9fff]/.test(remainder)
+  ) {
+    return {
+      field: "保险公司",
+      label: "保险公司",
+      control: control === "unknown" ? "select" : control,
+      semanticType: "business-party",
+      dimensionType: "insurance-company",
+      enumOptions: raw.startsWith("全部") ? uniqueStrings(["全部", remainder]) : [remainder],
+      confidence: "medium",
+      evidence: filterEvidence(raw, "保险公司"),
+    };
+  }
+
+  return null;
+}
+
+function cleanQueryFieldLabel(rawField = {}, columns = []) {
+  const raw = normalizeOperationText(rawField.label || rawField.name || rawField);
+  if (!raw) return "";
+  const filter = inferFilterFromRawField(rawField, columns);
+  if (filter) return filter.label || filter.field;
+  if (/^(全部|请选择|请输入)$/.test(raw)) return "";
+  const stripped = stripSelectPlaceholder(raw);
+  const candidate = stripped || raw.replace(/[：:]\s*$/, "");
+  if (!candidate || candidate.length > 32) return "";
+  if (/^(全部|请选择|请输入)$/.test(candidate)) return "";
+  if (isTechnicalFieldLabel(candidate) || isGenericFieldLabel(candidate)) return "";
+  return candidate;
+}
+
+function mergeSemanticFilters(filters = []) {
+  const byField = new Map();
+  for (const filter of filters) {
+    const field = normalizeOperationText(filter.field || filter.label);
+    if (!field) continue;
+    const existing = byField.get(field);
+    if (!existing) {
+      byField.set(field, {
+        ...filter,
+        field,
+        label: filter.label || field,
+        enumOptions: uniqueStrings(filter.enumOptions || []),
+        evidence: uniqueStrings(filter.evidence || []).slice(0, 4),
+      });
+      continue;
+    }
+    existing.enumOptions = uniqueStrings([
+      ...(existing.enumOptions || []),
+      ...(filter.enumOptions || []),
+    ]).slice(0, 16);
+    existing.evidence = uniqueStrings([
+      ...(existing.evidence || []),
+      ...(filter.evidence || []),
+    ]).slice(0, 4);
+    existing.confidence = maxConfidence(existing.confidence, filter.confidence);
+    existing.semanticType = existing.semanticType || filter.semanticType || "";
+    existing.dimensionType = existing.dimensionType || filter.dimensionType || "";
+    if (existing.control === "unknown" && filter.control) existing.control = filter.control;
+  }
+  return Array.from(byField.values());
+}
+
+function buildQueryFieldAnalysis(rawFields = [], columns = []) {
+  const filters = [];
+  const queryFields = [];
+  for (const rawField of rawFields) {
+    const raw = normalizeOperationText(rawField?.label || rawField?.name || rawField);
+    if (!raw) continue;
+    if (isTechnicalFieldLabel(raw)) continue;
+    const filter = inferFilterFromRawField(rawField, columns);
+    if (filter) {
+      filters.push(filter);
+      queryFields.push(filter.label || filter.field);
+      continue;
+    }
+    const label = cleanQueryFieldLabel(rawField, columns);
+    if (label) queryFields.push(label);
+  }
+
+  const mergedFilters = mergeSemanticFilters(filters).slice(0, 12);
+  const enumOptions = {};
+  for (const filter of mergedFilters) {
+    if ((filter.enumOptions || []).length) {
+      enumOptions[filter.field] = (filter.enumOptions || []).slice(0, 16);
+    }
+  }
+
+  return {
+    queryFields: uniqueStrings([
+      ...queryFields,
+      ...mergedFilters.map((filter) => filter.label || filter.field),
+    ]).slice(0, 12),
+    filters: mergedFilters,
+    enumOptions,
+  };
+}
+
+function splitActionLabels(value) {
+  const raw = String(value || "");
+  const chunks = raw
+    .split(/[\r\n\t/、,，;；|]+/)
+    .map((chunk) => normalizeOperationText(chunk))
+    .filter(Boolean);
+  const labels = [];
+  const sourceChunks = chunks.length ? chunks : [normalizeOperationText(raw)].filter(Boolean);
+  for (const chunk of sourceChunks) {
+    if (/^\d+$/.test(chunk) || /^[×xX]$/.test(chunk)) continue;
+    const matched = KNOWN_ACTION_LABELS
+      .filter((label) => chunk.includes(label))
+      .sort((left, right) => chunk.indexOf(left) - chunk.indexOf(right) || right.length - left.length);
+    if (matched.length >= 2) {
+      labels.push(...matched);
+    } else {
+      labels.push(chunk);
+    }
+  }
+  return uniqueStrings(labels);
+}
+
+function isBusinessRowAction(label) {
+  return /^(编辑|查看|详情|删除|启用|禁用|关闭|开启|处理|导出|下载|质量|配置历史|复制|发布|撤回|提交|审核|审批|重试|同步)$/.test(
+    normalizeOperationText(label),
+  );
+}
+
+function isSemanticBusinessAction(label) {
+  const text = normalizeOperationText(label);
+  return isBusinessRowAction(text) || /新建|新增|创建|发布|提交|审核|审批|保存|下一步|完成/.test(text);
+}
+
+function buildRowActions(actions = []) {
+  return uniqueStrings(
+    actions
+      .flatMap((action) => splitActionLabels(action.name))
+      .filter((label) => isBusinessRowAction(label)),
+  );
+}
+
+function isOverviewModuleName(name) {
+  const text = normalizeOperationText(name).toLowerCase();
+  if (isHomeModuleName(text)) return true;
+  if (!text) return false;
+  return /首页|导航|欢迎|工作台|门户|系统入口|控制台|总览|概览|dashboard|welcome/.test(text);
+}
+
+function classifyModuleSurface(input = {}) {
+  const {
+    name,
+    pages = [],
+    columns = [],
+    queryFields = [],
+    filters = [],
+    rowActions = [],
+    flows = [],
+    plannedFlows = [],
+    screenshots = [],
+  } = input;
+  if (isOverviewModuleName(name) || pages.some((page) => page.type === "home")) return "overview";
+  if (flows.length) return "business-flow";
+  if (columns.length || queryFields.length || filters.length || rowActions.length) return "business-list";
+  if (plannedFlows.length) return "business-workflow-candidate";
+  if (screenshots.length) return "business-surface";
+  return "unknown";
+}
+
+function isCoreBusinessSurface(name, surfaceType) {
+  return !isOverviewModuleName(name) && surfaceType !== "overview";
+}
+
+function isCoreOperationModule(module = {}) {
+  if (!module || typeof module !== "object") return false;
+  if (module.coreBusinessModule === false) return false;
+  return isCoreBusinessSurface(module.name, module.surfaceType || "");
+}
+
+function optionsForField(filters = [], fieldName) {
+  const target = normalizeOperationText(fieldName);
+  const filter = filters.find((item) => normalizeOperationText(item.field || item.label) === target);
+  return filter ? uniqueStrings(filter.enumOptions || []) : [];
+}
+
+function evidenceForField(columns = [], filters = [], fieldName) {
+  const target = normalizeOperationText(fieldName);
+  const evidence = [];
+  if (containsColumn(columns, target)) evidence.push(evidenceLine("列表列", target));
+  const filter = filters.find((item) => normalizeOperationText(item.field || item.label) === target);
+  if (filter) evidence.push(...(filter.evidence || []));
+  return uniqueStrings(evidence).slice(0, 5);
+}
+
+function inferBusinessDimensions(columns = [], filters = []) {
+  return BUSINESS_DIMENSION_RULES
+    .filter((rule) => containsColumn(columns, rule.field))
+    .map((rule) => {
+      const enumOptions = optionsForField(filters, rule.field);
+      return {
+        field: rule.field,
+        dimensionType: rule.dimensionType,
+        meaning: rule.meaning,
+        enumOptions,
+        confidence: enumOptions.length ? "high" : "medium",
+        evidence: evidenceForField(columns, filters, rule.field),
+      };
+    });
+}
+
+function inferLifecycleSignals(columns = [], filters = []) {
+  return columns
+    .filter((column) => /状态|阶段|进度/.test(column) && !/质量|风险/.test(column))
+    .map((field) => {
+      const enumOptions = optionsForField(filters, field);
+      return {
+        field,
+        signalType: field === "需求状态" ? "demand-lifecycle-status" : "lifecycle-status",
+        enumOptions,
+        confidence: enumOptions.length ? "high" : "medium",
+        evidence: evidenceForField(columns, filters, field),
+      };
+    });
+}
+
+function inferQualitySignals(columns = [], filters = [], rowActions = []) {
+  const signals = columns
+    .filter((column) => /质量|风险|评分|评级/.test(column))
+    .map((field) => {
+      const enumOptions = optionsForField(filters, field);
+      return {
+        field,
+        signalType: field === "配置质量" ? "configuration-quality-status" : "quality-status",
+        enumOptions,
+        confidence: enumOptions.length ? "high" : "medium",
+        evidence: evidenceForField(columns, filters, field),
+      };
+    });
+  if (rowActions.includes("质量") && !signals.some((signal) => signal.field === "质量")) {
+    signals.push({
+      field: "质量",
+      signalType: "quality-action",
+      enumOptions: [],
+      confidence: "medium",
+      evidence: [evidenceLine("操作", "质量")],
+    });
+  }
+  return signals;
+}
+
+function inferBusinessObject(name, columns = [], actionLabels = []) {
+  const haystack = `${name} ${columns.join(" ")} ${actionLabels.join(" ")}`;
+  if (/元数据/.test(haystack)) {
+    return { value: "元数据", confidence: "high", evidence: [evidenceLine("菜单", name)].filter(Boolean) };
+  }
+  if (/发布/.test(name)) {
+    return { value: "AI发布", confidence: "high", evidence: [evidenceLine("菜单", name)].filter(Boolean) };
+  }
+  if (/监控|观测/.test(name)) {
+    return { value: "运行观测数据", confidence: "high", evidence: [evidenceLine("菜单", name)].filter(Boolean) };
+  }
+  if (/AI任务|任务/.test(haystack)) {
+    return {
+      value: /AI任务/.test(haystack) ? "AI任务" : "任务记录",
+      confidence: /AI任务/.test(haystack) ? "high" : "medium",
+      evidence: uniqueStrings([
+        evidenceLine("菜单", name),
+        containsColumn(columns, "任务类型") ? evidenceLine("列表列", "任务类型") : "",
+        actionLabels.find((label) => /新建AI任务/.test(label)) ? evidenceLine("操作", "新建AI任务") : "",
+      ]).slice(0, 4),
+    };
+  }
+  if (containsColumn(columns, "保险公司") && containsColumn(columns, "接口方式")) {
+    return {
+      value: "保司接口配置记录",
+      confidence: "medium",
+      evidence: [evidenceLine("列表列", "保险公司"), evidenceLine("列表列", "接口方式")],
+    };
+  }
+  return {
+    value: normalizeOperationText(name) || "业务对象",
+    confidence: "low",
+    evidence: [evidenceLine("菜单", name)].filter(Boolean),
+  };
+}
+
+function inferBusinessRole(name, surfaceType, columns = [], actionLabels = []) {
+  if (surfaceType === "overview") {
+    return {
+      value: "系统概览与导航入口",
+      confidence: "high",
+      evidence: [evidenceLine("页面类型", "overview"), evidenceLine("菜单", name)].filter(Boolean),
+    };
+  }
+  const evidence = uniqueStrings([
+    evidenceLine("菜单", name),
+    ...columns.slice(0, 4).map((column) => evidenceLine("列表列", column)),
+    ...actionLabels.slice(0, 4).map((label) => evidenceLine("操作", label)),
+  ]).slice(0, 6);
+  if (/发布/.test(name)) {
+    return { value: "发布管理与上线控制", confidence: "high", evidence };
+  }
+  if (/监控|观测/.test(name)) {
+    return { value: "数据与运行观测", confidence: "high", evidence };
+  }
+  if (/元数据/.test(name)) {
+    return { value: "元数据维护", confidence: "high", evidence };
+  }
+  if (/任务/.test(name) || containsColumn(columns, "任务类型")) {
+    return {
+      value: containsColumn(columns, "需求状态")
+        ? "任务配置与需求生命周期跟踪"
+        : "任务配置与维护",
+      confidence: "medium",
+      evidence,
+    };
+  }
+  if (actionLabels.some((label) => /新建|新增|编辑|删除/.test(label))) {
+    return { value: "业务对象维护", confidence: "medium", evidence };
+  }
+  if (columns.length || surfaceType === "business-list") {
+    return { value: "业务对象查询与筛选", confidence: "medium", evidence };
+  }
+  return { value: "业务页面", confidence: "low", evidence };
+}
+
+function inferHandoffHints(input = {}) {
+  const { columns = [], filters = [], rowActions = [], lifecycleSignals = [], qualitySignals = [] } = input;
+  const hints = [];
+  const demandSignal = lifecycleSignals.find((signal) => signal.field === "需求状态");
+  if (demandSignal) {
+    const values = (demandSignal.enumOptions || []).filter((value) => value !== "全部");
+    hints.push({
+      hint: values.length
+        ? `需求状态包含${values.join("、")}，可作为需求生命周期交接线索。`
+        : "需求状态字段可作为需求生命周期交接线索。",
+      confidence: values.length ? "high" : "medium",
+      evidence: demandSignal.evidence || [evidenceLine("列表列", "需求状态")],
+    });
+  }
+  if (containsColumn(columns, "接口方式")) {
+    const values = optionsForField(filters, "接口方式").filter((value) => value !== "全部");
+    hints.push({
+      hint: values.length
+        ? `接口方式包含${values.join("、")}，可用于说明系统对接方式差异。`
+        : "接口方式字段可用于说明系统对接方式差异。",
+      confidence: values.length ? "high" : "medium",
+      evidence: evidenceForField(columns, filters, "接口方式"),
+    });
+  }
+  if (rowActions.includes("配置历史")) {
+    hints.push({
+      hint: "配置历史操作表明页面存在配置变更追溯入口。",
+      confidence: "medium",
+      evidence: [evidenceLine("操作", "配置历史")],
+    });
+  }
+  const qualitySignal = qualitySignals.find((signal) => signal.field === "配置质量");
+  if (qualitySignal && rowActions.includes("质量")) {
+    hints.push({
+      hint: "配置质量字段与质量操作共同指向质量核查入口。",
+      confidence: "medium",
+      evidence: uniqueStrings([...(qualitySignal.evidence || []), evidenceLine("操作", "质量")]),
+    });
+  }
+  return hints.slice(0, 6);
+}
+
+function buildModuleSemanticProfile(input = {}) {
+  const {
+    name,
+    surfaceType,
+    columns = [],
+    filters = [],
+    rowActions = [],
+    actions = [],
+  } = input;
+  const actionLabels = uniqueStrings([
+    ...rowActions,
+    ...actions.flatMap((action) => splitActionLabels(action.name)).filter(isSemanticBusinessAction),
+  ]);
+  const businessDimensions = inferBusinessDimensions(columns, filters);
+  const lifecycleSignals = inferLifecycleSignals(columns, filters);
+  const qualitySignals = inferQualitySignals(columns, filters, rowActions);
+  return {
+    businessRole: inferBusinessRole(name, surfaceType, columns, actionLabels),
+    businessObject: inferBusinessObject(name, columns, actionLabels),
+    businessDimensions,
+    lifecycleSignals,
+    qualitySignals,
+    handoffHints: inferHandoffHints({
+      columns,
+      filters,
+      rowActions,
+      lifecycleSignals,
+      qualitySignals,
+    }),
+  };
+}
+
 function mapApisForContext(networkIndex, hints = []) {
   const entries = networkIndex?.entries || [];
   const normalizedHints = hints.map((item) => String(item || "").toLowerCase()).filter(Boolean);
@@ -269,17 +857,23 @@ function buildModuleSpec(name, evidence, writeValidation, networkIndex, system =
       summaryFunctions.flatMap((fn) => fn.tableColumns || []),
     ),
   );
-  const queryFields = uniqueStrings(
-    forms
-      .flatMap((form) => (form.fields || []).map((field) => field.label))
-      .concat(summaryFunctions.flatMap((fn) => fn.queryFields || []))
-      .filter((label) => !isTechnicalFieldLabel(label) && !isGenericFieldLabel(label)),
-  ).slice(0, 12);
-  const rowActions = uniqueStrings(
-    actions
-      .map((action) => action.name)
-      .filter((label) => /编辑|查看|删除|启用|关闭|开启|处理|导出|下载/.test(label)),
-  );
+  const rawQueryFields = forms
+    .flatMap((form) => (form.fields || []).map((field) => ({
+      label: field.label,
+      type: field.type || field.control,
+      required: Boolean(field.required),
+    })))
+    .concat(
+      summaryFunctions.flatMap((fn) =>
+        (fn.queryFields || []).map((label) => ({
+          label,
+          type: "",
+          required: false,
+        })),
+      ),
+    );
+  const queryAnalysis = buildQueryFieldAnalysis(rawQueryFields, columns);
+  const rowActions = buildRowActions(actions);
   const screenshots = uniqueStrings(
     pages.map((page) => page.screenshot).concat(
       (evidence.screenshotIndex || [])
@@ -296,14 +890,44 @@ function buildModuleSpec(name, evidence, writeValidation, networkIndex, system =
   const plannedFlows = validationScenarios
     .filter((scenario) => !scenarioHasObservedFlowEvidence(scenario))
     .map(buildPlannedFlowFromValidationScenario);
+  const surfaceType = classifyModuleSurface({
+    name,
+    pages,
+    columns,
+    queryFields: queryAnalysis.queryFields,
+    filters: queryAnalysis.filters,
+    rowActions,
+    flows,
+    plannedFlows,
+    screenshots,
+  });
+  const semanticProfile = buildModuleSemanticProfile({
+    name,
+    surfaceType,
+    columns,
+    filters: queryAnalysis.filters,
+    rowActions,
+    actions,
+  });
+
+  const fallbackQueryFields = uniqueStrings(
+    rawQueryFields
+      .map((field) => cleanQueryFieldLabel(field, columns))
+      .filter(Boolean),
+  ).slice(0, 12);
 
   const module = {
     name,
     entry: `左侧「${name}」`,
+    surfaceType,
+    coreBusinessModule: isCoreBusinessSurface(name, surfaceType),
     businessHint: "",
+    ...semanticProfile,
     list: {
       columns,
-      queryFields,
+      queryFields: queryAnalysis.queryFields.length ? queryAnalysis.queryFields : fallbackQueryFields,
+      filters: queryAnalysis.filters,
+      enumOptions: queryAnalysis.enumOptions,
       rowActions,
       note: columns.length ? "" : "本轮未采集到列表列，待补采集。",
     },
@@ -395,8 +1019,8 @@ function buildNavigation(evidence, writeValidation = null, evidenceSummary = nul
 function buildCrossLinks(evidence, writeValidation) {
   const links = [];
   for (const action of evidence.actionInventory || []) {
-    const name = String(action.name || "");
-    if (/删除/.test(name)) {
+    for (const name of splitActionLabels(action.name)) {
+      if (!/删除/.test(name)) continue;
       links.push({
         from: name,
         hint: "删除操作可能存在关联数据联动，以页面确认框为准。",
@@ -420,6 +1044,7 @@ function buildPendingItems(spec, gate) {
     pending.push({ topic: "质检门禁", reason: failure });
   }
   for (const module of spec.modules || []) {
+    if (!isCoreOperationModule(module)) continue;
     if (!module.list?.columns?.length && !module.flows?.length) {
       pending.push({
         topic: module.name,
@@ -455,6 +1080,27 @@ function trimSpec(spec) {
   for (const module of clone.modules || []) {
     module.apis = (module.apis || []).slice(0, 6);
     module.plannedFlows = (module.plannedFlows || []).slice(0, 4);
+    module.businessDimensions = (module.businessDimensions || []).slice(0, 8);
+    module.lifecycleSignals = (module.lifecycleSignals || []).slice(0, 8);
+    module.qualitySignals = (module.qualitySignals || []).slice(0, 8);
+    module.handoffHints = (module.handoffHints || []).slice(0, 6);
+    for (const key of ["businessRole", "businessObject"]) {
+      if (module[key]?.evidence) {
+        module[key].evidence = module[key].evidence.slice(0, 6);
+      }
+    }
+    if (module.list) {
+      module.list.filters = (module.list.filters || []).slice(0, 12).map((filter) => ({
+        ...filter,
+        enumOptions: (filter.enumOptions || []).slice(0, 16),
+        evidence: (filter.evidence || []).slice(0, 4),
+      }));
+      module.list.enumOptions = Object.fromEntries(
+        Object.entries(module.list.enumOptions || {})
+          .slice(0, 12)
+          .map(([field, options]) => [field, (options || []).slice(0, 16)]),
+      );
+    }
     for (const flow of module.flows || []) {
       for (const step of flow.steps || []) {
         step.apis = (step.apis || []).slice(0, 4);
@@ -488,7 +1134,7 @@ function evaluateOperationGuideGate(spec, system = {}) {
       spec.gateCriteria?.operationGuideMinMenus ||
       3,
   );
-  const modules = (spec.modules || []).filter((module) => !isHomeModuleName(module.name));
+  const modules = (spec.modules || []).filter((module) => isCoreOperationModule(module));
   const failures = [];
   const checks = [];
 
@@ -562,7 +1208,7 @@ function evaluateOperationGuideGate(spec, system = {}) {
 
 function buildOperationSpecMetrics(spec = {}) {
   const modules = Array.isArray(spec.modules) ? spec.modules : [];
-  const contentModules = modules.filter((module) => !isHomeModuleName(module.name));
+  const contentModules = modules.filter((module) => isCoreOperationModule(module));
   return {
     moduleCount: contentModules.length,
     navigationCount: Array.isArray(spec.navigation) ? spec.navigation.length : 0,
@@ -598,7 +1244,7 @@ function assertValidOperationSpecArtifact(spec = {}) {
   assertFiniteNumber(spec.gate.readinessPercent, "operation-spec.json gate.readinessPercent must be numeric.");
   assertArray(spec.gate.failures, "operation-spec.json gate.failures must be an array.");
   assertJsonObject(spec.metrics, "operation-spec.json metrics must be a JSON object.");
-  assertMetricEquals(spec.metrics, "moduleCount", spec.modules.filter((module) => !isHomeModuleName(module.name)).length, "operation-spec.json");
+  assertMetricEquals(spec.metrics, "moduleCount", spec.modules.filter((module) => isCoreOperationModule(module)).length, "operation-spec.json");
   assertMetricEquals(spec.metrics, "navigationCount", spec.navigation.length, "operation-spec.json");
   assertMetricEquals(
     spec.metrics,
@@ -623,6 +1269,9 @@ function assertValidOperationSpecArtifact(spec = {}) {
     }
     assertJsonObject(module.list, "operation-spec.json modules[].list must be a JSON object.");
     assertArray(module.list.columns, "operation-spec.json modules[].list.columns must be an array.");
+    if (module.list.filters !== undefined) {
+      assertArray(module.list.filters, "operation-spec.json modules[].list.filters must be an array.");
+    }
     assertArray(module.flows, "operation-spec.json modules[].flows must be an array.");
     assertArray(module.screenshots, "operation-spec.json modules[].screenshots must be an array.");
   }
@@ -681,8 +1330,27 @@ function buildOperationSpec(options = {}) {
     modules.unshift({
       name: "首页",
       entry: "左侧「首页」",
+      surfaceType: "overview",
+      coreBusinessModule: false,
       businessHint: "展示平台概览与功能入口。",
-      list: { columns: [], queryFields: [], rowActions: [], note: "首页以浏览为主。" },
+      businessRole: {
+        value: "系统概览与导航入口",
+        confidence: "high",
+        evidence: [evidenceLine("页面类型", "home"), evidenceLine("菜单", "首页")],
+      },
+      businessObject: {
+        value: "平台入口",
+        confidence: "medium",
+        evidence: uniqueStrings([
+          evidenceLine("页面标题", homePage.title || "首页"),
+          evidenceLine("页面类型", "home"),
+        ]),
+      },
+      businessDimensions: [],
+      lifecycleSignals: [],
+      qualitySignals: [],
+      handoffHints: [],
+      list: { columns: [], queryFields: [], filters: [], enumOptions: {}, rowActions: [], note: "首页以浏览为主。" },
       flows: [],
       tabs: [],
       screenshots: homePage.screenshot ? [homePage.screenshot] : [],
