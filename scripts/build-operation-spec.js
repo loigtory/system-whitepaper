@@ -54,6 +54,7 @@ function main() {
   }
 
   const evidencePath = path.join(systemOutput, "evidence.json");
+  const evidenceSummaryPath = path.join(systemOutput, "evidence-summary.json");
   const writeValidationPath = path.join(systemOutput, "write-validation-result.json");
   const networkIndexPath = path.join(systemOutput, "network-index.json");
   if (!fs.existsSync(evidencePath)) {
@@ -61,16 +62,19 @@ function main() {
   }
 
   const evidence = readRequiredJsonObject(evidencePath, { label: "Evidence file" });
+  const evidenceSummary = readOptionalJsonObject(evidenceSummaryPath);
   const writeValidation = readOptionalJsonObject(writeValidationPath);
   const networkIndex = readOptionalJsonObject(networkIndexPath);
 
   const { spec, gate } = buildOperationSpec({
     evidence,
+    evidenceSummary,
     system,
     writeValidation,
     networkIndex,
     sourceArtifacts: buildOperationSpecSourceArtifacts({
       evidencePath,
+      evidenceSummaryPath,
       writeValidationPath,
       networkIndexPath,
     }),
@@ -88,6 +92,7 @@ function main() {
       fingerprint: fingerprintFile(specPath),
     },
     evidence: spec.sourceArtifacts.evidence,
+    evidenceSummary: spec.sourceArtifacts.evidenceSummary,
   };
   assertValidOperationGuideGateArtifact(gate, spec);
   writeJson(gatePath, gate);

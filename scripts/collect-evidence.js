@@ -1867,6 +1867,29 @@ async function extractNestedSidebarMenusFromPage(page) {
           if (!title) return;
           pushItem(title, title, href);
         });
+        document.querySelectorAll("body *").forEach((node) => {
+          if (!isVisible(node)) return;
+          const rect = node.getBoundingClientRect();
+          const leftRailLimit = Math.min(320, window.innerWidth * 0.35);
+          if (rect.left < 0 || rect.left > leftRailLimit || rect.width > 360) return;
+          const title = readTitle(node);
+          if (!title || title.length > 40) return;
+          if (!/[\u4e00-\u9fa5A-Za-z0-9]/.test(title)) return;
+          const childTitles = Array.from(node.children || [])
+            .map((child) => readTitle(child))
+            .filter((item) => item && item !== title);
+          if (childTitles.length > 1) return;
+          const style = window.getComputedStyle(node);
+          const className = String(node.className || "");
+          const role = node.getAttribute("role") || "";
+          const looksLikeMenu =
+            style.cursor === "pointer" ||
+            /menu|side|sider|nav|item/i.test(className) ||
+            /menuitem|treeitem|tab|button|link/i.test(role) ||
+            Boolean(node.closest("[class*='menu'],[class*='Menu'],[class*='side'],[class*='Side'],[class*='sider'],[class*='Sider']"));
+          if (!looksLikeMenu) return;
+          pushItem(title, title, readHref(node));
+        });
         const walkTree = (node, prefix) => {
           if (!node || !isVisible(node)) return;
           const role = node.getAttribute("role") || "";

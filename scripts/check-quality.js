@@ -7,6 +7,7 @@ const {
   buildQualityReport,
   computeEvidenceMetrics,
   parseArgs,
+  readOptionalJsonObject,
   readRequiredJsonObject,
   writeJson,
 } = require("./system-whitepaper-lib");
@@ -49,6 +50,12 @@ function buildQualitySourceArtifacts(input = {}) {
       fingerprint: fingerprintFile(input.operationSpecPath),
     };
   }
+  if (input.evidenceSummaryPath) {
+    result.evidenceSummary = {
+      file: path.basename(input.evidenceSummaryPath),
+      fingerprint: fingerprintFile(input.evidenceSummaryPath),
+    };
+  }
   return result;
 }
 
@@ -60,6 +67,27 @@ function readOperationGuideGate(gatePath) {
 function readOperationSpec(specPath) {
   if (!fs.existsSync(specPath)) return null;
   return readRequiredJsonObject(specPath, { label: "Operation spec" });
+}
+
+function hasRecoveredExplorationEvidence(operationSpec = null, evidenceSummary = null) {
+  if (operationSpec?.gate?.canComposeGuide) return true;
+  if (Number(operationSpec?.metrics?.moduleCount || 0) > 0 && Number(operationSpec?.metrics?.screenshotCount || 0) > 0) {
+    return true;
+  }
+  const summaryCounts = evidenceSummary?.metrics?.counts || {};
+  if (Number(summaryCounts.pages || 0) > 0) return true;
+  if (Array.isArray(evidenceSummary?.screenshots) && evidenceSummary.screenshots.length > 0) return true;
+  return false;
+}
+
+function isInitialPlaywrightBlocker(item = {}) {
+  return /尚未执行\s*Playwright\s*页面探索/i.test(String(item.reason || item.message || ""));
+}
+
+function filterObsoleteQualityBlockedItems(blockedItems = [], operationSpec = null, evidenceSummary = null) {
+  const items = Array.isArray(blockedItems) ? blockedItems : [];
+  if (!hasRecoveredExplorationEvidence(operationSpec, evidenceSummary)) return items;
+  return items.filter((item) => !isInitialPlaywrightBlocker(item));
 }
 
 function assertValidQualityReportArtifact(report = {}) {
@@ -99,16 +127,18 @@ function main() {
 
   const evidencePath = path.join(inputDir, "evidence.json");
   const evidence = readRequiredJsonObject(evidencePath, { label: "Evidence file" });
+  const evidenceSummaryPath = path.join(inputDir, "evidence-summary.json");
+  const evidenceSummary = readOptionalJsonObject(evidenceSummaryPath);
+  const gatePath = path.join(inputDir, "operation-guide-gate.json");
+  const specPath = path.join(inputDir, "operation-spec.json");
+  const operationSpec = readOperationSpec(specPath);
 
   const metrics = computeEvidenceMetrics(evidence);
   const report = buildQualityReport({
     ...metrics,
-    blockedItems: evidence.blockedItems || [],
+    blockedItems: filterObsoleteQualityBlockedItems(evidence.blockedItems || [], operationSpec, evidenceSummary),
   });
 
-  const gatePath = path.join(inputDir, "operation-guide-gate.json");
-  const specPath = path.join(inputDir, "operation-spec.json");
-  const operationSpec = readOperationSpec(specPath);
   if (operationSpec) {
     try {
       assertValidOperationSpecArtifact(operationSpec);
@@ -141,6 +171,7 @@ function main() {
     counts: metrics.counts,
     sourceArtifacts: buildQualitySourceArtifacts({
       evidencePath,
+      evidenceSummaryPath,
       operationSpecPath: specPath,
       operationGuideGatePath: gatePath,
     }),
@@ -165,6 +196,7 @@ module.exports = {
   assertValidQualityReportArtifact,
   buildQualitySourceArtifacts,
   fingerprintFile,
+  filterObsoleteQualityBlockedItems,
   readOperationGuideGate,
   readOperationSpec,
 };

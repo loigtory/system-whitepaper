@@ -81,6 +81,13 @@ function claimHasDatabaseEvidence(claim = {}) {
   return sourceTypeStartsWith(claim.sources, "db-");
 }
 
+function claimHasStructuredFunctionEvidence(claim = {}) {
+  const evidence = claim.evidence || {};
+  return ["actions", "queryFields", "tableColumns"].some(
+    (key) => Array.isArray(evidence[key]) && evidence[key].length > 0,
+  );
+}
+
 function confidenceRank(value) {
   return { high: 3, medium: 2, low: 1 }[value] || 0;
 }
@@ -113,7 +120,13 @@ function classifyClaim(confidence, sources = []) {
 
 function claimIsWritable(claim) {
   if (claimHasDatabaseEvidence(claim) && !claimHasUiEvidence(claim)) return false;
-  if (claim.status === "confirmed") return true;
+  if (claim.type === "module-presence") {
+    return claim.status === "confirmed" && claimHasUiEvidence(claim);
+  }
+  if (claim.type === "function-presence") {
+    return claim.status === "confirmed" && claimHasUiEvidence(claim) && claimHasStructuredFunctionEvidence(claim);
+  }
+  if (claim.status === "confirmed") return claimHasUiEvidence(claim);
   if (claim.status !== "inferred") return false;
   if (claim.type === "function-entity-link") {
     return claimHasUiEvidence(claim) && claimHasDatabaseEvidence(claim);
@@ -330,6 +343,7 @@ function buildVerifiedClaimsArtifact(input = {}) {
       lowConfidenceNotWritable: true,
       databaseOnlyNotConfirmed: true,
       databaseOnlyNotWritable: true,
+      screenshotOnlyFunctionNotWritable: true,
       purpose:
         "Claims are the only allowed business-writing source for the next narrative/fact-check stages.",
     },
@@ -378,6 +392,7 @@ module.exports = {
   buildVerifiedClaimsFromDir,
   buildSourceArtifacts,
   claimHasDatabaseEvidence,
+  claimHasStructuredFunctionEvidence,
   claimHasUiEvidence,
   claimIsWritable,
   classifyClaim,

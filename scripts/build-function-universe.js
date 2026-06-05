@@ -74,6 +74,32 @@ function buildModuleUniverse(evidenceSummary = {}) {
   );
 }
 
+function operationSpecSystem(operationSpec = {}, fallback = null) {
+  if (!hasObjectContent(operationSpec)) return fallback;
+  return {
+    code: compactString(operationSpec.systemCode),
+    name: compactString(operationSpec.systemName),
+    testUrl: compactString(operationSpec.testUrl),
+  };
+}
+
+function buildOperationSpecModuleUniverse(operationSpec = {}) {
+  return uniqueBy(
+    (operationSpec.modules || [])
+      .filter((item) => item && compactString(item.name))
+      .map((item) => ({
+        name: compactString(item.name),
+        entry: compactString(item.entry || item.name),
+        summaryHint: compactString(item.businessHint),
+        sources: [
+          sourceRef("ui-module", item.entry || item.name, item.name),
+          ...(item.screenshots || []).map((shot) => sourceRef("screenshot", shot, shot)),
+        ].filter((ref) => ref.id || ref.label),
+      })),
+    (item) => item.name,
+  );
+}
+
 function buildFunctionUniverse(evidenceSummary = {}) {
   return uniqueBy(
     (evidenceSummary.functions || [])
@@ -92,6 +118,39 @@ function buildFunctionUniverse(evidenceSummary = {}) {
           ...(item.screenshots || []).map((shot) => sourceRef("screenshot", shot.id || shot.file, shot.file)),
         ].filter((ref) => ref.id || ref.label),
       })),
+    (item) => `${item.module}::${item.name}::${item.menuPath}`,
+  );
+}
+
+function buildOperationSpecFunctionUniverse(operationSpec = {}) {
+  return uniqueBy(
+    (operationSpec.modules || [])
+      .filter((item) => item && compactString(item.name))
+      .map((item) => {
+        const actions = Array.isArray(item.list?.rowActions) ? item.list.rowActions.filter(Boolean) : [];
+        const queryFields = Array.isArray(item.list?.queryFields) ? item.list.queryFields.filter(Boolean) : [];
+        const tableColumns = Array.isArray(item.list?.columns) ? item.list.columns.filter(Boolean) : [];
+        const screenshots = (Array.isArray(item.screenshots) ? item.screenshots : []).map((file) => ({
+          id: compactString(file),
+          file: compactString(file),
+          caption: `${item.name} 页面截图`,
+        }));
+        const hasStructuredUi = actions.length > 0 || queryFields.length > 0 || tableColumns.length > 0;
+        return {
+          name: compactString(item.name),
+          module: compactString(item.name),
+          menuPath: compactString(item.entry || item.name),
+          actions,
+          queryFields,
+          tableColumns,
+          screenshots,
+          evidenceStrength: hasStructuredUi && screenshots.length ? "high" : screenshots.length ? "medium" : "low",
+          sources: [
+            sourceRef("ui-function", item.entry || item.name, item.name),
+            ...(item.screenshots || []).map((shot) => sourceRef("screenshot", shot, shot)),
+          ].filter((ref) => ref.id || ref.label),
+        };
+      }),
     (item) => `${item.module}::${item.name}::${item.menuPath}`,
   );
 }
@@ -232,10 +291,23 @@ function buildFunctionUniverseArtifact(input = {}) {
   const evidenceSummary = input.evidenceSummary || {};
   const databaseProfile = input.databaseProfile || {};
   const entityModel = input.entityModel || {};
+  const operationSpec = input.operationSpec || {};
   assertSafeDatabaseProfile(databaseProfile);
   assertValidEntityModelInput(entityModel);
-  const modules = buildModuleUniverse(evidenceSummary);
-  const functions = buildFunctionUniverse(evidenceSummary);
+  const modules = uniqueBy(
+    [
+      ...buildOperationSpecModuleUniverse(operationSpec),
+      ...buildModuleUniverse(evidenceSummary),
+    ],
+    (item) => item.name,
+  );
+  const functions = uniqueBy(
+    [
+      ...buildOperationSpecFunctionUniverse(operationSpec),
+      ...buildFunctionUniverse(evidenceSummary),
+    ],
+    (item) => `${item.module}::${item.name}::${item.menuPath}`,
+  );
   const entities = buildEntityUniverse({ databaseProfile, entityModel });
   const links = buildFunctionEntityLinks(functions, entities);
   const entityRelations = buildEntityRelations(entityModel);
@@ -243,7 +315,7 @@ function buildFunctionUniverseArtifact(input = {}) {
     artifactType: "function-universe",
     version: 1,
     generatedAt: input.generatedAt || new Date().toISOString(),
-    system: evidenceSummary.system || databaseProfile.system || null,
+    system: operationSpecSystem(operationSpec, evidenceSummary.system || databaseProfile.system || null),
     modules,
     functions,
     entities,
@@ -275,20 +347,24 @@ function buildFunctionUniverseFromDir(inputDir, options = {}) {
   const evidenceSummaryPath = options.evidenceSummaryPath || path.join(dir, "evidence-summary.json");
   const databaseProfilePath = options.databaseProfilePath || path.join(dir, "database-profile.json");
   const entityModelPath = options.entityModelPath || path.join(dir, "entity-model.json");
+  const operationSpecPath = options.operationSpecPath || path.join(dir, "operation-spec.json");
   const evidenceSummary = readRequiredJsonObject(
     evidenceSummaryPath,
     { label: "Evidence summary" },
   );
   const databaseProfile = readOptionalExistingJsonObject(databaseProfilePath, "Database profile");
   const entityModel = readOptionalExistingJsonObject(entityModelPath, "Entity model");
+  const operationSpec = readOptionalExistingJsonObject(operationSpecPath, "Operation spec");
   const artifact = buildFunctionUniverseArtifact({
     evidenceSummary,
     databaseProfile,
     entityModel,
+    operationSpec,
     sourceArtifacts: buildSourceArtifacts({
       evidenceSummary: evidenceSummaryPath,
       databaseProfile: databaseProfilePath,
       entityModel: entityModelPath,
+      operationSpec: operationSpecPath,
     }),
   });
   const outputPath = options.outputPath || path.join(dir, "function-universe.json");
@@ -298,6 +374,8 @@ function buildFunctionUniverseFromDir(inputDir, options = {}) {
 
 module.exports = {
   buildFunctionUniverseArtifact,
+  buildOperationSpecFunctionUniverse,
+  buildOperationSpecModuleUniverse,
   buildFunctionUniverseFromDir,
   buildSourceArtifacts,
   fingerprintFile,
@@ -315,6 +393,7 @@ function main() {
     evidenceSummaryPath: args["evidence-summary"],
     databaseProfilePath: args["database-profile"],
     entityModelPath: args["entity-model"],
+    operationSpecPath: args["operation-spec"],
   });
   console.log(`Function universe written: ${result.outputPath}`);
 }

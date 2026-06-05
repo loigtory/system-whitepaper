@@ -37,6 +37,7 @@ function buildSourceArtifact(filePath, status = "ok") {
 function buildOperationSpecSourceArtifacts(input = {}) {
   const result = {};
   if (input.evidencePath) result.evidence = buildSourceArtifact(input.evidencePath);
+  if (input.evidenceSummaryPath) result.evidenceSummary = buildSourceArtifact(input.evidenceSummaryPath);
   if (input.writeValidationPath) result.writeValidation = buildSourceArtifact(input.writeValidationPath);
   if (input.networkIndexPath) result.networkIndex = buildSourceArtifact(input.networkIndexPath);
   return result;
@@ -106,7 +107,21 @@ function pagesForMenu(evidence, menuName) {
   });
 }
 
-function collectModuleNames(evidence, writeValidation = null) {
+function isPlaceholderSummaryModule(module = {}) {
+  const name = String(module.name || "").trim();
+  const summary = String(module.summary || "").trim();
+  return name === "本地" && /共\s*0\s*个菜单页|已采集\s*0\s*个/.test(summary);
+}
+
+function moduleNameFromValidationScenario(scenario = {}) {
+  const menuPath = String(scenario.menuPath || "").trim();
+  if (menuPath) return menuPath;
+  const target = String(scenario.targetName || "").trim().replace(/^AI_AUTO_TEST_/, "");
+  if (target) return target;
+  return String(scenario.id || "").trim().replace(/^auto-/, "");
+}
+
+function collectModuleNames(evidence, writeValidation = null, evidenceSummary = null) {
   const names = [];
   for (const menu of evidence.menuMap || []) {
     if (isEnvironmentSwitcherMenu(menu) || isSystemShellMenu(menu)) continue;
@@ -117,10 +132,22 @@ function collectModuleNames(evidence, writeValidation = null) {
     if (page.menuPath) names.push(page.menuPath);
   }
   for (const scenario of writeValidation?.scenarios || []) {
-    if (scenario.menuPath) names.push(scenario.menuPath);
+    const scenarioModule = moduleNameFromValidationScenario(scenario);
+    if (scenarioModule) names.push(scenarioModule);
   }
   for (const module of evidence.modules || []) {
     if (module.name) names.push(module.name);
+  }
+  for (const module of evidenceSummary?.modules || []) {
+    if (module.name && !isPlaceholderSummaryModule(module)) names.push(module.name);
+  }
+  for (const fn of evidenceSummary?.functions || []) {
+    if (fn.module) names.push(fn.module);
+    else if (fn.menuPath) names.push(String(fn.menuPath).split(">").map((item) => item.trim()).filter(Boolean)[0]);
+  }
+  for (const shot of evidenceSummary?.screenshots || []) {
+    if (shot.module) names.push(shot.module);
+    else if (shot.function) names.push(shot.function);
   }
   return uniqueStrings(names).filter((name) => !isHomeModuleName(name));
 }
@@ -194,24 +221,58 @@ function buildFlowFromValidationScenario(scenario, networkIndex) {
   };
 }
 
-function resolveModuleBusinessHint(name, module, system = {}) {
+function scenarioHasObservedFlowEvidence(scenario = {}) {
+  const status = String(scenario.status || "").trim().toLowerCase();
+  if (status && status !== "planned") return true;
+  if (Number(scenario.filledFieldCount || 0) > 0) return true;
+  if (String(scenario.screenshotPath || "").trim()) return true;
+  return false;
+}
+
+function buildPlannedFlowFromValidationScenario(scenario = {}) {
+  return {
+    name: scenario.buttonText ? `${scenario.buttonText}` : "试业务操作",
+    trigger: scenario.buttonText || scenario.action || "新建",
+    status: scenario.status || "planned",
+    reason: scenario.reason || "仅生成计划，未形成可写入主流程的页面操作证据。",
+  };
+}
+
+function resolveModuleBusinessHint(name, module, system = {}, evidenceSummary = null) {
   const hints = system.moduleBusinessHints;
   if (hints && typeof hints === "object" && hints[name]) {
     return String(hints[name]).trim();
   }
+  const summaryModule = (evidenceSummary?.modules || []).find((item) => item.name === name);
+  if (summaryModule?.summary && !isPlaceholderSummaryModule(summaryModule)) {
+    return String(summaryModule.summary).trim();
+  }
   return inferModuleBusinessHint(module);
 }
 
-function buildModuleSpec(name, evidence, writeValidation, networkIndex, system = {}) {
+function buildModuleSpec(name, evidence, writeValidation, networkIndex, system = {}, evidenceSummary = null) {
   const pages = pagesForMenu(evidence, name);
   const pageIds = new Set(pages.map((page) => page.id));
   const tables = (evidence.tableInventory || []).filter((table) => pageIds.has(table.pageId));
   const forms = (evidence.formInventory || []).filter((form) => pageIds.has(form.pageId));
   const actions = (evidence.actionInventory || []).filter((action) => pageIds.has(action.pageId));
-  const columns = uniqueStrings(tables.flatMap((table) => table.columns || []));
+  const summaryFunctions = (evidenceSummary?.functions || []).filter((fn) => {
+    const haystack = `${fn.module || ""} ${fn.name || ""} ${fn.menuPath || ""}`;
+    return haystack.includes(name);
+  });
+  const summaryScreenshots = (evidenceSummary?.screenshots || []).filter((shot) => {
+    const haystack = `${shot.module || ""} ${shot.function || ""} ${shot.caption || ""}`;
+    return haystack.includes(name);
+  });
+  const columns = uniqueStrings(
+    tables.flatMap((table) => table.columns || []).concat(
+      summaryFunctions.flatMap((fn) => fn.tableColumns || []),
+    ),
+  );
   const queryFields = uniqueStrings(
     forms
       .flatMap((form) => (form.fields || []).map((field) => field.label))
+      .concat(summaryFunctions.flatMap((fn) => fn.queryFields || []))
       .filter((label) => !isTechnicalFieldLabel(label) && !isGenericFieldLabel(label)),
   ).slice(0, 12);
   const rowActions = uniqueStrings(
@@ -224,11 +285,17 @@ function buildModuleSpec(name, evidence, writeValidation, networkIndex, system =
       (evidence.screenshotIndex || [])
         .filter((shot) => shot.module === name || shot.function === name)
         .map((shot) => shot.file),
+      summaryScreenshots.map((shot) => shot.file),
     ),
   );
-  const flows = (writeValidation?.scenarios || [])
-    .filter((scenario) => scenario.menuPath === name)
+  const validationScenarios = (writeValidation?.scenarios || [])
+    .filter((scenario) => moduleNameFromValidationScenario(scenario) === name);
+  const flows = validationScenarios
+    .filter((scenario) => scenarioHasObservedFlowEvidence(scenario))
     .map((scenario) => buildFlowFromValidationScenario(scenario, networkIndex));
+  const plannedFlows = validationScenarios
+    .filter((scenario) => !scenarioHasObservedFlowEvidence(scenario))
+    .map(buildPlannedFlowFromValidationScenario);
 
   const module = {
     name,
@@ -241,13 +308,14 @@ function buildModuleSpec(name, evidence, writeValidation, networkIndex, system =
       note: columns.length ? "" : "本轮未采集到列表列，待补采集。",
     },
     flows,
+    plannedFlows,
     tabs: uniqueStrings(
       pages.filter((page) => page.type === "container").map((page) => page.title),
     ),
     screenshots,
     apis: mapApisForContext(networkIndex, [name]),
   };
-  module.businessHint = resolveModuleBusinessHint(name, module, system);
+  module.businessHint = resolveModuleBusinessHint(name, module, system, evidenceSummary);
   return module;
 }
 
@@ -260,10 +328,12 @@ function extractRichHomeText(homePage) {
   return combined.slice(0, 240);
 }
 
-function buildModuleAggregateHint(evidence, writeValidation) {
-  const names = collectModuleNames(evidence, writeValidation);
+function buildModuleAggregateHint(evidence, writeValidation, evidenceSummary = null) {
+  const names = collectModuleNames(evidence, writeValidation, evidenceSummary);
   const columns = uniqueStrings(
-    (evidence.tableInventory || []).flatMap((table) => table.columns || []),
+    (evidence.tableInventory || []).flatMap((table) => table.columns || []).concat(
+      (evidenceSummary?.functions || []).flatMap((fn) => fn.tableColumns || []),
+    ),
   );
   const actions = uniqueStrings(
     (writeValidation?.scenarios || []).map((scenario) => scenario.menuPath),
@@ -273,7 +343,7 @@ function buildModuleAggregateHint(evidence, writeValidation) {
   return `平台提供${chunks.slice(0, 6).join("、")}等功能入口（依据菜单与页面结构归纳，非官方口径）。`;
 }
 
-function resolvePositioning(evidence, system = {}, writeValidation = null) {
+function resolvePositioning(evidence, system = {}, writeValidation = null, evidenceSummary = null) {
   const sources = [];
   let text = "";
   let confidence = "low";
@@ -284,7 +354,7 @@ function resolvePositioning(evidence, system = {}, writeValidation = null) {
     confidence = "high";
   }
 
-  const aggregate = buildModuleAggregateHint(evidence, writeValidation);
+  const aggregate = buildModuleAggregateHint(evidence, writeValidation, evidenceSummary);
   if (aggregate) {
     sources.push({ type: "module-aggregate", weight: 0.4 });
     if (!text) {
@@ -315,8 +385,8 @@ function resolvePositioning(evidence, system = {}, writeValidation = null) {
   return { text, confidence, sources };
 }
 
-function buildNavigation(evidence) {
-  return collectModuleNames(evidence).map((menuPath) => ({
+function buildNavigation(evidence, writeValidation = null, evidenceSummary = null) {
+  return collectModuleNames(evidence, writeValidation, evidenceSummary).map((menuPath) => ({
     menuPath,
     entry: `左侧「${menuPath}」`,
   }));
@@ -356,6 +426,12 @@ function buildPendingItems(spec, gate) {
         reason: "缺少列表列与主流程证据，需补采集。",
       });
     }
+    for (const flow of module.plannedFlows || []) {
+      pending.push({
+        topic: `${module.name} · ${flow.name}`,
+        reason: flow.reason || "试业务操作仅处于计划状态，尚未形成可写入主流程的页面证据。",
+      });
+    }
     for (const flow of module.flows || []) {
       if (flow.status === "partial" || flow.status === "failed") {
         pending.push({
@@ -378,6 +454,7 @@ function trimSpec(spec) {
   const clone = JSON.parse(JSON.stringify(spec));
   for (const module of clone.modules || []) {
     module.apis = (module.apis || []).slice(0, 6);
+    module.plannedFlows = (module.plannedFlows || []).slice(0, 4);
     for (const flow of module.flows || []) {
       for (const step of flow.steps || []) {
         step.apis = (step.apis || []).slice(0, 4);
@@ -584,6 +661,7 @@ function assertValidOperationGuideGateArtifact(gate = {}, spec = null) {
 function buildOperationSpec(options = {}) {
   const {
     evidence,
+    evidenceSummary = null,
     system = {},
     writeValidation = null,
     networkIndex = null,
@@ -593,9 +671,9 @@ function buildOperationSpec(options = {}) {
     throw new Error("buildOperationSpec requires evidence");
   }
 
-  const moduleNames = collectModuleNames(evidence, writeValidation);
+  const moduleNames = collectModuleNames(evidence, writeValidation, evidenceSummary);
   const modules = moduleNames.map((name) =>
-    buildModuleSpec(name, evidence, writeValidation, networkIndex, system),
+    buildModuleSpec(name, evidence, writeValidation, networkIndex, system, evidenceSummary),
   );
 
   const homePage = (evidence.pageInventory || []).find((page) => page.type === "home");
@@ -612,7 +690,7 @@ function buildOperationSpec(options = {}) {
     });
   }
 
-  const positioning = resolvePositioning(evidence, system, writeValidation);
+  const positioning = resolvePositioning(evidence, system, writeValidation, evidenceSummary);
   let spec = {
     artifactType: "operation-spec",
     version: 1,
@@ -622,7 +700,7 @@ function buildOperationSpec(options = {}) {
     systemName: system.name || evidence.systemInfo?.name || "",
     testUrl: evidence.systemInfo?.testUrl || system.url || "",
     positioning,
-    navigation: buildNavigation(evidence),
+    navigation: buildNavigation(evidence, writeValidation, evidenceSummary),
     modules,
     crossLinks: buildCrossLinks(evidence, writeValidation),
     networkEntryCount: (networkIndex?.entries || []).length,
@@ -656,9 +734,11 @@ function loadOperationSpecInputs(systemOutput, system = {}) {
   const writeValidation = readOptionalJsonObject(
     path.join(systemOutput, "write-validation-result.json"),
   );
+  const evidenceSummary = readOptionalJsonObject(path.join(systemOutput, "evidence-summary.json"));
   const networkIndex = readOptionalJsonObject(path.join(systemOutput, "network-index.json"));
   return buildOperationSpec({
     evidence,
+    evidenceSummary,
     system,
     writeValidation,
     networkIndex,

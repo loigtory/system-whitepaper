@@ -9,9 +9,22 @@ function hasAny(markdown, patterns) {
   return patterns.some((pattern) => pattern.test(markdown));
 }
 
+function operationSpecModuleNames(operationSpec = {}) {
+  return (Array.isArray(operationSpec.modules) ? operationSpec.modules : [])
+    .map((item) => String(item?.name || "").trim())
+    .filter(Boolean);
+}
+
+function countPattern(markdown, pattern) {
+  const matches = String(markdown || "").match(pattern);
+  return matches ? matches.length : 0;
+}
+
 function buildNarrativeQualityReport(input = {}) {
   const markdown = String(input.markdown || "");
   const evidenceSummary = input.evidenceSummary || {};
+  const operationSpec = input.operationSpec || {};
+  const specModuleNames = operationSpecModuleNames(operationSpec);
   const failures = [];
   const warnings = [];
   const text = markdown.replace(/\s+/g, "");
@@ -28,6 +41,52 @@ function buildNarrativeQualityReport(input = {}) {
     failures.push("待审稿缺少典型业务流程说明。");
   }
 
+  const h1Count = countPattern(markdown, /^#\s+/gm);
+  if (h1Count > 1) {
+    failures.push("待审稿包含多个一级标题，疑似混入旧片段标题或未完成组装。");
+  }
+
+  const forbiddenDraftPatterns = [
+    [/叙事片段/, "待审稿包含“叙事片段”等中间产物标题，需重新成稿。"],
+    [/functions\s*列表为空/i, "待审稿声称 functions 列表为空，需优先使用 operation-spec/verified-claims 重新成稿。"],
+    [/无法撰写核心功能说明|无法对以下维度给出已验证描述/, "待审稿仍是占位式能力说明，未形成可审核业务白皮书。"],
+    [/尚未执行\s*Playwright\s*页面探索/i, "待审稿引用了过期的 Playwright 未执行阻塞结论。"],
+    [/quality\s*摘要[^。\n]*P0/i, "待审稿引用了过期的 quality P0 摘要。"],
+    [/verified-claims（2026-05-25）/, "待审稿引用了过期 verified-claims 日期。"],
+    [/模块级断言仅有一项/, "待审稿仍按旧 verified-claims 占位模块写作。"],
+    [/本轮\s*evidence-summary\s*未包含可附录化的页面证据/, "待审稿附录未使用已有页面/截图证据。"],
+  ];
+  for (const [pattern, message] of forbiddenDraftPatterns) {
+    if (pattern.test(markdown)) failures.push(message);
+  }
+
+  if (specModuleNames.length) {
+    const coveredModules = specModuleNames.filter((name) => markdown.includes(name));
+    const requiredCoverage = Math.min(
+      specModuleNames.length,
+      Math.max(2, Math.ceil(specModuleNames.length * 0.75)),
+    );
+    if (coveredModules.length < requiredCoverage) {
+      failures.push(
+        `待审稿未充分覆盖 operation-spec 业务模块：已覆盖 ${coveredModules.length}/${specModuleNames.length}，至少需要 ${requiredCoverage}。`,
+      );
+    }
+    if (!specModuleNames.includes("本地") && /「本地」模块|模块名称\s*\|\s*证据状态/.test(markdown)) {
+      failures.push("待审稿仍把旧占位模块「本地」作为业务模块，需按 operation-spec 模块重写。");
+    }
+    if (/functions\s*列表为空|不宜编造.*业务流程|无法确认.*业务流程/.test(markdown)) {
+      failures.push("operation-spec 已包含模块/字段证据，待审稿不得退回到空功能占位叙述。");
+    }
+  }
+
+  const uncertaintyCount = countPattern(markdown, /无法|尚未|不宜|未覆盖|需补采|证据不足|待确认/g);
+  const uncertaintyLimit = Math.max(18, Math.floor(text.length / 220));
+  if (uncertaintyCount > uncertaintyLimit) {
+    failures.push(
+      `待审稿不确定性表述过多（${uncertaintyCount}/${uncertaintyLimit}），疑似以待确认清单替代业务成稿。`,
+    );
+  }
+
   if (!hasAny(markdown, [/证据/, /截图/, /本次取证/, /待确认/, /菜单/])) {
     warnings.push("待审稿较少体现证据边界，建议补充截图、菜单或待确认说明。");
   }
@@ -35,6 +94,8 @@ function buildNarrativeQualityReport(input = {}) {
   const pages = Array.isArray(evidenceSummary.pages) ? evidenceSummary.pages : [];
   const evidencePageCount =
     pages.length || Number(evidenceSummary.metrics?.counts?.pages || 0);
+  const operationSpecScreenshotCount = (Array.isArray(operationSpec.modules) ? operationSpec.modules : [])
+    .reduce((sum, item) => sum + (Array.isArray(item.screenshots) ? item.screenshots.length : 0), 0);
   return {
     artifactType: "narrative-quality-report",
     version: 1,
@@ -43,7 +104,7 @@ function buildNarrativeQualityReport(input = {}) {
     warnings,
     counts: {
       chars: text.length,
-      evidencePages: evidencePageCount,
+      evidencePages: Math.max(evidencePageCount, operationSpecScreenshotCount),
     },
   };
 }
@@ -112,6 +173,12 @@ function buildNarrativeSourceArtifacts(input = {}) {
       fingerprint: fingerprintFile(input.evidenceSummaryPath),
     };
   }
+  if (input.operationSpecPath) {
+    result.operationSpec = {
+      file: path.basename(input.operationSpecPath),
+      fingerprint: fingerprintFile(input.operationSpecPath),
+    };
+  }
   return result;
 }
 
@@ -120,6 +187,7 @@ function runNarrativeCheck(options = {}) {
   const markdownPath =
     options.markdownPath || path.join(inputDir, "whitepaper.pending-review.md");
   const summaryPath = options.evidenceSummaryPath || path.join(inputDir, "evidence-summary.json");
+  const operationSpecPath = options.operationSpecPath || path.join(inputDir, "operation-spec.json");
   const outputPath = options.outputPath || path.join(inputDir, "narrative-quality-report.json");
 
   if (!fs.existsSync(markdownPath)) {
@@ -130,7 +198,11 @@ function runNarrativeCheck(options = {}) {
       failures: [`Pending review markdown not found: ${markdownPath}`],
       warnings: [],
       counts: { chars: 0, evidencePages: 0 },
-      sourceArtifacts: buildNarrativeSourceArtifacts({ markdownPath, evidenceSummaryPath: summaryPath }),
+      sourceArtifacts: buildNarrativeSourceArtifacts({
+        markdownPath,
+        evidenceSummaryPath: summaryPath,
+        operationSpecPath,
+      }),
     };
     writeJson(outputPath, report);
     return report;
@@ -140,9 +212,16 @@ function runNarrativeCheck(options = {}) {
   const evidenceSummary = fs.existsSync(summaryPath)
     ? readRequiredJsonObject(summaryPath, { label: "Evidence summary" })
     : {};
+  const operationSpec = fs.existsSync(operationSpecPath)
+    ? readRequiredJsonObject(operationSpecPath, { label: "Operation spec" })
+    : {};
   const report = {
-    ...buildNarrativeQualityReport({ markdown, evidenceSummary }),
-    sourceArtifacts: buildNarrativeSourceArtifacts({ markdownPath, evidenceSummaryPath: summaryPath }),
+    ...buildNarrativeQualityReport({ markdown, evidenceSummary, operationSpec }),
+    sourceArtifacts: buildNarrativeSourceArtifacts({
+      markdownPath,
+      evidenceSummaryPath: summaryPath,
+      operationSpecPath,
+    }),
   };
   writeJson(outputPath, report);
   return report;

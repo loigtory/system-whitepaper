@@ -78,6 +78,52 @@ function loadSystem(configPath, systemCode) {
   };
 }
 
+function pathIsInside(parent, child) {
+  const parentPath = path.resolve(String(parent || ""));
+  const childPath = path.resolve(String(child || ""));
+  const relative = path.relative(parentPath, childPath);
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function timestampForPath(date = new Date()) {
+  return date.toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+}
+
+function resetSystemOutputDirectory(input = {}) {
+  const systemOutput = path.resolve(String(input.systemOutput || ""));
+  const outputRoot = path.resolve(String(input.outputRoot || ""));
+  const projectRoot = path.resolve(String(input.projectRoot || process.cwd()));
+  const systemCode = String(input.systemCode || "").trim();
+
+  if (!systemCode) throw new Error("Cannot reset output without a system code.");
+  if (!pathIsInside(outputRoot, systemOutput)) {
+    throw new Error(`Refusing to reset output outside output root: ${systemOutput}`);
+  }
+  if (path.basename(systemOutput) !== systemCode) {
+    throw new Error(`Refusing to reset unexpected system output directory: ${systemOutput}`);
+  }
+  if (!fs.existsSync(systemOutput)) return { reset: false, archivedTo: "" };
+
+  const backupRoot = path.join(projectRoot, ".tmp", "reset-output-backups");
+  fs.mkdirSync(backupRoot, { recursive: true });
+  const safeCode = systemCode.replace(/[^A-Za-z0-9._-]+/g, "-") || "system";
+  let archivedTo = path.join(backupRoot, `${safeCode}-${timestampForPath()}`);
+  let suffix = 1;
+  while (fs.existsSync(archivedTo)) {
+    archivedTo = path.join(backupRoot, `${safeCode}-${timestampForPath()}-${suffix}`);
+    suffix += 1;
+  }
+  fs.renameSync(systemOutput, archivedTo);
+  fs.mkdirSync(systemOutput, { recursive: true });
+  return { reset: true, archivedTo };
+}
+
+function shouldResetSystemOutput(args = {}, nodesToRun = []) {
+  if (!args.reset) return false;
+  if (args["keep-output-on-reset"]) return false;
+  return nodesToRun.includes("collect") || nodesToRun.includes("sync") || args["with-whitepaper"] || !args.nodes;
+}
+
 function selectedNodes(args) {
   if (args.nodes) {
     return String(args.nodes)
@@ -93,12 +139,12 @@ function selectedNodes(args) {
       "inspect",
       "validate-write",
       "summary",
+      "build-spec",
+      "compose-guide",
       "db-profile",
       "db-model",
       "truth-universe",
       "truth-claims",
-      "build-spec",
-      "compose-guide",
       "draft",
       "narrative",
       "fact-check",
@@ -150,6 +196,33 @@ function ensureFreshEvidenceSummary(context) {
     ],
     { cwd: projectRoot },
   );
+}
+
+function operationSpecNeedsRefresh(systemOutput) {
+  const specPath = path.join(systemOutput, "operation-spec.json");
+  const sourcePaths = [
+    path.join(systemOutput, "evidence.json"),
+    path.join(systemOutput, "write-validation-result.json"),
+    path.join(systemOutput, "network-index.json"),
+  ].filter((filePath) => fs.existsSync(filePath));
+  if (!fs.existsSync(specPath)) return false;
+  if (!sourcePaths.length) return false;
+  const specMtime = fs.statSync(specPath).mtimeMs;
+  return sourcePaths.some((filePath) => fs.statSync(filePath).mtimeMs > specMtime);
+}
+
+function ensureFreshOperationSpec(context) {
+  const { systemOutput, projectRoot, configPath, system, args } = context;
+  if (!operationSpecNeedsRefresh(systemOutput)) return null;
+  const specArgs = ["scripts/build-operation-spec.js"];
+  if (configPath && fs.existsSync(configPath)) {
+    specArgs.push("--config", configPath, "--system", system.code);
+  } else {
+    specArgs.push("--input", systemOutput);
+    if (system?.code) specArgs.push("--system", system.code);
+  }
+  if (args["allow-draft"]) specArgs.push("--allow-draft");
+  return runNodeScript(specArgs, { cwd: projectRoot });
 }
 
 function buildCollectNodeArgs(context) {
@@ -432,6 +505,7 @@ async function runPipelineNode(nodeId, context) {
   }
   if (nodeId === "truth-universe") {
     const summaryRefresh = ensureFreshEvidenceSummary(context);
+    const operationSpecRefresh = ensureFreshOperationSpec(context);
     const result = runNodeScript(
       [
         "scripts/build-function-universe.js",
@@ -440,7 +514,9 @@ async function runPipelineNode(nodeId, context) {
       ],
       { cwd: projectRoot },
     );
-    return summaryRefresh ? { ...result, summaryRefresh } : result;
+    return summaryRefresh || operationSpecRefresh
+      ? { ...result, summaryRefresh, operationSpecRefresh }
+      : result;
   }
   if (nodeId === "truth-claims") {
     return runNodeScript(
@@ -498,6 +574,7 @@ async function runPipelineNode(nodeId, context) {
       outputPath: path.join(systemOutput, "whitepaper.pending-review.md"),
       qualityReportPath: path.join(systemOutput, "quality-report.json"),
       verifiedClaimsPath: path.join(systemOutput, "verified-claims.json"),
+      operationSpecPath: path.join(systemOutput, "operation-spec.json"),
       promptOutputPath: path.join(systemOutput, "phase3b-prompt.md"),
       briefPath: path.join(systemOutput, "narrative-brief.md"),
       fragmentsPath: path.join(systemOutput, "narrative-fragments.md"),
@@ -641,10 +718,21 @@ async function main() {
     projectRoot,
   });
   args.narrativeProvider = narrativeProvider;
+  const nodesToRun = selectedNodes(args);
+  if (shouldResetSystemOutput(args, nodesToRun)) {
+    const resetResult = resetSystemOutputDirectory({
+      systemOutput,
+      outputRoot,
+      projectRoot,
+      systemCode: system.code,
+    });
+    if (resetResult.reset) {
+      console.log(`Reset output archived: ${resetResult.archivedTo}`);
+    }
+  }
   fs.mkdirSync(systemOutput, { recursive: true });
   const { statePath, state: initialState } = ensureState(systemOutput, system, Boolean(args.reset));
   let state = initialState;
-  const nodesToRun = selectedNodes(args);
   const batchStateOptions = { disabled: Boolean(args["no-batch-state"]) };
   const attemptedCoverageRepairFingerprints = new Set();
 
@@ -714,11 +802,16 @@ module.exports = {
   buildCoverageRepairPlan,
   buildCollectNodeArgs,
   ensureFreshEvidenceSummary,
+  ensureFreshOperationSpec,
   evidenceSummaryNeedsRefresh,
+  operationSpecNeedsRefresh,
   loadSystem,
+  pathIsInside,
   resolveNodeMaxAttempts,
+  resetSystemOutputDirectory,
   runPipelineNodeWithState,
   runPipelineNode,
   selectedNodes,
+  shouldResetSystemOutput,
   writeBatchState,
 };

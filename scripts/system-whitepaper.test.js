@@ -26,6 +26,7 @@ const {
   mergeContainerSnapshotIntoEvidence,
   mergeFormRecords,
   mergeFrameSnapshots,
+  mergeMenuMapEntries,
   mergePageSnapshotIntoEvidence,
   mergeTableRecords,
   parseCookieHeader,
@@ -328,6 +329,12 @@ function writePassingTruthArtifacts(dir, options = {}) {
       "utf8",
     );
   }
+  const evidenceSummaryPath = path.join(dir, "evidence-summary.json");
+  const evidenceSummary = buildEvidenceSummary(JSON.parse(fs.readFileSync(path.join(dir, "evidence.json"), "utf8")));
+  fs.writeFileSync(evidenceSummaryPath, JSON.stringify(evidenceSummary), "utf8");
+  writeOperationSpecFixture(dir, {
+    system: { code: options.systemCode || "adp", name: options.systemName || "AI保单数据闭环平台", operationGuideMinMenus: 1 },
+  });
   fs.writeFileSync(
     path.join(dir, "quality-report.json"),
     JSON.stringify({
@@ -343,6 +350,7 @@ function writePassingTruthArtifacts(dir, options = {}) {
       failures: [],
       sourceArtifacts: buildQualitySourceArtifacts({
         evidencePath: path.join(dir, "evidence.json"),
+        evidenceSummaryPath,
         operationSpecPath: path.join(dir, "operation-spec.json"),
         operationGuideGatePath: path.join(dir, "operation-guide-gate.json"),
       }),
@@ -383,9 +391,6 @@ function writePassingTruthArtifacts(dir, options = {}) {
   } else {
     buildDatabaseModelFromDir(dir, { generatedAt: "2026-06-03T00:00:00.000Z" });
   }
-  const evidenceSummaryPath = path.join(dir, "evidence-summary.json");
-  const evidenceSummary = buildEvidenceSummary(JSON.parse(fs.readFileSync(path.join(dir, "evidence.json"), "utf8")));
-  fs.writeFileSync(evidenceSummaryPath, JSON.stringify(evidenceSummary), "utf8");
   const functionUniversePath = path.join(dir, "function-universe.json");
   const readOptionalJson = (filePath) => fs.existsSync(filePath)
     ? JSON.parse(fs.readFileSync(filePath, "utf8"))
@@ -394,10 +399,12 @@ function writePassingTruthArtifacts(dir, options = {}) {
     evidenceSummary,
     databaseProfile: readOptionalJson(databaseProfilePath),
     entityModel: readOptionalJson(entityModelPath),
+    operationSpec: readOptionalJson(path.join(dir, "operation-spec.json")),
     sourceArtifacts: buildUniverseSourceArtifacts({
       evidenceSummary: evidenceSummaryPath,
       databaseProfile: databaseProfilePath,
       entityModel: entityModelPath,
+      operationSpec: path.join(dir, "operation-spec.json"),
     }),
     generatedAt: "2026-06-03T00:00:00.000Z",
   });
@@ -1748,6 +1755,24 @@ test("buildQualityReport ignores obsolete initial exploration blocker after evid
   assert.deepEqual(report.blockingIssues, []);
 });
 
+test("check-quality filters initial Playwright blocker when operation spec recovered surfaces", () => {
+  const { filterObsoleteQualityBlockedItems } = require("./check-quality");
+  const blockedItems = [
+    { severity: "P0", reason: "尚未执行 Playwright 页面探索", resolved: false },
+    { severity: "P1", reason: "保留的真实问题", resolved: false },
+  ];
+
+  assert.deepEqual(
+    filterObsoleteQualityBlockedItems(
+      blockedItems,
+      { gate: { canComposeGuide: true }, metrics: { moduleCount: 4, screenshotCount: 4 } },
+      null,
+    ),
+    [{ severity: "P1", reason: "保留的真实问题", resolved: false }],
+  );
+  assert.deepEqual(filterObsoleteQualityBlockedItems(blockedItems, null, null), blockedItems);
+});
+
 test("readOperationGuideGate skips missing gate but rejects malformed gate", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -2112,6 +2137,66 @@ test("buildEvidenceSummary compresses pages for narrative writing", () => {
   assert.ok(summary.guidance.includes("docs/narrative-guide.md"));
 });
 
+test("build evidence summary recovers sparse evidence from operation spec", () => {
+  const { mergeOperationSpecIntoEvidenceSummary } = require("./build-evidence-summary");
+  const sparseSummary = buildEvidenceSummary({
+    systemInfo: {
+      code: "adp",
+      name: "AI保单数据闭环平台",
+      testUrl: "https://sit-adp.hzins.com/",
+    },
+    menuMap: [],
+    pageInventory: [],
+    actionInventory: [],
+    formInventory: [],
+    tableInventory: [],
+    screenshotIndex: [],
+  });
+  const recovered = mergeOperationSpecIntoEvidenceSummary(sparseSummary, {
+    systemCode: "adp",
+    systemName: "AI保单数据闭环平台",
+    testUrl: "https://sit-adp.hzins.com/",
+    modules: [
+      {
+        name: "AI任务管理",
+        entry: "左侧「AI任务管理」菜单",
+        businessHint: "用于查看和处理保单数据闭环任务。",
+        list: {
+          columns: ["任务编号", "保单号", "处理状态"],
+          queryFields: ["任务编号", "保单号"],
+          rowActions: ["查询", "查看"],
+        },
+        screenshots: ["screenshots/ai-task.png"],
+        flows: [{ name: "任务查询", steps: ["进入菜单", "输入条件", "查看结果"] }],
+      },
+    ],
+  });
+
+  assert.equal(recovered.system.code, "adp");
+  assert.equal(recovered.modules[0].name, "AI任务管理");
+  assert.equal(recovered.functions[0].menuPath, "左侧「AI任务管理」菜单");
+  assert.deepEqual(recovered.functions[0].tableColumns, ["任务编号", "保单号", "处理状态"]);
+  assert.deepEqual(recovered.functions[0].queryFields, ["任务编号", "保单号"]);
+  assert.equal(recovered.screenshots[0].file, "screenshots/ai-task.png");
+  assert.equal(recovered.metrics.counts.pages, 1);
+});
+
+test("build evidence summary ignores missing operation spec recovery input", () => {
+  const { mergeOperationSpecIntoEvidenceSummary } = require("./build-evidence-summary");
+  const sparseSummary = buildEvidenceSummary({
+    systemInfo: { code: "adp", name: "AI保单数据闭环平台", testUrl: "https://sit-adp.hzins.com/" },
+    menuMap: [],
+    pageInventory: [],
+    actionInventory: [],
+    formInventory: [],
+    tableInventory: [],
+    screenshotIndex: [],
+  });
+
+  assert.doesNotThrow(() => mergeOperationSpecIntoEvidenceSummary(sparseSummary, null));
+  assert.strictEqual(mergeOperationSpecIntoEvidenceSummary(sparseSummary, null), sparseSummary);
+});
+
 test("buildPhase3bPrompt uses low-token inline inputs without reading large repo files", () => {
   const { buildPhase3bPrompt } = require("./narrative/phase3b");
   const prompt = buildPhase3bPrompt({
@@ -2314,13 +2399,66 @@ test("narrative brief and assembly keep business sections while appendix is scri
   assert.match(brief, /不要读取.*secrets\//);
   assert.match(brief, /不要读取.*\.playwright-\*/);
   assert.match(brief, /不要新增 `### P0`/);
-  assert.match(skeleton, /本骨架由脚本基于 evidence-summary 生成/);
+  assert.match(skeleton, /本骨架由脚本基于 evidence-summary \/ operation-spec 生成/);
   assert.match(skeleton, /\[待升华：业务定位/);
   assert.match(skeleton, /#### 任务列表/);
   assert.match(markdown, /## 1\. 系统概览/);
   assert.match(markdown, /## 4\. 典型业务流程/);
   assert.match(markdown, /## 7\. 附录：证据索引/);
   assert.match(markdown, /screenshots\/task\.png/);
+});
+
+test("phase3b redacts non-writable claim ids from prompts and assembled markdown", () => {
+  const {
+    assemblePendingReviewMarkdown,
+    buildPhase3bPrompt,
+  } = require("./narrative/phase3b");
+  const claimsArtifact = verifiedClaimsFixture([
+    {
+      id: "function:保单任务:任务列表",
+      type: "function-presence",
+      subject: "任务列表",
+      module: "保单任务",
+      writable: true,
+      status: "confirmed",
+    },
+    {
+      id: "entity:adp-test-policy-task",
+      type: "business-entity",
+      subject: "保单实体",
+      module: "保单任务",
+      writable: false,
+      status: "weak",
+    },
+  ]);
+  const summary = {
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    modules: [{ name: "保单任务" }],
+    functions: [{ module: "保单任务", name: "任务列表" }],
+  };
+  const prompt = buildPhase3bPrompt({
+    systemName: "AI保单数据闭环平台",
+    evidenceSummary: summary,
+    qualityReport: {},
+    verifiedClaims: claimsArtifact,
+  });
+  const markdown = assemblePendingReviewMarkdown({
+    evidenceSummary: summary,
+    verifiedClaims: claimsArtifact,
+    fragments: [
+      "## 3. 核心功能说明",
+      "保单任务模块提供任务列表。[claim:function:保单任务:任务列表]",
+      "## 6. 待确认事项",
+      "- 保单实体需要结合数据库或接口证据确认。[claim:entity:adp-test-policy-task]",
+    ].join("\n\n"),
+  });
+
+  assert.match(prompt, /function:保单任务:任务列表/);
+  assert.doesNotMatch(prompt, /entity:adp-test-policy-task/);
+  assert.match(prompt, /sourceClaimIdRedacted/);
+  assert.match(markdown, /\[claim:function:保单任务:任务列表]/);
+  assert.doesNotMatch(markdown, /\[claim:entity:adp-test-policy-task]/);
+  assert.match(markdown, /保单实体需要结合数据库或接口证据确认。/);
 });
 
 test("phase3b split prompts scope overview and module writing separately", () => {
@@ -2463,6 +2601,75 @@ test("phase3b builds module parts from module inventory without functions", () =
   assert.deepEqual(moduleSummary.functions, []);
 });
 
+test("phase3b preparation prefers operation spec over stale placeholder summary", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { writePreparationFiles } = require("./narrative/phase3b");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-operation-spec-"));
+  fs.writeFileSync(
+    path.join(dir, "evidence-summary.json"),
+    JSON.stringify({
+      system: { code: "adp", name: "AI保单数据闭环平台" },
+      metrics: { counts: { pages: 0 } },
+      modules: [{ name: "本地", entry: "本地", summary: "旧占位模块" }],
+      functions: [],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(dir, "quality-report.json"), JSON.stringify({ failures: [], warnings: [] }), "utf8");
+  fs.writeFileSync(
+    path.join(dir, "operation-spec.json"),
+    JSON.stringify({
+      artifactType: "operation-spec",
+      systemCode: "adp",
+      systemName: "AI保单数据闭环平台",
+      testUrl: "https://sit-adp.hzins.com/",
+      positioning: { text: "覆盖需求输出、需求验证、需求验收与数据监控。" },
+      modules: [
+        {
+          name: "AI任务管理",
+          entry: "左侧「AI任务管理」",
+          businessHint: "配置、查询并执行保司数据对接 AI 任务。",
+          list: { columns: ["保险公司", "任务类型"], queryFields: ["全部"], rowActions: [] },
+          screenshots: ["screenshots/task.png"],
+        },
+        {
+          name: "AI发布管理",
+          entry: "左侧「AI发布管理」",
+          businessHint: "管理 AI 能力发布与上线。",
+          list: { columns: ["保险公司", "配置质量"], queryFields: ["全部"], rowActions: [] },
+          screenshots: ["screenshots/publish.png"],
+        },
+      ],
+    }),
+    "utf8",
+  );
+  writeVerifiedClaimsFixture(dir);
+
+  const prepared = writePreparationFiles({
+    systemCode: "adp",
+    systemName: "AI保单数据闭环平台",
+    evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
+    operationSpecPath: path.join(dir, "operation-spec.json"),
+    qualityReportPath: path.join(dir, "quality-report.json"),
+    outputPath: path.join(dir, "whitepaper.pending-review.md"),
+  });
+  const skeleton = fs.readFileSync(path.join(dir, "whitepaper.skeleton.md"), "utf8");
+  const prompt = fs.readFileSync(path.join(dir, "phase3b-prompt.md"), "utf8");
+
+  assert.deepEqual(
+    prepared.parts.filter((item) => item.type === "module").map((item) => item.moduleName),
+    ["AI任务管理", "AI发布管理"],
+  );
+  assert.equal(prepared.evidenceSummary.functions.length, 2);
+  assert.match(skeleton, /AI任务管理/);
+  assert.match(skeleton, /AI发布管理/);
+  assert.doesNotMatch(skeleton, /本地/);
+  assert.match(prompt, /operation-spec 是优先业务证据/);
+  assert.match(prompt, /AI任务管理/);
+});
+
 test("manual phase3b provider writes prompt without fabricating pending review", async () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -2480,6 +2687,8 @@ test("manual phase3b provider writes prompt without fabricating pending review",
     }),
     "utf8",
   );
+  writeOperationSpecFixture(dir);
+  writeQualityReportFixture(dir);
   fs.writeFileSync(
     path.join(dir, "quality-report.json"),
     JSON.stringify({ failures: [], warnings: [], counts: { evidencePages: 1 } }),
@@ -3147,6 +3356,7 @@ test("phase3b part assembly replaces selected fragments while preserving baselin
     qualityReportPath: path.join(dir, "quality-report.json"),
     promptOutputPath: path.join(dir, "phase3b-prompt.md"),
     forceAssembleParts: true,
+    narrativePart: "overview-flow,AI任务",
   });
 
   const fragments = fs.readFileSync(path.join(dir, "narrative-fragments.md"), "utf8");
@@ -3224,6 +3434,7 @@ test("phase3b part assembly ignores stale unselected module fragments", () => {
       outputPath: path.join(dir, "whitepaper.pending-review.md"),
       systemName: "AI保单数据闭环平台",
       forceAssembleParts: true,
+      narrativePart: "AI任务",
     },
     { system: { name: "AI保单数据闭环平台" }, functions: [] },
     parts,
@@ -3286,6 +3497,7 @@ test("phase3b overview-only assembly replaces section 2 when no module fragments
       outputPath: path.join(dir, "whitepaper.pending-review.md"),
       systemName: "AI保单数据闭环平台",
       forceAssembleParts: true,
+      narrativePart: "overview-flow",
     },
     { system: { name: "AI保单数据闭环平台" }, functions: [] },
     parts,
@@ -3341,6 +3553,95 @@ test("phase3b module overview matching preserves module names with spaces", () =
   assert.match(fragments, /旧脚本模块概览/);
   assert.match(fragments, /旧脚本模块说明/);
   assert.doesNotMatch(fragments, /旧任务模块概览/);
+});
+
+test("phase3b full part assembly does not inherit stale baseline sections", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    assembleIfFragmentsExist,
+    buildNarrativeParts,
+    selectNarrativeParts,
+  } = require("./narrative/phase3b");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-full-no-baseline-"));
+  fs.writeFileSync(
+    path.join(dir, "narrative-fragments.md"),
+    [
+      "## 1. 系统概览",
+      "旧概览，尚未执行 Playwright 页面探索。",
+      "## 2. 功能模块概览",
+      "- **本地**：旧占位模块。",
+      "## 3. 核心功能说明",
+      "functions 列表为空，无法撰写核心功能说明。",
+      "## 4. 典型业务流程",
+      "旧流程，不宜编造。",
+    ].join("\n\n"),
+    "utf8",
+  );
+  fs.mkdirSync(path.join(dir, "narrative-fragments"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "narrative-fragments", "module-AI任务.md"),
+    [
+      "## 2. 功能模块概览",
+      "- **AI任务**：新AI任务概览。",
+      "## 3. 核心功能说明",
+      "### AI任务",
+      "新AI任务说明。",
+    ].join("\n\n"),
+    "utf8",
+  );
+
+  const parts = buildNarrativeParts(
+    { outputPath: path.join(dir, "whitepaper.pending-review.md") },
+    { functions: [{ module: "AI任务", name: "任务列表" }] },
+  );
+  const selectedParts = selectNarrativeParts(parts, "AI任务");
+  assembleIfFragmentsExist(
+    {
+      outputPath: path.join(dir, "whitepaper.pending-review.md"),
+      systemName: "AI保单数据闭环平台",
+      forceAssembleParts: true,
+    },
+    { system: { name: "AI保单数据闭环平台" }, functions: [] },
+    parts,
+    selectedParts,
+  );
+
+  const fragments = fs.readFileSync(path.join(dir, "narrative-fragments.md"), "utf8");
+  assert.match(fragments, /新AI任务概览/);
+  assert.match(fragments, /新AI任务说明/);
+  assert.doesNotMatch(fragments, /尚未执行 Playwright/);
+  assert.doesNotMatch(fragments, /functions 列表为空/);
+  assert.doesNotMatch(fragments, /本地/);
+});
+
+test("phase3b sanitizes model-only headings before final assembly", () => {
+  const { sanitizeNarrativeFragments } = require("./narrative/phase3b");
+  const markdown = sanitizeNarrativeFragments(
+    [
+      "# AI保单数据闭环平台 · 业务叙事片段",
+      "",
+      "## 3. 核心功能说明",
+      "### AI任务管理",
+      "模块说明。",
+      "",
+      "## 4. 典型业务流程",
+      "### 保司数据对接 AI 任务闭环",
+      "流程说明。",
+      "",
+      "## 6. 待确认事项",
+      "### P0",
+      "- 待确认。",
+    ].join("\n"),
+  );
+
+  assert.doesNotMatch(markdown, /^#\s+/m);
+  assert.match(markdown, /^### AI任务管理$/m);
+  assert.doesNotMatch(markdown, /^### 保司数据对接/m);
+  assert.match(markdown, /\*\*保司数据对接 AI 任务闭环\*\*/);
+  assert.doesNotMatch(markdown, /^### P0$/m);
 });
 
 test("phase3b core function matching normalizes decorated module headings", () => {
@@ -4046,6 +4347,34 @@ test("pipeline state initializes truth phase and guarded whitepaper nodes for ad
   assert.equal(Object.keys(state.nodes).length, 18);
 });
 
+test("pipeline reset archives and clears existing system output before fresh collection", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    resetSystemOutputDirectory,
+    shouldResetSystemOutput,
+  } = require("./run-whitepaper-pipeline");
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-reset-output-"));
+  const outputRoot = path.join(projectRoot, "outputs");
+  const systemOutput = path.join(outputRoot, "adp");
+  fs.mkdirSync(systemOutput, { recursive: true });
+  fs.writeFileSync(path.join(systemOutput, "stale-evidence.json"), "{}", "utf8");
+
+  assert.equal(shouldResetSystemOutput({ reset: true, "with-whitepaper": true }, ["sync", "collect"]), true);
+  const result = resetSystemOutputDirectory({
+    systemOutput,
+    outputRoot,
+    projectRoot,
+    systemCode: "adp",
+  });
+
+  assert.equal(result.reset, true);
+  assert.equal(fs.existsSync(systemOutput), true);
+  assert.equal(fs.existsSync(path.join(systemOutput, "stale-evidence.json")), false);
+  assert.equal(fs.existsSync(path.join(result.archivedTo, "stale-evidence.json")), true);
+});
+
 test("migratePipelineState backfills build-spec and compose-guide on legacy state", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -4470,6 +4799,54 @@ test("narrative quality counts pages from evidence summary metrics", () => {
   });
 
   assert.equal(report.counts.evidencePages, 1);
+});
+
+test("narrative quality blocks placeholder draft when operation spec has business modules", () => {
+  const { buildNarrativeQualityReport } = require("./check-narrative");
+  const report = buildNarrativeQualityReport({
+    minChars: 100,
+    operationSpec: {
+      modules: [
+        { name: "AI任务管理", screenshots: ["screenshots/task.png"] },
+        { name: "AI发布管理", screenshots: ["screenshots/publish.png"] },
+        { name: "数据与运行观测", screenshots: ["screenshots/monitor.png"] },
+        { name: "元数据管理", screenshots: ["screenshots/meta.png"] },
+      ],
+    },
+    markdown: [
+      "# AI保单数据闭环平台功能白皮书（待审核）",
+      "",
+      "# AI保单数据闭环平台 — 叙事片段",
+      "",
+      "## 1. 系统概览",
+      "quality 摘要标记 P0 阻塞：尚未执行 Playwright 页面探索。",
+      "",
+      "## 2. 功能模块概览",
+      "| 模块名称 | 证据状态 | 说明 |",
+      "| 本地 | 已推断存在 | UI 模块/菜单证据可证明系统暴露了名为「本地」的功能模块。 |",
+      "",
+      "## 3. 核心功能说明",
+      "evidence-summary 中 functions 列表为空，无法撰写核心功能说明。",
+      "",
+      "## 4. 典型业务流程",
+      "当前无已验证的功能级断言与容器级流程证据，不宜编造端到端业务流程。",
+      "",
+      "## 5. 使用角色与权限边界",
+      "无法确认角色权限边界。",
+      "",
+      "## 6. 待确认事项",
+      "- 待确认：verified-claims（2026-05-25）需补采。",
+      "",
+      "## 7. 附录：证据索引",
+      "- 本轮 evidence-summary 未包含可附录化的页面证据。",
+    ].join("\n"),
+  });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.match(report.failures.join("\n"), /叙事片段/);
+  assert.match(report.failures.join("\n"), /functions 列表为空/);
+  assert.match(report.failures.join("\n"), /operation-spec 业务模块/);
+  assert.match(report.failures.join("\n"), /本地/);
 });
 
 test("check-narrative fails on malformed evidence summary without writing report", () => {
@@ -6046,6 +6423,8 @@ test("dashboard snapshot infers legacy review rerun usage from nearby review dec
     }),
     "utf8",
   );
+  writeOperationSpecFixture(dir);
+  writeQualityReportFixture(dir);
   fs.writeFileSync(
     path.join(output, "phase3b-usage.json"),
     JSON.stringify({
@@ -11289,12 +11668,12 @@ test("pipeline default node list uses operation guide path before whitepaper", (
     "inspect",
     "validate-write",
     "summary",
+    "build-spec",
+    "compose-guide",
     "db-profile",
     "db-model",
     "truth-universe",
     "truth-claims",
-    "build-spec",
-    "compose-guide",
     "draft",
     "narrative",
     "fact-check",
@@ -12512,6 +12891,41 @@ test("isEnvironmentSwitcherMenu excludes adp environment switch links", () => {
   );
 });
 
+test("mergePageSnapshotIntoEvidence filters environment switcher links", () => {
+  const evidence = createInitialEvidence({ code: "adp", name: "AI保单数据闭环平台", url: "https://sit-adp.hzins.com/" });
+  mergePageSnapshotIntoEvidence(evidence, {
+    id: "home",
+    title: "AI保单数据闭环平台",
+    url: "https://sit-adp.hzins.com/",
+    links: [
+      { text: "本地/UAT 环境", href: "https://sit-adp.hzins.com/#" },
+      { text: "生产环境", href: "https://sit-adp.hzins.com/#" },
+      { text: "AI 任务管理", href: "https://sit-adp.hzins.com/#/task" },
+    ],
+    buttons: [],
+    forms: [],
+    tables: [],
+  });
+
+  assert.deepEqual(
+    evidence.menuMap.map((item) => item.title),
+    ["AI 任务管理"],
+  );
+});
+
+test("mergeMenuMapEntries drops existing environment switcher menu entries", () => {
+  const merged = mergeMenuMapEntries([
+    { title: "本地/UAT 环境", menuPath: "本地/UAT 环境", url: "https://sit-adp.hzins.com/#" },
+    { title: "生产环境", menuPath: "生产环境", url: "https://sit-adp.hzins.com/#" },
+    { title: "AI 任务管理", menuPath: "AI 任务管理", url: "https://sit-adp.hzins.com/#/task" },
+  ]);
+
+  assert.deepEqual(
+    merged.map((item) => item.title),
+    ["AI 任务管理"],
+  );
+});
+
 test("applyVisibleDomMenuCandidatesToEvidence filters environment switchers", () => {
   const { applyVisibleDomMenuCandidatesToEvidence } = require("./collect-evidence");
   const evidence = { menuMap: [] };
@@ -12911,6 +13325,59 @@ test("buildOperationSpec prefers registry positioning over homepage-only signals
   assert.equal(spec.positioning.sources[0].type, "registry");
   assert.equal(spec.modules.some((item) => item.name === "AI任务管理"), true);
   assert.equal(spec.modules.find((item) => item.name === "AI任务管理").flows.length, 1);
+  assert.equal(gate.counts.modules, 4);
+  assert.equal(gate.canComposeGuide, true);
+});
+
+test("buildOperationSpec derives module surfaces from evidence summary screenshots when evidence is sparse", () => {
+  const { buildOperationSpec } = require("./operation-spec/lib");
+  const { spec, gate } = buildOperationSpec({
+    evidence: {
+      systemInfo: { code: "adp", name: "AI保单数据闭环平台", testUrl: "https://sit-adp.hzins.com/" },
+      menuMap: [],
+      pageInventory: [],
+      tableInventory: [],
+      actionInventory: [],
+      formInventory: [],
+      screenshotIndex: [],
+    },
+    evidenceSummary: {
+      modules: [{ name: "本地", entry: "本地", summary: "共 0 个菜单页，已采集 0 个。" }],
+      functions: [],
+      screenshots: [
+        { module: "AI任务管理", function: "AI任务管理", file: "screenshots/task.png" },
+        { module: "AI发布管理", function: "AI发布管理", file: "screenshots/publish.png" },
+        { module: "数据与运行观测", function: "数据与运行观测", file: "screenshots/monitor.png" },
+        { module: "元数据管理", function: "元数据管理", file: "screenshots/meta.png" },
+      ],
+    },
+    system: {
+      code: "adp",
+      name: "AI保单数据闭环平台",
+      businessHint: "AI 数据闭环平台用于解决保险中介产品上架最后一公里问题。",
+      operationGuideMinMenus: 4,
+      moduleBusinessHints: {
+        AI任务管理: "配置、查询并执行保司数据对接 AI 任务。",
+      },
+    },
+    writeValidation: {
+      scenarios: [
+        { id: "auto-AI任务管理", action: "create", targetName: "AI_AUTO_TEST_AI任务管理", status: "planned" },
+      ],
+    },
+  });
+
+  assert.deepEqual(spec.modules.map((item) => item.name), [
+    "AI任务管理",
+    "AI发布管理",
+    "数据与运行观测",
+    "元数据管理",
+  ]);
+  assert.equal(spec.modules.find((item) => item.name === "AI任务管理").screenshots[0], "screenshots/task.png");
+  assert.equal(spec.modules.find((item) => item.name === "AI任务管理").businessHint, "配置、查询并执行保司数据对接 AI 任务。");
+  assert.equal(spec.modules.find((item) => item.name === "AI任务管理").flows.length, 0);
+  assert.equal(spec.modules.find((item) => item.name === "AI任务管理").plannedFlows.length, 1);
+  assert.ok(spec.pending.some((item) => /AI任务管理/.test(item.topic || "") && /计划状态|缺少列表列/.test(item.reason || "")));
   assert.equal(gate.counts.modules, 4);
   assert.equal(gate.canComposeGuide, true);
 });
@@ -14526,6 +14993,68 @@ test("build function universe merges UI functions and redacted database entities
   );
 });
 
+test("build function universe derives modules and functions from operation spec", () => {
+  const { buildFunctionUniverseArtifact } = require("./build-function-universe");
+  const { buildVerifiedClaimsArtifact } = require("./build-verified-claims");
+  const artifact = buildFunctionUniverseArtifact({
+    evidenceSummary: {
+      system: { code: "adp", name: "AI保单数据闭环平台" },
+      modules: [{ name: "本地", summary: "旧占位模块" }],
+      functions: [],
+    },
+    operationSpec: {
+      systemCode: "adp",
+      systemName: "AI保单数据闭环平台",
+      testUrl: "https://sit-adp.hzins.com/",
+      modules: [
+        {
+          name: "AI任务管理",
+          entry: "左侧「AI任务管理」",
+          businessHint: "配置、查询并执行保司数据对接 AI 任务。",
+          list: {
+            columns: ["保险公司", "任务类型", "需求状态"],
+            queryFields: ["全部", "高风险需关注"],
+            rowActions: [],
+          },
+          screenshots: ["screenshots/task.png"],
+        },
+        {
+          name: "数据与运行观测",
+          entry: "左侧「数据与运行观测」",
+          businessHint: "查看任务运行指标、异常告警与数据质量监控。",
+          list: {
+            columns: ["保险公司", "配置质量"],
+            queryFields: ["全部"],
+            rowActions: [],
+          },
+          screenshots: ["screenshots/monitor.png"],
+        },
+      ],
+    },
+    sourceArtifacts: {
+      evidenceSummary: { file: "evidence-summary.json", fingerprint: { exists: true, size: 1, sha256: "fixture" } },
+      operationSpec: { file: "operation-spec.json", fingerprint: { exists: true, size: 1, sha256: "fixture" } },
+    },
+  });
+
+  assert.deepEqual(artifact.modules.map((item) => item.name), ["AI任务管理", "数据与运行观测", "本地"]);
+  assert.deepEqual(artifact.functions.map((item) => item.name), ["AI任务管理", "数据与运行观测"]);
+  assert.equal(artifact.functions[0].evidenceStrength, "high");
+  assert.equal(artifact.functions[0].sources.some((source) => source.type === "screenshot"), true);
+  assert.equal(artifact.system.testUrl, "https://sit-adp.hzins.com/");
+
+  const claims = buildVerifiedClaimsArtifact({ functionUniverse: artifact });
+  assert.deepEqual(
+    claims.claims
+      .filter((claim) => claim.type === "function-presence")
+      .map((claim) => [claim.subject, claim.status, claim.writable]),
+    [
+      ["AI任务管理", "confirmed", true],
+      ["数据与运行观测", "confirmed", true],
+    ],
+  );
+});
+
 test("build function universe rejects malformed optional database profile before writing artifact", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -14986,7 +15515,7 @@ test("build verified claims rejects links without matching function or entity ev
 });
 
 test("build verified claims never marks database-only claims writable", () => {
-  const { claimIsWritable } = require("./build-verified-claims");
+  const { claimHasStructuredFunctionEvidence, claimIsWritable } = require("./build-verified-claims");
 
   assert.equal(
     claimIsWritable({
@@ -15004,6 +15533,28 @@ test("build verified claims never marks database-only claims writable", () => {
         { type: "ui-function", id: "保单任务 > 任务列表" },
         { type: "db-table", id: "adp_test.policy_task" },
       ],
+    }),
+    true,
+  );
+  const screenshotOnlyFunction = {
+    type: "function-presence",
+    status: "confirmed",
+    evidence: {
+      actions: [],
+      queryFields: [],
+      tableColumns: [],
+    },
+    sources: [
+      { type: "ui-function", id: "左侧「AI任务管理」" },
+      { type: "screenshot", id: "screenshots/task.png" },
+    ],
+  };
+  assert.equal(claimHasStructuredFunctionEvidence(screenshotOnlyFunction), false);
+  assert.equal(claimIsWritable(screenshotOnlyFunction), false);
+  assert.equal(
+    claimIsWritable({
+      ...screenshotOnlyFunction,
+      evidence: { ...screenshotOnlyFunction.evidence, tableColumns: ["任务编号"] },
     }),
     true,
   );
@@ -15142,12 +15693,77 @@ function writeQualityReportFixture(dir, overrides = {}) {
     JSON.stringify(qualityReportFixture({
       sourceArtifacts: buildQualitySourceArtifacts({
         evidencePath: path.join(dir, "evidence.json"),
+        evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
+        operationSpecPath: path.join(dir, "operation-spec.json"),
         operationGuideGatePath: path.join(dir, "operation-guide-gate.json"),
       }),
       ...overrides,
     })),
     "utf8",
   );
+}
+
+function writeOperationSpecFixture(dir, options = {}) {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const {
+    buildOperationSpec,
+    buildOperationSpecSourceArtifacts,
+    fingerprintFile,
+  } = require("./operation-spec/lib");
+  const evidencePath = path.join(dir, "evidence.json");
+  const evidenceSummaryPath = path.join(dir, "evidence-summary.json");
+  const writeValidationPath = path.join(dir, "write-validation-result.json");
+  const networkIndexPath = path.join(dir, "network-index.json");
+  const operationSpecPath = path.join(dir, "operation-spec.json");
+  const operationGuideGatePath = path.join(dir, "operation-guide-gate.json");
+  const evidence = fs.existsSync(evidencePath)
+    ? JSON.parse(fs.readFileSync(evidencePath, "utf8"))
+    : {
+        systemInfo: { code: "adp", name: "AI保单数据闭环平台" },
+        menuMap: [],
+        pageInventory: [],
+        actionInventory: [],
+        formInventory: [],
+        tableInventory: [],
+        screenshotIndex: [],
+      };
+  const evidenceSummary = fs.existsSync(evidenceSummaryPath)
+    ? JSON.parse(fs.readFileSync(evidenceSummaryPath, "utf8"))
+    : buildEvidenceSummary(evidence);
+  if (!fs.existsSync(evidenceSummaryPath)) {
+    fs.writeFileSync(evidenceSummaryPath, JSON.stringify(evidenceSummary), "utf8");
+  }
+  const { spec, gate } = buildOperationSpec({
+    evidence,
+    evidenceSummary,
+    writeValidation: fs.existsSync(writeValidationPath)
+      ? JSON.parse(fs.readFileSync(writeValidationPath, "utf8"))
+      : null,
+    networkIndex: fs.existsSync(networkIndexPath)
+      ? JSON.parse(fs.readFileSync(networkIndexPath, "utf8"))
+      : null,
+    system: options.system || { code: "adp", name: "AI保单数据闭环平台", operationGuideMinMenus: 1 },
+    sourceArtifacts: buildOperationSpecSourceArtifacts({
+      evidencePath,
+      evidenceSummaryPath,
+      writeValidationPath,
+      networkIndexPath,
+    }),
+    generatedAt: options.generatedAt || "2026-06-03T00:00:00.000Z",
+  });
+  fs.writeFileSync(operationSpecPath, JSON.stringify(spec), "utf8");
+  gate.sourceArtifacts = {
+    operationSpec: {
+      file: "operation-spec.json",
+      status: "ok",
+      fingerprint: fingerprintFile(operationSpecPath),
+    },
+    evidence: spec.sourceArtifacts.evidence,
+    evidenceSummary: spec.sourceArtifacts.evidenceSummary,
+  };
+  fs.writeFileSync(operationGuideGatePath, JSON.stringify(gate), "utf8");
+  return { spec, gate, operationSpecPath, operationGuideGatePath };
 }
 
 function truthReadinessReportFixture(dir, overrides = {}) {
@@ -15648,7 +16264,6 @@ test("truth readiness rejects stale database truth lineage", () => {
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-lineage-db-"));
-  writeQualityReportFixture(dir);
   fs.writeFileSync(
     path.join(dir, "evidence-summary.json"),
     JSON.stringify({
@@ -15667,6 +16282,7 @@ test("truth readiness rejects stale database truth lineage", () => {
     }),
     "utf8",
   );
+  writeQualityReportFixture(dir);
   fs.writeFileSync(
     path.join(dir, "database-profile.json"),
     JSON.stringify({
@@ -15858,7 +16474,6 @@ test("truth readiness rejects forged database model artifacts against current pr
   const { runNarrativeCheck } = require("./check-narrative");
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-forged-db-model-current-profile-"));
-  writeQualityReportFixture(dir);
   fs.writeFileSync(
     path.join(dir, "evidence-summary.json"),
     JSON.stringify({
@@ -15877,6 +16492,7 @@ test("truth readiness rejects forged database model artifacts against current pr
     }),
     "utf8",
   );
+  writeQualityReportFixture(dir);
   fs.writeFileSync(
     path.join(dir, "database-profile.json"),
     JSON.stringify({
@@ -16112,7 +16728,7 @@ test("truth readiness rejects forged function universe against current sources",
   assert.equal(report.gates.lineage.pass, false);
   assert.ok(
     report.gates.lineage.failures.some((item) =>
-      /deterministic function-universe recomputation from current evidence-summary\/database inputs/.test(item),
+      /deterministic function-universe recomputation from current evidence-summary\/operation-spec\/database inputs/.test(item),
     ),
   );
   assert.ok(report.blockers.some((item) => item.id === "truth.lineage-stale"));
@@ -16877,10 +17493,12 @@ test("truth readiness rejects forged quality reports against current evidence", 
   const os = require("node:os");
   const path = require("node:path");
   const { buildQualitySourceArtifacts } = require("./check-quality");
+  const { runNarrativeCheck } = require("./check-narrative");
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-forged-quality-current-evidence-"));
   writePassingTruthArtifacts(dir, { databaseProfile: false });
   const evidencePath = path.join(dir, "evidence.json");
+  const evidenceSummaryPath = path.join(dir, "evidence-summary.json");
   fs.writeFileSync(
     evidencePath,
     JSON.stringify({
@@ -16896,6 +17514,7 @@ test("truth readiness rejects forged quality reports against current evidence", 
     JSON.stringify(qualityReportFixture({
       sourceArtifacts: buildQualitySourceArtifacts({
         evidencePath,
+        evidenceSummaryPath,
         operationSpecPath: path.join(dir, "operation-spec.json"),
         operationGuideGatePath: path.join(dir, "operation-guide-gate.json"),
       }),
@@ -16910,7 +17529,7 @@ test("truth readiness rejects forged quality reports against current evidence", 
   assert.equal(report.gates.evidence.artifactContractValid, false);
   assert.ok(
     report.gates.evidence.failures.some((item) =>
-      /deterministic quality recomputation from current evidence\.json/.test(item),
+      /deterministic quality recomputation from current evidence\/evidence-summary\/operation-spec inputs/.test(item),
     ),
   );
   assert.ok(report.blockers.some((item) => item.id === "evidence.invalid-artifact"));
@@ -16965,28 +17584,22 @@ test("truth readiness rejects forged operation spec against current evidence", (
   const os = require("node:os");
   const path = require("node:path");
   const { buildQualitySourceArtifacts } = require("./check-quality");
-  const {
-    buildOperationSpec,
-    buildOperationSpecSourceArtifacts,
-  } = require("./operation-spec/lib");
+  const { runNarrativeCheck } = require("./check-narrative");
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-forged-operation-spec-current-evidence-"));
   writePassingTruthArtifacts(dir, { databaseProfile: false });
   const evidencePath = path.join(dir, "evidence.json");
+  const evidenceSummaryPath = path.join(dir, "evidence-summary.json");
   const operationSpecPath = path.join(dir, "operation-spec.json");
   const operationGuideGatePath = path.join(dir, "operation-guide-gate.json");
-  const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
-  const { spec } = buildOperationSpec({
-    evidence,
-    system: { code: "adp", name: "AI保单数据闭环平台" },
-    sourceArtifacts: buildOperationSpecSourceArtifacts({ evidencePath }),
-  });
-  fs.writeFileSync(operationSpecPath, JSON.stringify(spec), "utf8");
+  writeOperationSpecFixture(dir);
+  runNarrativeCheck({ inputDir: dir });
   fs.writeFileSync(
     path.join(dir, "quality-report.json"),
     JSON.stringify(qualityReportFixture({
       sourceArtifacts: buildQualitySourceArtifacts({
         evidencePath,
+        evidenceSummaryPath,
         operationSpecPath,
         operationGuideGatePath,
       }),
@@ -17005,6 +17618,7 @@ test("truth readiness rejects forged operation spec against current evidence", (
     JSON.stringify(qualityReportFixture({
       sourceArtifacts: buildQualitySourceArtifacts({
         evidencePath,
+        evidenceSummaryPath,
         operationSpecPath,
         operationGuideGatePath,
       }),
@@ -17019,7 +17633,7 @@ test("truth readiness rejects forged operation spec against current evidence", (
   assert.equal(report.gates.lineage.pass, false);
   assert.ok(
     report.gates.lineage.failures.some((item) =>
-      /operation-spec\.json must match deterministic operation-spec recomputation from current evidence\/write-validation\/network inputs/.test(item),
+      /operation-spec\.json must match deterministic operation-spec recomputation from current evidence\/evidence-summary\/write-validation\/network inputs/.test(item),
     ),
   );
   const blocker = report.blockers.find((item) => item.id === "truth.lineage-stale");
@@ -17347,6 +17961,7 @@ test("truth readiness rejects forged fact-check reports against current markdown
       sourceArtifacts: buildNarrativeSourceArtifacts({
         markdownPath: path.join(dir, "whitepaper.pending-review.md"),
         evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
+        operationSpecPath: path.join(dir, "operation-spec.json"),
       }),
     })),
     "utf8",
@@ -17490,6 +18105,7 @@ test("truth readiness rejects forged narrative reports against current markdown"
       sourceArtifacts: buildNarrativeSourceArtifacts({
         markdownPath: path.join(dir, "whitepaper.pending-review.md"),
         evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
+        operationSpecPath: path.join(dir, "operation-spec.json"),
       }),
     })),
     "utf8",

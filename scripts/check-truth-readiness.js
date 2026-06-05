@@ -21,7 +21,11 @@ const {
   assertValidNarrativeQualityReportArtifact,
   buildNarrativeQualityReport,
 } = require("./check-narrative");
-const { assertValidQualityReportArtifact } = require("./check-quality");
+const {
+  assertValidQualityReportArtifact,
+  filterObsoleteQualityBlockedItems,
+} = require("./check-quality");
+const { mergeOperationSpecIntoEvidenceSummary } = require("./build-evidence-summary");
 const {
   assertValidOperationGuideGateArtifact,
   assertValidOperationSpecArtifact,
@@ -515,6 +519,7 @@ function buildLineageGate(artifacts = {}) {
   const failures = [];
   const checks = [
     ["evidence", artifacts.quality, artifacts.evidence, "quality-report.json"],
+    ["evidenceSummary", artifacts.quality, artifacts.evidenceSummary, "quality-report.json"],
     ["operationSpec", artifacts.quality, artifacts.operationSpec, "quality-report.json"],
     ["operationGuideGate", artifacts.quality, artifacts.operationGuideGate, "quality-report.json"],
     ["operationSpec", artifacts.operationGuideGate, artifacts.operationSpec, "operation-guide-gate.json"],
@@ -654,6 +659,7 @@ function findStaleNarrativeSources(artifacts = {}) {
   const required = {
     pendingReview: artifacts.pendingReview,
     evidenceSummary: artifacts.evidenceSummary,
+    operationSpec: artifacts.operationSpec,
   };
   const presentRequired = Object.entries(required).filter(([, artifact]) => artifact?.fingerprint?.exists);
   if (!presentRequired.length) return [];
@@ -708,6 +714,7 @@ function findQualitySourceMismatches(artifacts = {}) {
   const quality = artifacts.quality || {};
   const checks = [
     ["evidence", artifacts.evidence],
+    ["evidenceSummary", artifacts.evidenceSummary],
     ["operationSpec", artifacts.operationSpec],
     ["operationGuideGate", artifacts.operationGuideGate],
   ];
@@ -730,7 +737,11 @@ function buildQualityReportFromCurrentArtifacts(artifacts = {}) {
   const metrics = computeEvidenceMetrics(evidenceValue);
   const report = buildQualityReport({
     ...metrics,
-    blockedItems: evidenceValue.blockedItems || [],
+    blockedItems: filterObsoleteQualityBlockedItems(
+      evidenceValue.blockedItems || [],
+      artifacts.operationSpec?.status === "ok" ? artifacts.operationSpec.value : null,
+      artifacts.evidenceSummary?.status === "ok" ? artifacts.evidenceSummary.value : null,
+    ),
   });
   const operationSpec = artifacts.operationSpec || {};
   if (operationSpec.status && operationSpec.status !== "missing") {
@@ -772,7 +783,7 @@ function validateQualityAgainstCurrentEvidence(value = {}, artifacts = {}) {
   try {
     recomputed = buildQualityReportFromCurrentArtifacts(artifacts);
   } catch (error) {
-    failures.push(`quality-report.json could not be recomputed from current evidence.json: ${error.message}`);
+    failures.push(`quality-report.json could not be recomputed from current evidence/evidence-summary/operation-spec inputs: ${error.message}`);
     return failures;
   }
   if (!recomputed) return failures;
@@ -785,14 +796,14 @@ function validateQualityAgainstCurrentEvidence(value = {}, artifacts = {}) {
     "coreConclusionTraceability",
   ]) {
     if (!numbersMatch(value[key], recomputed[key])) {
-      failures.push(`quality-report.json ${key} must match deterministic quality recomputation from current evidence.json.`);
+      failures.push(`quality-report.json ${key} must match deterministic quality recomputation from current evidence/evidence-summary/operation-spec inputs.`);
     }
   }
   if (value.canFinalize === true && recomputed.canFinalize !== true) {
-    failures.push("quality-report.json canFinalize=true must match deterministic quality recomputation from current evidence.json.");
+    failures.push("quality-report.json canFinalize=true must match deterministic quality recomputation from current evidence/evidence-summary/operation-spec inputs.");
   }
   if (!sameStringSet(value.failures || [], recomputed.failures || [])) {
-    failures.push("quality-report.json failures must match deterministic quality recomputation from current evidence.json.");
+    failures.push("quality-report.json failures must match deterministic quality recomputation from current evidence/evidence-summary/operation-spec inputs.");
   }
   return failures;
 }
@@ -995,11 +1006,13 @@ function findOperationSpecSourceMismatches(artifacts = {}) {
   const operationSpec = artifacts.operationSpec || {};
   if (operationSpec.status !== "ok" || !operationSpec.fingerprint?.exists) return [];
   const optionalSources = {
+    evidenceSummary: artifacts.evidenceSummary,
     writeValidation: currentSiblingJsonArtifact(operationSpec, "write-validation-result.json"),
     networkIndex: currentSiblingJsonArtifact(operationSpec, "network-index.json"),
   };
   const checks = [
     ["evidence", artifacts.evidence, "operation-spec.json"],
+    ["evidenceSummary", optionalSources.evidenceSummary, "operation-spec.json"],
     ["writeValidation", optionalSources.writeValidation, "operation-spec.json"],
     ["networkIndex", optionalSources.networkIndex, "operation-spec.json"],
   ];
@@ -1029,21 +1042,24 @@ function validateOperationSpecAgainstCurrentSources(artifacts = {}) {
   }
   const writeValidation = currentSiblingJsonArtifact(operationSpec, "write-validation-result.json");
   const networkIndex = currentSiblingJsonArtifact(operationSpec, "network-index.json");
+  const evidenceSummary = artifacts.evidenceSummary || {};
   let recomputed;
   try {
     recomputed = buildOperationSpec({
       evidence: JSON.parse(JSON.stringify(evidence.value || {})),
+      evidenceSummary:
+        evidenceSummary.status === "ok" ? JSON.parse(JSON.stringify(evidenceSummary.value || {})) : null,
       system: operationSpecSystemForRecompute(operationSpec.value || {}),
       writeValidation: operationSpecOptionalSourceValue(writeValidation, "write-validation-result.json"),
       networkIndex: operationSpecOptionalSourceValue(networkIndex, "network-index.json"),
       allowDraft: Boolean(operationSpec.value?.gate?.canComposeGuide && (operationSpec.value?.gate?.failures || []).length),
     }).spec;
   } catch (error) {
-    failures.push(`operation-spec.json could not be recomputed from current evidence/write-validation/network inputs: ${error.message}`);
+    failures.push(`operation-spec.json could not be recomputed from current evidence/evidence-summary/write-validation/network inputs: ${error.message}`);
     return failures;
   }
   if (stableJson(operationSpecProjection(operationSpec.value || {})) !== stableJson(operationSpecProjection(recomputed))) {
-    failures.push("operation-spec.json must match deterministic operation-spec recomputation from current evidence/write-validation/network inputs.");
+    failures.push("operation-spec.json must match deterministic operation-spec recomputation from current evidence/evidence-summary/write-validation/network inputs.");
   }
   return failures;
 }
@@ -1101,10 +1117,13 @@ function validateOperationGuideGateAgainstCurrentSpec(artifacts = {}) {
   }
   const writeValidation = currentSiblingJsonArtifact(operationSpec, "write-validation-result.json");
   const networkIndex = currentSiblingJsonArtifact(operationSpec, "network-index.json");
+  const evidenceSummary = artifacts.evidenceSummary || {};
   let recomputed;
   try {
     recomputed = buildOperationSpec({
       evidence: JSON.parse(JSON.stringify(evidence.value || {})),
+      evidenceSummary:
+        evidenceSummary.status === "ok" ? JSON.parse(JSON.stringify(evidenceSummary.value || {})) : null,
       system: operationSpecSystemForRecompute(operationSpec.value || {}),
       writeValidation: operationSpecOptionalSourceValue(writeValidation, "write-validation-result.json"),
       networkIndex: operationSpecOptionalSourceValue(networkIndex, "network-index.json"),
@@ -1154,13 +1173,16 @@ function validateEvidenceSummaryAgainstCurrentEvidence(artifacts = {}) {
   let recomputed;
   try {
     const currentEvidence = JSON.parse(JSON.stringify(evidence.value || {}));
-    recomputed = buildEvidenceSummary(currentEvidence);
+    recomputed = mergeOperationSpecIntoEvidenceSummary(
+      buildEvidenceSummary(currentEvidence),
+      artifacts.operationSpec?.status === "ok" ? artifacts.operationSpec.value : {},
+    );
   } catch (error) {
-    failures.push(`evidence-summary.json could not be recomputed from current evidence.json: ${error.message}`);
+    failures.push(`evidence-summary.json could not be recomputed from current evidence.json/operation-spec.json: ${error.message}`);
     return failures;
   }
   if (stableJson(evidenceSummaryProjection(evidenceSummary.value || {})) !== stableJson(evidenceSummaryProjection(recomputed))) {
-    failures.push("evidence-summary.json must match deterministic evidence-summary recomputation from current evidence.json.");
+    failures.push("evidence-summary.json must match deterministic evidence-summary recomputation from current evidence.json/operation-spec.json.");
   }
   return failures;
 }
@@ -1180,6 +1202,7 @@ function findFunctionUniverseSourceMismatches(artifacts = {}) {
     ["evidenceSummary", artifacts.evidenceSummary, "function-universe.json"],
     ["databaseProfile", artifacts.databaseProfile, "function-universe.json"],
     ["entityModel", artifacts.entityModel, "function-universe.json"],
+    ["operationSpec", artifacts.operationSpec, "function-universe.json"],
   ];
   const failures = [];
   for (const [key, current, ownerFile] of checks) {
@@ -1210,13 +1233,14 @@ function validateFunctionUniverseAgainstCurrentSources(value = {}, artifacts = {
       evidenceSummary: evidenceSummary.value || {},
       databaseProfile: currentOptionalJsonSource(artifacts.databaseProfile, "database-profile.json"),
       entityModel: currentOptionalJsonSource(artifacts.entityModel, "entity-model.json"),
+      operationSpec: currentOptionalJsonSource(artifacts.operationSpec, "operation-spec.json"),
     });
   } catch (error) {
-    failures.push(`function-universe.json could not be recomputed from current evidence-summary/database inputs: ${error.message}`);
+    failures.push(`function-universe.json could not be recomputed from current evidence-summary/operation-spec/database inputs: ${error.message}`);
     return failures;
   }
   if (stableJson(functionUniverseProjection(value)) !== stableJson(functionUniverseProjection(recomputed))) {
-    failures.push("function-universe.json must match deterministic function-universe recomputation from current evidence-summary/database inputs.");
+    failures.push("function-universe.json must match deterministic function-universe recomputation from current evidence-summary/operation-spec/database inputs.");
   }
   return failures;
 }
@@ -1607,6 +1631,7 @@ function validateNarrativeAgainstCurrentMarkdown(value = {}, artifacts = {}) {
     recomputed = buildNarrativeQualityReport({
       markdown: fs.readFileSync(pendingReview.path, "utf8"),
       evidenceSummary: artifacts.evidenceSummary?.status === "ok" ? artifacts.evidenceSummary.value : {},
+      operationSpec: artifacts.operationSpec?.status === "ok" ? artifacts.operationSpec.value : {},
     });
   } catch (error) {
     failures.push(
@@ -1623,7 +1648,7 @@ function validateNarrativeAgainstCurrentMarkdown(value = {}, artifacts = {}) {
   }
   if (!numbersMatch(counts.evidencePages, recomputedCounts.evidencePages)) {
     failures.push(
-      "narrative-quality-report.json counts.evidencePages must match deterministic narrative quality recomputation from current evidence-summary.json.",
+      "narrative-quality-report.json counts.evidencePages must match deterministic narrative quality recomputation from current evidence-summary.json/operation-spec.json.",
     );
   }
   if (value.canSubmitReview === true && recomputed.canSubmitReview !== true) {

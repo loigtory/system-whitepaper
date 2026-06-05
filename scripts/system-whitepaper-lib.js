@@ -890,6 +890,7 @@ function menuMatchesPage(menu, page) {
 function mergeMenuMapEntries(menuMap) {
   const byUrl = new Map();
   for (const menu of menuMap || []) {
+    if (isEnvironmentSwitcherMenu(menu)) continue;
     const key = menu.url
       ? `url:${normalizePageUrl(menu.url)}`
       : `text:${String(menu.menuPath || menu.title || "").trim()}`;
@@ -1659,6 +1660,15 @@ function mergePageSnapshotIntoEvidence(evidence, snapshot) {
 
   for (const link of snapshot.links || []) {
     if (!link.text && !link.href) continue;
+    if (
+      isEnvironmentSwitcherMenu({
+        title: link.text || link.href,
+        menuPath: link.text || link.href,
+        url: link.href || "",
+      })
+    ) {
+      continue;
+    }
     const exists = evidence.menuMap.some(
       (item) => item.path === link.text && item.url === link.href,
     );

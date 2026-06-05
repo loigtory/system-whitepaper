@@ -84,12 +84,28 @@ function loadVerifiedClaims(context = {}) {
   return claimsArtifact;
 }
 
+function loadOptionalVerifiedClaims(context = {}) {
+  if (context.verifiedClaims) return loadVerifiedClaims(context);
+  const outputDir = resolveOutputDir(context);
+  const claimsPath = context.verifiedClaimsPath || path.join(outputDir, "verified-claims.json");
+  if (!fs.existsSync(claimsPath)) return null;
+  return loadVerifiedClaims(context);
+}
+
 function loadFactCheckReport(context = {}) {
   if (context.factCheckReport) return ensureJsonObject(context.factCheckReport, "Fact-check report");
   const outputDir = resolveOutputDir(context);
   const reportPath = context.factCheckReportPath || path.join(outputDir, "fact-check-report.json");
   if (!context.factCheckReportPath && !fs.existsSync(reportPath)) return null;
   return readExistingJsonObject(reportPath, null, { label: "Fact-check report" });
+}
+
+function loadOperationSpec(context = {}) {
+  if (context.operationSpec) return ensureJsonObject(context.operationSpec, "Operation spec");
+  const outputDir = resolveOutputDir(context);
+  const specPath = context.operationSpecPath || path.join(outputDir, "operation-spec.json");
+  if (!context.operationSpecPath && !fs.existsSync(specPath)) return {};
+  return readExistingJsonObject(specPath, {}, { label: "Operation spec" });
 }
 
 function compactWritableClaimGap(factCheckReport = null, claimsArtifact = {}, options = {}) {
@@ -185,6 +201,83 @@ function compactEvidenceSummary(summary = {}) {
   };
 }
 
+function compactOperationSpec(spec = {}, options = {}) {
+  const targetModule = String(options.moduleName || "").trim();
+  const modules = (Array.isArray(spec.modules) ? spec.modules : [])
+    .filter((item) => !targetModule || String(item.name || "").trim() === targetModule)
+    .slice(0, options.limit || 40)
+    .map((item) => ({
+      name: item.name || "",
+      entry: item.entry || "",
+      businessHint: item.businessHint || "",
+      list: {
+        columns: (item.list?.columns || []).slice(0, 12),
+        queryFields: (item.list?.queryFields || []).slice(0, 10),
+        rowActions: (item.list?.rowActions || []).slice(0, 10),
+      },
+      flows: compactList(item.flows, 8, (flow) => ({
+        name: flow.name || "",
+        trigger: flow.trigger || "",
+        steps: (flow.steps || []).slice(0, 8),
+      })),
+      screenshots: (item.screenshots || []).slice(0, 3),
+    }));
+  return {
+    system: {
+      code: spec.systemCode || "",
+      name: spec.systemName || "",
+      testUrl: spec.testUrl || "",
+    },
+    positioning: spec.positioning || {},
+    metrics: spec.metrics || {},
+    navigation: compactList(spec.navigation, 40, (item) => ({
+      menuPath: item.menuPath || "",
+      entry: item.entry || "",
+    })),
+    modules,
+    pending: compactList(spec.pending, 30, (item) => item),
+  };
+}
+
+function operationSpecToEvidenceSummary(evidenceSummary = {}, operationSpec = {}) {
+  const modules = Array.isArray(operationSpec.modules) ? operationSpec.modules : [];
+  if (!modules.length) return evidenceSummary;
+  const system = evidenceSummary.system || {};
+  const mappedModules = modules.map((item) => ({
+    name: item.name || "",
+    entry: item.entry || item.name || "",
+    summary: item.businessHint || "",
+  }));
+  const mappedFunctions = modules.map((item) => ({
+    id: `operation-spec:${item.name || ""}`,
+    module: item.name || "",
+    name: item.name || "",
+    menuPath: item.entry || item.name || "",
+    title: item.name || "",
+    url: "",
+    actions: Array.isArray(item.list?.rowActions) ? item.list.rowActions : [],
+    queryFields: Array.isArray(item.list?.queryFields) ? item.list.queryFields : [],
+    tableColumns: Array.isArray(item.list?.columns) ? item.list.columns : [],
+    screenshots: (Array.isArray(item.screenshots) ? item.screenshots : []).map((file) => ({
+      id: file,
+      file,
+      caption: `${item.name || ""} 页面截图`,
+    })),
+    hasContainerEvidence: Array.isArray(item.flows) && item.flows.length > 0,
+  }));
+  return {
+    ...evidenceSummary,
+    system: {
+      ...system,
+      code: system.code || operationSpec.systemCode || "",
+      name: system.name || operationSpec.systemName || "",
+      testUrl: system.testUrl || operationSpec.testUrl || "",
+    },
+    modules: mappedModules,
+    functions: mappedFunctions,
+  };
+}
+
 function compactVerifiedClaims(claimsArtifact = {}, options = {}) {
   const targetModule = String(options.moduleName || "").trim();
   const claims = (Array.isArray(claimsArtifact.claims) ? claimsArtifact.claims : []).filter((claim) => {
@@ -199,21 +292,26 @@ function compactVerifiedClaims(claimsArtifact = {}, options = {}) {
     writableClaimIds: Array.isArray(claimsArtifact.writableClaimIds)
       ? claimsArtifact.writableClaimIds.filter((id) => writableClaimIds.has(id)).slice(0, 200)
       : [...writableClaimIds].slice(0, 200),
-    claims: claims.slice(0, 220).map((claim) => ({
-      id: claim.id || "",
-      type: claim.type || "",
-      subject: claim.subject || "",
-      module: claim.module || "",
-      function: claim.function || "",
-      entity: claim.entity || "",
-      table: claim.table || "",
-      confidence: claim.confidence || "",
-      status: claim.status || "",
-      writable: Boolean(claim.writable),
-      text: claim.text || "",
-      evidence: claim.evidence || {},
-      reasoning: claim.reasoning || "",
-    })),
+    claims: claims.slice(0, 220).map((claim) => {
+      const writable = Boolean(claim.writable);
+      return {
+        id: writable ? claim.id || "" : "",
+        type: claim.type || "",
+        subject: claim.subject || "",
+        module: claim.module || "",
+        function: claim.function || "",
+        entity: claim.entity || "",
+        table: claim.table || "",
+        confidence: claim.confidence || "",
+        status: claim.status || "",
+        writable,
+        claimReferenceAllowed: writable,
+        sourceClaimIdRedacted: !writable && Boolean(claim.id),
+        text: claim.text || "",
+        evidence: claim.evidence || {},
+        reasoning: claim.reasoning || "",
+      };
+    }),
     rules: claimsArtifact.rules || {},
   };
 }
@@ -298,7 +396,7 @@ function buildWhitepaperSkeleton(input = {}) {
   const lines = [
     `# ${systemName}功能白皮书（待审核）`,
     "",
-    "> 本骨架由脚本基于 evidence-summary 生成；`[待升华]` 占位由成稿 Agent 填写，附录由脚本生成。",
+    "> 本骨架由脚本基于 evidence-summary / operation-spec 生成；`[待升华]` 占位由成稿 Agent 填写，附录由脚本生成。",
     "",
     "## 1. 系统概览",
     "",
@@ -357,8 +455,13 @@ function buildWhitepaperSkeleton(input = {}) {
 
 function buildNarrativeBrief(context = {}) {
   const summary = context.evidenceSummary || {};
+  const operationSpec = context.operationSpec || {};
   const system = summary.system || {};
   const systemName = context.systemName || system.name || "";
+  const moduleNames = (operationSpec.modules || [])
+    .map((item) => item.name)
+    .filter(Boolean)
+    .slice(0, 12);
   return [
     "# 低 Token 白皮书成稿规程",
     "",
@@ -367,6 +470,7 @@ function buildNarrativeBrief(context = {}) {
     "## 工作边界",
     "",
     "- 只基于 prompt 内联的 evidence-summary 和 quality 摘要写作。",
+    "- 若 prompt 内联 operation-spec，模块、业务定位、字段和截图以 operation-spec 为优先业务证据。",
     "- 不要读取 evidence.json、whitepaper.draft.md、截图二进制、仓库脚本、项目根目录文件、secrets/ 或 .playwright-*。",
     "- 不要编造证据里没有的模块、字段、流程、权限或写操作结果。",
     "- 写操作只有出现 AI_AUTO_TEST_ 测试数据、ledger 和结果证据时，才能描述为已验证。",
@@ -378,6 +482,7 @@ function buildNarrativeBrief(context = {}) {
     "- 核心功能说明优先回答谁使用、处理什么对象、关键字段表达什么、哪些操作已验证。",
     "- 典型业务流程围绕业务目标，不写成点击步骤。",
     "- 证据不足、写操作未验证、截图缺口必须进入待确认事项。",
+    moduleNames.length ? `- 本轮必须覆盖这些业务模块：${moduleNames.join("、")}。` : "",
     "",
     "## 输出要求",
     "",
@@ -391,11 +496,52 @@ function buildNarrativeBrief(context = {}) {
     "  - ## 6. 待确认事项",
     "- 第 6 章只用扁平 bullet 列待确认项；不要新增 `### P0`、`### 模块与功能` 等自定义子标题。",
     "- 不要生成附录；附录由脚本根据 evidence-summary 机械生成。",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function sectionExists(markdown, title) {
   return new RegExp(`^##\\s+${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "m").test(markdown);
+}
+
+function sanitizeNarrativeFragments(markdown = "") {
+  const lines = String(markdown || "").split(/\r?\n/);
+  const result = [];
+  let sectionNumber = "";
+  for (const line of lines) {
+    const h1 = line.match(/^#\s+(.+?)\s*$/);
+    if (h1) continue;
+    const h2 = line.match(/^##\s+(\d+)\./);
+    if (h2) {
+      sectionNumber = h2[1];
+      result.push(line);
+      continue;
+    }
+    const subheading = line.match(/^#{3,6}\s+(.+?)\s*$/);
+    if (subheading && sectionNumber && sectionNumber !== "3") {
+      result.push(`**${subheading[1]}**`);
+      continue;
+    }
+    result.push(line);
+  }
+  return result.join("\n").trim();
+}
+
+function nonWritableClaimIdSet(claimsArtifact = {}) {
+  const claims = Array.isArray(claimsArtifact?.claims) ? claimsArtifact.claims : [];
+  return new Set(
+    claims
+      .filter((claim) => claim && claim.writable === false && claim.id)
+      .map((claim) => String(claim.id).trim())
+      .filter(Boolean),
+  );
+}
+
+function stripNonWritableClaimReferences(markdown = "", claimsArtifact = null) {
+  const nonWritableIds = nonWritableClaimIdSet(claimsArtifact);
+  if (!nonWritableIds.size) return String(markdown || "");
+  return String(markdown || "").replace(/\[claim:([^\]]+)]/g, (match, claimId) => {
+    return nonWritableIds.has(String(claimId || "").trim()) ? "" : match;
+  });
 }
 
 function appendixFromSummary(summary = {}) {
@@ -428,7 +574,11 @@ function appendixFromSummary(summary = {}) {
 function assemblePendingReviewMarkdown(input = {}) {
   const summary = input.evidenceSummary || {};
   const system = summary.system || {};
-  const fragments = String(input.fragments || "").trim();
+  const claimsArtifact = input.verifiedClaims || input.claimsArtifact || null;
+  const fragments = stripNonWritableClaimReferences(
+    sanitizeNarrativeFragments(input.fragments || ""),
+    claimsArtifact,
+  );
   const lines = [
     `# ${system.name || input.systemName || "系统"}功能白皮书（待审核）`,
     "",
@@ -465,7 +615,8 @@ function assemblePendingReviewMarkdown(input = {}) {
   }
 
   lines.push(appendixFromSummary(summary));
-  return `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
+  const markdown = `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
+  return stripNonWritableClaimReferences(markdown, claimsArtifact);
 }
 
 function readExistingPartFragments(parts = []) {
@@ -705,13 +856,18 @@ function buildPhase3bPrompt(context = {}) {
     reviewComment,
   } = context;
   const paths = resolvePhase3bPaths(context);
-  const evidenceSummary = compactEvidenceSummary(loadEvidenceSummary(context));
+  const operationSpecArtifact = loadOperationSpec(context);
+  const evidenceSummary = compactEvidenceSummary(
+    operationSpecToEvidenceSummary(loadEvidenceSummary(context), operationSpecArtifact),
+  );
+  const operationSpec = compactOperationSpec(operationSpecArtifact);
   const qualitySummary = loadQualitySummary(context);
   const verifiedClaimsArtifact = loadVerifiedClaims(context);
   const verifiedClaims = compactVerifiedClaims(verifiedClaimsArtifact);
   const writableClaimGap = compactWritableClaimGap(loadFactCheckReport(context), verifiedClaimsArtifact);
   const reviewDecision = loadReviewDecision(context);
   const inlineSummary = JSON.stringify(evidenceSummary, null, 2);
+  const inlineOperationSpec = JSON.stringify(operationSpec, null, 2);
   const inlineQuality = JSON.stringify(qualitySummary, null, 2);
   const inlineVerifiedClaims = JSON.stringify(verifiedClaims, null, 2);
   const inlineWritableClaimGap = JSON.stringify(writableClaimGap, null, 2);
@@ -731,14 +887,22 @@ function buildPhase3bPrompt(context = {}) {
     "写作要求：",
     "- 只输出 narrative-fragments.md，不要生成完整附录。",
     "- 重点写业务定位、业务价值、模块用途、核心功能说明和典型业务流程。",
+    "- operation-spec 是优先业务证据；如果它包含模块、字段、截图、定位，不要再写“functions 为空”“无法撰写核心功能”。",
+    "- 必须围绕 operation-spec.modules 展开模块概览与核心功能说明；不得把「本地」作为唯一模块，除非 operation-spec 也只有该模块。",
     "- 证据不足时写入待确认事项，不要编造。",
     "- 避免模板句、按钮堆砌和每页重复验证噪声。",
     "- 写操作只有存在 AI_AUTO_TEST_ 证据和 ledger 时才能写为已验证。",
     "- 只使用固定 `## 1` 到 `## 6` 章节；第 6 章待确认事项使用扁平 bullet，不新增 `###` 分组标题。",
+    "- 不要输出任何 `#` 一级标题；不要在第 4/5/6 章使用 `###` 子标题，流程场景请用加粗段落或编号列表表达。",
     "",
     "quality 摘要：",
     "```json",
     inlineQuality,
+    "```",
+    "",
+    "operation-spec（优先业务证据，来自页面/表格/截图/网络摘要）：",
+    "```json",
+    inlineOperationSpec,
     "```",
     "",
     "verified-claims (authoritative writable business claims):",
@@ -748,7 +912,8 @@ function buildPhase3bPrompt(context = {}) {
     "",
     "Verified-claims writing rules:",
     "- Body sections may only assert claims with writable=true.",
-    "- Claims with writable=false must only appear under pending/unverified confirmation items.",
+    "- Claims with writable=false must only appear under pending/unverified confirmation items and must never use `[claim:<id>]` markers.",
+    "- The compact claims input redacts non-writable claim ids; only claims with claimReferenceAllowed=true may be cited with `[claim:<id>]`.",
     "- Do not invent business flow, purpose, role, status, or automation claims outside verified-claims.",
     "- Cover each writable claim with its subject/function plus module/entity/evidence context; automatic repair may add `[claim:<id>]` markers for precise traceability.",
     "- If writable-claim-coverage-gap lists missingWritableClaims, write those writable claims into the relevant body sections before considering the draft complete.",
@@ -796,6 +961,7 @@ function buildPhase3bPartPrompt(context = {}) {
   } = context;
   const paths = resolvePhase3bPaths(context);
   const qualitySummary = loadQualitySummary(context);
+  const operationSpecArtifact = loadOperationSpec(context);
   const verifiedClaimsArtifact = loadVerifiedClaims(context);
   const reviewDecision = loadReviewDecision(context);
   const partInfo = part || { id: "overview-flow", type: "overview" };
@@ -806,6 +972,9 @@ function buildPhase3bPartPrompt(context = {}) {
     moduleName: partInfo.type === "module" ? partInfo.moduleName : "",
   });
   const inlineSummary = JSON.stringify(partInfo.summary || {}, null, 2);
+  const inlineOperationSpec = JSON.stringify(compactOperationSpec(operationSpecArtifact, {
+    moduleName: partInfo.type === "module" ? partInfo.moduleName : "",
+  }), null, 2);
   const inlineQuality = JSON.stringify(qualitySummary, null, 2);
   const inlineVerifiedClaims = JSON.stringify(verifiedClaims, null, 2);
   const inlineWritableClaimGap = JSON.stringify(writableClaimGap, null, 2);
@@ -842,13 +1011,20 @@ function buildPhase3bPartPrompt(context = {}) {
     "",
     "写作范围：",
     ...sectionInstruction.map((item) => `- ${item}`),
+    "- operation-spec 是优先业务证据；必须用其中的模块名、字段、截图和业务提示写，不要输出“functions 为空/无法撰写”。",
     "- 证据不足时写入待确认事项，不要编造。",
     "- 写操作只有存在 AI_AUTO_TEST_ 证据和 ledger 时才能写为已验证。",
     "- 第 6 章待确认事项使用扁平 bullet，不新增 `###` 分组标题；模块分片只允许为真实模块/功能使用 `###/####`。",
+    "- 不要输出任何 `#` 一级标题；非模块分片不要使用 `###` 子标题。",
     "",
     "quality 摘要：",
     "```json",
     inlineQuality,
+    "```",
+    "",
+    "operation-spec（优先业务证据，按本分片过滤）：",
+    "```json",
+    inlineOperationSpec,
     "```",
     "",
     "verified-claims (authoritative writable business claims):",
@@ -858,7 +1034,8 @@ function buildPhase3bPartPrompt(context = {}) {
     "",
     "Verified-claims writing rules:",
     "- Body sections may only assert claims with writable=true.",
-    "- Claims with writable=false must only appear under pending/unverified confirmation items.",
+    "- Claims with writable=false must only appear under pending/unverified confirmation items and must never use `[claim:<id>]` markers.",
+    "- The compact claims input redacts non-writable claim ids; only claims with claimReferenceAllowed=true may be cited with `[claim:<id>]`.",
     "- Do not invent business flow, purpose, role, status, or automation claims outside verified-claims.",
     "- Cover each writable claim with its subject/function plus module/entity/evidence context; automatic repair may add `[claim:<id>]` markers for precise traceability.",
     "- If writable-claim-coverage-gap lists missingWritableClaims for this part, cover those claims in this fragment.",
@@ -895,7 +1072,9 @@ function buildPhase3bPartPrompt(context = {}) {
   return `${lines.join("\n")}\n`;
 }
 
-function buildNarrativeParts(context = {}, evidenceSummary = loadEvidenceSummary(context)) {
+function buildNarrativeParts(context = {}, evidenceSummary = null) {
+  const sourceSummary =
+    evidenceSummary || operationSpecToEvidenceSummary(loadEvidenceSummary(context), loadOperationSpec(context));
   const paths = resolvePhase3bPaths(context);
   const usedModuleSlugs = new Set();
   const parts = [
@@ -905,11 +1084,11 @@ function buildNarrativeParts(context = {}, evidenceSummary = loadEvidenceSummary
       label: "概览与流程",
       outputPath: path.join(paths.fragmentPartsDir, "overview-flow.md"),
       promptPath: path.join(paths.promptPartsDir, "overview-flow-prompt.md"),
-      summary: compactOverviewSummary(evidenceSummary),
+      summary: compactOverviewSummary(sourceSummary),
     },
   ];
 
-  for (const group of groupFunctionsByModule(evidenceSummary)) {
+  for (const group of groupFunctionsByModule(sourceSummary)) {
     const baseSlug = slugifyPartName(group.moduleName);
     let slug = baseSlug;
     if (usedModuleSlugs.has(slug)) {
@@ -923,7 +1102,7 @@ function buildNarrativeParts(context = {}, evidenceSummary = loadEvidenceSummary
       moduleName: group.moduleName,
       outputPath: path.join(paths.fragmentPartsDir, `module-${slug}.md`),
       promptPath: path.join(paths.promptPartsDir, `module-${slug}-prompt.md`),
-      summary: compactModuleSummary(evidenceSummary, group.moduleName),
+      summary: compactModuleSummary(sourceSummary, group.moduleName),
     });
   }
 
@@ -979,27 +1158,32 @@ function resolveCursorApiKey(context = {}) {
 function writePreparationFiles(context = {}) {
   const paths = resolvePhase3bPaths(context);
   const evidenceSummary = loadEvidenceSummary(context);
+  const operationSpec = loadOperationSpec(context);
+  const writingEvidenceSummary = operationSpecToEvidenceSummary(evidenceSummary, operationSpec);
   const qualitySummary = loadQualitySummary(context);
   const verifiedClaims = loadVerifiedClaims(context);
   const factCheckReport = loadFactCheckReport(context);
   const skeleton = buildWhitepaperSkeleton({
     ...context,
-    evidenceSummary,
+    evidenceSummary: writingEvidenceSummary,
+    operationSpec,
   });
   const brief = buildNarrativeBrief({
     ...context,
-    evidenceSummary,
+    evidenceSummary: writingEvidenceSummary,
+    operationSpec,
     qualityReport: qualitySummary,
   });
   const prompt = buildPhase3bPrompt({
     ...context,
-    evidenceSummary,
+    evidenceSummary: writingEvidenceSummary,
+    operationSpec,
     qualityReport: qualitySummary,
     verifiedClaims,
     factCheckReport,
     verifiedClaimsPath: undefined,
   });
-  const parts = buildNarrativeParts(context, evidenceSummary);
+  const parts = buildNarrativeParts(context, writingEvidenceSummary);
   const selectedPartSelector = normalizeNarrativePartSelector(context.narrativePart || context.part);
   const selectedParts = selectNarrativeParts(parts, selectedPartSelector);
   if (selectedPartSelector && !selectedParts.length) {
@@ -1015,7 +1199,8 @@ function writePreparationFiles(context = {}) {
     const partPrompt = buildPhase3bPartPrompt({
       ...context,
       part,
-      evidenceSummary,
+      evidenceSummary: writingEvidenceSummary,
+      operationSpec,
       qualityReport: qualitySummary,
       verifiedClaims,
       factCheckReport,
@@ -1023,7 +1208,18 @@ function writePreparationFiles(context = {}) {
     });
     fs.writeFileSync(part.promptPath, partPrompt, "utf8");
   }
-  return { paths, evidenceSummary, qualitySummary, skeleton, brief, prompt, parts, selectedParts };
+  return {
+    paths,
+    evidenceSummary: writingEvidenceSummary,
+    sourceEvidenceSummary: evidenceSummary,
+    operationSpec,
+    qualitySummary,
+    skeleton,
+    brief,
+    prompt,
+    parts,
+    selectedParts,
+  };
 }
 
 function assembleIfFragmentsExist(context = {}, evidenceSummary, parts = [], selectedParts = parts) {
@@ -1036,18 +1232,25 @@ function assembleIfFragmentsExist(context = {}, evidenceSummary, parts = [], sel
     selectedParts.length > 0 &&
     (context.forceAssembleParts || !fs.existsSync(paths.fragmentsPath));
   if (shouldAssembleFromParts) {
-    fragments = assembleFragmentsFromParts(selectedParts, { baselineFragments: existingCombined });
+    const selectedPartSelector = normalizeNarrativePartSelector(context.narrativePart || context.part);
+    const isPartialSelection = Boolean(selectedPartSelector) && selectedParts.length < parts.length;
+    fragments = assembleFragmentsFromParts(selectedParts, {
+      baselineFragments: isPartialSelection ? existingCombined : "",
+    });
   } else if (existingCombined) {
     fragments = existingCombined;
   }
   if (!String(fragments || "").trim()) return null;
+  fragments = sanitizeNarrativeFragments(fragments);
   if (shouldAssembleFromParts || !fs.existsSync(paths.fragmentsPath)) {
     fs.writeFileSync(paths.fragmentsPath, `${String(fragments).trim()}\n`, "utf8");
   }
+  const verifiedClaims = loadOptionalVerifiedClaims(context);
   const markdown = assemblePendingReviewMarkdown({
     evidenceSummary,
     fragments,
     systemName: context.systemName,
+    verifiedClaims,
   });
   fs.writeFileSync(paths.outputPath, markdown, "utf8");
   const { syncWhitepaperNamedArtifacts } = require("../system-whitepaper-lib");
@@ -1268,7 +1471,12 @@ function writeUsage(context = {}, usage = {}) {
 async function runManualProvider(context) {
   const started = Date.now();
   const prepared = writePreparationFiles({ ...context, provider: "manual" });
-  const assembled = assembleIfFragmentsExist(context, prepared.evidenceSummary, prepared.parts);
+  const assembled = assembleIfFragmentsExist(
+    context,
+    prepared.evidenceSummary,
+    prepared.parts,
+    prepared.selectedParts,
+  );
   const usagePath = writeUsage(
     { ...context, provider: "manual" },
     {
@@ -1529,13 +1737,16 @@ module.exports = {
   buildWhitepaperSkeleton,
   compactEvidenceSummary,
   compactModuleSummary,
+  compactOperationSpec,
   compactOverviewSummary,
   compactWritableClaimGap,
   normalizeNarrativePartSelector,
+  operationSpecToEvidenceSummary,
   resolveCursorApiKey,
   resolveCursorSdkPrompts,
   resolveSdkCwd,
   runPhase3b,
+  sanitizeNarrativeFragments,
   selectNarrativeParts,
   summarizeQualityReport,
   writePreparationFiles,
