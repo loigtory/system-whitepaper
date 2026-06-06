@@ -45,7 +45,7 @@ The unattended pipeline is grouped into five business-visible phases:
 4. **成稿**:
    - **底稿**: generate `whitepaper.draft.md` from evidence. This is a factual draft, not the final whitepaper.
    - **摘要**: build `evidence-summary.json` for LLM input.
-   - **写稿**: `run-phase3b.js` generates `narrative-brief.md` and an inline prompt from compressed `evidence-summary.json`, quality summary, and `verified-claims.json`. Cursor Agent / LLM writes `narrative-fragments.md`; scripts assemble `whitepaper.pending-review.md`.
+   - **写稿**: `run-phase3b.js` generates `narrative-brief.md` and an inline prompt from compressed `evidence-summary.json`, quality summary, and `verified-claims.json`. The configured AI Provider writes `narrative-fragments.md`; scripts assemble `whitepaper.pending-review.md`. Cursor SDK is only the current provider option, not a required architecture dependency.
    - **事实核验**: run `fact-check-whitepaper.js` so unsupported headings and weak body assertions are blocked before review/finalization.
    - For rejection rewrites, prefer `--narrative-part overview-flow`, `--narrative-part function-sections`, or a concrete module name instead of full narrative reruns when the comment scope is limited.
    - When a rerun must apply an existing `review-decision.json`, pass `--review-rerun`; ordinary full narrative runs intentionally ignore stale review decisions.
@@ -75,7 +75,7 @@ Use the 4-thread model for unattended multi-system development:
 - Batch completion writes `outputs/_batch/diagnosis.json`, `outputs/_batch/diagnosis.md`, `outputs/_batch/repair-queue.json`, and `outputs/_batch/repair-queue.md`. Diagnosis explains readiness and blockers; repair queue converts safe rerun actions into bounded queue items.
 - Repair queue items are restricted: `reset=false`, `review` is excluded, only known pipeline nodes are allowed, and items that include `narrative` are marked Agent-writing quota sensitive. They are not auto-runnable unless `runtime.repairAllowAgentWriting=true` or batch is run with `-- --repair-allow-agent-writing`.
 - Batch retries are opt-in with `-- --batch-retries <n>`. Retried systems resume from the failed node, do not inherit `--reset`, and mark retries that include `narrative` as Agent-writing quota sensitive.
-- Batch execution increases throughput only. It does not multiply Cursor/Codex plan quota and it does not make Agent writing free.
+- Batch execution increases throughput only. It does not multiply AI Provider quota and it does not make Agent writing free.
 
 ## Execution Commands
 

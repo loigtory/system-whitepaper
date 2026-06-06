@@ -53,9 +53,9 @@ flowchart LR
 - `candidate-states.json`：状态枚举与触发线索。
 - `candidate-business-objects.json`：业务对象候选及证据。
 
-### AI 语义融合层
+### AI Provider 语义融合层
 
-Cursor/LLM 只做结构化归纳，不直接写正文。
+AI Provider 只做结构化归纳，不直接写正文。当前实现可使用 Cursor SDK，后续可替换为 Codex、OpenAI API、私有模型或其他中转平台；方案层不绑定单一 provider。
 
 输入：压缩证据 JSON。
 输出：schema-bound JSON，所有结论必须有 evidenceRefs。
@@ -79,7 +79,7 @@ Cursor/LLM 只做结构化归纳，不直接写正文。
 
 ### 写稿与审稿层
 
-Cursor/LLM 写稿只能使用 `truth-model.json` 和 `whitepaper-plan.json`，不直接读取原始项目资料、secrets、数据库连接、全量 evidence 或源码。
+AI Provider 写稿只能使用 `truth-model.json` 和 `whitepaper-plan.json`，不直接读取原始项目资料、secrets、数据库连接、全量 evidence 或源码。
 
 写后必须通过：
 
@@ -178,7 +178,7 @@ ADP 项目资料用于建立评测集，不作为生成输入。
 | 任务 | 产物 | writeScope | 依赖 |
 | --- | --- | --- | --- |
 | truth-model-schema | `truth-model.schema.json` | schemas/docs | evidence facts |
-| cursor-fusion-node | `truth-candidates.json` | `scripts/truth-fusion-*` | schema |
+| ai-fusion-node | `truth-candidates.json` | `scripts/truth-fusion-*` | schema |
 | truth-verifier | `truth-model.json` 校验/降级 | `scripts/check-truth-model.js` | candidates |
 | whitepaper-plan-node | `whitepaper-plan.json` | `scripts/build-whitepaper-plan.js` | truth model |
 
@@ -246,15 +246,15 @@ Coordinator 汇总进度时只报：
 2. **Round 1：Workflow + Network Evidence**
    这是还原真实业务流程的最高收益证据。
 3. **Round 2：Truth Model Fusion**
-   Cursor 前移到结构化业务归纳，但输出必须被脚本校验。
+   AI Provider 前移到结构化业务归纳，但输出必须被脚本校验。
 4. **Round 3：写稿/审稿接入 truth model**
-   最后再让 Cursor 写稿。
+   最后再让 AI Provider 写稿。
 
 ## 不做什么
 
 - 不把 ADP 项目资料喂给生成流程。
-- 不让 Cursor 直连数据库。
-- 不让 Cursor 自由判断 fact-check 是否通过。
+- 不让 AI Provider 直连数据库。
+- 不让 AI Provider 自由判断 fact-check 是否通过。
 - 不把原始 secrets、数据库连接、完整 DOM、截图二进制放进 prompt。
 - 不在同一 worktree 里让多个 worker 同时写代码。
 - 不把大而含糊的任务交给 worker。
