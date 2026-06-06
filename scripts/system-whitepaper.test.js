@@ -13767,6 +13767,290 @@ function operationSpecFixture(overrides = {}) {
   };
 }
 
+test("buildWorkflowSpec extracts observed operation flows with evidence boundaries", () => {
+  const {
+    assertValidWorkflowSpecArtifact,
+    buildWorkflowSpec,
+  } = require("./build-workflow-spec");
+
+  const operationSpec = operationSpecFixture({
+    modules: [
+      {
+        name: "AI任务管理",
+        entry: "左侧「AI任务管理」",
+        surfaceType: "business-flow",
+        coreBusinessModule: true,
+        businessHint: "配置、查询并执行保司数据对接 AI 任务。",
+        businessObject: { value: "AI任务", confidence: "high", evidence: ["菜单:AI任务管理"] },
+        list: {
+          columns: ["保险公司", "任务类型", "需求状态", "配置质量"],
+          queryFields: ["保险公司", "任务类型"],
+          filters: [],
+          enumOptions: {},
+          rowActions: ["配置历史", "质量"],
+        },
+        lifecycleSignals: [
+          {
+            field: "需求状态",
+            signalType: "demand-lifecycle-status",
+            enumOptions: ["需求已完成", "需求待生效", "需求生效"],
+            confidence: "high",
+            evidence: ["列表列:需求状态"],
+          },
+        ],
+        qualitySignals: [
+          {
+            field: "配置质量",
+            signalType: "configuration-quality-status",
+            enumOptions: ["高风险", "需关注", "良好"],
+            confidence: "high",
+            evidence: ["列表列:配置质量"],
+          },
+        ],
+        flows: [
+          {
+            name: "新建AI任务",
+            trigger: "新建AI任务",
+            status: "partial",
+            reason: "submit-button-not-found",
+            steps: [
+              {
+                title: "定义参数",
+                fields: [{ label: "保险公司", required: true, control: "select" }],
+                buttons: ["下一步"],
+                screenshots: ["screenshots/define.png"],
+                validation: { status: "partial", filledFieldCount: 2 },
+              },
+              {
+                title: "需求输出",
+                fields: [{ label: "需求文档", required: false, control: "textarea" }],
+                buttons: ["下一步"],
+                screenshots: ["screenshots/output.png"],
+              },
+              {
+                title: "用例执行",
+                fields: [{ label: "测试结果", required: false, control: "textarea" }],
+                buttons: ["下一步"],
+                screenshots: ["screenshots/cases.png"],
+              },
+              {
+                title: "验收确认",
+                fields: [{ label: "验收意见", required: false, control: "textarea" }],
+                buttons: ["完成"],
+                screenshots: ["screenshots/accept.png"],
+              },
+            ],
+          },
+        ],
+        plannedFlows: [],
+        tabs: [],
+        screenshots: ["screenshots/task.png"],
+        apis: [{ method: "GET", url: "/api/task/options", schemaKeys: ["taskTypes"] }],
+      },
+    ],
+  });
+
+  const artifact = buildWorkflowSpec({
+    operationSpec,
+    generatedAt: "2026-06-03T00:00:00.000Z",
+    sourceArtifacts: {
+      operationSpec: { file: "operation-spec.json", fingerprint: { exists: true, size: 1, sha256: "fixture" } },
+    },
+  });
+
+  assertValidWorkflowSpecArtifact(artifact);
+  assert.equal(artifact.artifactType, "workflow-spec");
+  assert.equal(artifact.metrics.workflowCount, 1);
+  assert.equal(artifact.metrics.observedWorkflowCount, 1);
+  assert.equal(artifact.metrics.candidateWorkflowCount, 0);
+  assert.equal(artifact.metrics.stepCount, 4);
+
+  const workflow = artifact.workflows[0];
+  assert.equal(workflow.module, "AI任务管理");
+  assert.equal(workflow.name, "新建AI任务");
+  assert.equal(workflow.evidenceStatus, "observed");
+  assert.equal(workflow.executionStatus, "partial");
+  assert.equal(workflow.canNarrateAsObserved, true);
+  assert.deepEqual(workflow.steps.map((step) => step.name), [
+    "定义参数",
+    "需求输出",
+    "用例执行",
+    "验收确认",
+  ]);
+  assert.equal(workflow.businessObject.name, "AI任务");
+  assert.equal(workflow.lifecycleSignals[0].field, "需求状态");
+  assert.equal(workflow.qualitySignals[0].field, "配置质量");
+  assert.ok(workflow.boundaries.some((item) => /submit-button-not-found/.test(item.reason)));
+  assert.ok(workflow.evidenceRefs.some((ref) => ref.artifact === "operation-spec" && ref.pointer === "/modules/0/flows/0"));
+});
+
+test("buildWorkflowSpec keeps planned operation flows as non-observed candidates", () => {
+  const { buildWorkflowSpec } = require("./build-workflow-spec");
+  const operationSpec = operationSpecFixture({
+    modules: [
+      {
+        name: "AI任务管理",
+        entry: "左侧「AI任务管理」",
+        surfaceType: "business-workflow-candidate",
+        coreBusinessModule: true,
+        businessObject: { value: "AI任务", confidence: "medium", evidence: ["菜单:AI任务管理"] },
+        list: { columns: ["保险公司"], queryFields: [], rowActions: [] },
+        lifecycleSignals: [],
+        qualitySignals: [],
+        flows: [],
+        plannedFlows: [
+          {
+            name: "新建AI任务",
+            trigger: "新建AI任务",
+            status: "planned",
+            reason: "仅生成计划，未形成可写入主流程的页面操作证据。",
+          },
+        ],
+        tabs: [],
+        screenshots: [],
+        apis: [],
+      },
+    ],
+  });
+
+  const artifact = buildWorkflowSpec({ operationSpec, generatedAt: "2026-06-03T00:00:00.000Z" });
+  assert.equal(artifact.metrics.workflowCount, 1);
+  assert.equal(artifact.metrics.observedWorkflowCount, 0);
+  assert.equal(artifact.metrics.candidateWorkflowCount, 1);
+  assert.equal(artifact.workflows[0].evidenceStatus, "candidate");
+  assert.equal(artifact.workflows[0].canNarrateAsObserved, false);
+  assert.deepEqual(artifact.workflows[0].steps, []);
+  assert.ok(artifact.pending.some((item) => /新建AI任务/.test(item.topic) && /未形成/.test(item.reason)));
+});
+
+test("build-workflow-spec writes workflow spec with operation source fingerprint", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { spawnSync } = require("node:child_process");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-spec-cli-"));
+  fs.writeFileSync(
+    path.join(dir, "operation-spec.json"),
+    JSON.stringify(operationSpecFixture({
+      modules: [
+        {
+          name: "AI任务管理",
+          entry: "左侧「AI任务管理」",
+          surfaceType: "business-flow",
+          coreBusinessModule: true,
+          businessObject: { value: "AI任务", confidence: "high", evidence: ["菜单:AI任务管理"] },
+          list: { columns: ["保险公司"], queryFields: [], rowActions: [] },
+          lifecycleSignals: [],
+          qualitySignals: [],
+          flows: [
+            {
+              name: "新建AI任务",
+              trigger: "新建AI任务",
+              status: "partial",
+              steps: [{ title: "定义参数", fields: [], buttons: ["下一步"] }],
+            },
+          ],
+          plannedFlows: [],
+          tabs: [],
+          screenshots: [],
+          apis: [],
+        },
+      ],
+    })),
+    "utf8",
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/build-workflow-spec.js", "--input", dir],
+    {
+      cwd: path.resolve(__dirname, ".."),
+      encoding: "utf8",
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(fs.readFileSync(path.join(dir, "workflow-spec.json"), "utf8"));
+  assert.equal(output.artifactType, "workflow-spec");
+  assert.equal(output.sourceArtifacts.operationSpec.file, "operation-spec.json");
+  assert.equal(output.sourceArtifacts.operationSpec.fingerprint.exists, true);
+  assert.equal(output.workflows[0].confidence, "medium");
+});
+
+test("assertValidWorkflowSpecArtifact rejects forged workflow metrics", () => {
+  const {
+    assertValidWorkflowSpecArtifact,
+    buildWorkflowSpec,
+  } = require("./build-workflow-spec");
+  const artifact = buildWorkflowSpec({
+    operationSpec: operationSpecFixture({
+      modules: [
+        {
+          name: "AI任务管理",
+          entry: "左侧「AI任务管理」",
+          surfaceType: "business-workflow-candidate",
+          coreBusinessModule: true,
+          list: { columns: ["保险公司"], queryFields: [], rowActions: [] },
+          flows: [],
+          plannedFlows: [{ name: "新建AI任务", trigger: "新建AI任务", status: "planned" }],
+          tabs: [],
+          screenshots: [],
+          apis: [],
+        },
+      ],
+    }),
+    generatedAt: "2026-06-03T00:00:00.000Z",
+    sourceArtifacts: {
+      operationSpec: { file: "operation-spec.json", fingerprint: { exists: true, size: 1, sha256: "fixture" } },
+    },
+  });
+  artifact.metrics.workflowCount = 99;
+
+  assert.throws(
+    () => assertValidWorkflowSpecArtifact(artifact),
+    /workflow-spec\.json metrics\.workflowCount must match/,
+  );
+});
+
+test("assertValidWorkflowSpecArtifact requires operation spec source fingerprint", () => {
+  const {
+    assertValidWorkflowSpecArtifact,
+    buildWorkflowSpec,
+  } = require("./build-workflow-spec");
+  const artifact = buildWorkflowSpec({
+    operationSpec: operationSpecFixture({
+      modules: [
+        {
+          name: "AI任务管理",
+          entry: "左侧「AI任务管理」",
+          surfaceType: "business-flow",
+          coreBusinessModule: true,
+          list: { columns: ["保险公司"], queryFields: [], rowActions: [] },
+          flows: [
+            {
+              name: "新建AI任务",
+              trigger: "新建AI任务",
+              status: "partial",
+              steps: [{ title: "定义参数", fields: [], buttons: ["下一步"] }],
+            },
+          ],
+          plannedFlows: [],
+          tabs: [],
+          screenshots: [],
+          apis: [],
+        },
+      ],
+    }),
+    generatedAt: "2026-06-03T00:00:00.000Z",
+  });
+
+  assert.throws(
+    () => assertValidWorkflowSpecArtifact(artifact),
+    /workflow-spec\.json sourceArtifacts\.operationSpec\.fingerprint must reference the current operation-spec\.json/,
+  );
+});
+
 test("generate-operation-guide falls back to spec gate when gate cache is malformed", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -18751,6 +19035,7 @@ test("package manifest whitelists only skill runtime assets", () => {
     "scripts/approval-guard.js",
     "scripts/build-database-model.js",
     "scripts/build-function-universe.js",
+    "scripts/build-workflow-spec.js",
     "scripts/build-verified-claims.js",
     "scripts/check-agent-isolation.js",
     "scripts/check-batch-acceptance.js",
@@ -18823,6 +19108,7 @@ test("npm pack dry-run excludes private and process-only assets", () => {
     "docs/narrative-guide.md",
     "scripts/build-database-model.js",
     "scripts/build-function-universe.js",
+    "scripts/build-workflow-spec.js",
     "scripts/build-verified-claims.js",
     "scripts/check-agent-isolation.js",
     "scripts/check-batch-acceptance.js",
@@ -18913,6 +19199,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
       "agents/openai.yaml",
       "scripts/build-database-model.js",
       "scripts/build-function-universe.js",
+      "scripts/build-workflow-spec.js",
       "scripts/build-verified-claims.js",
       "scripts/check-agent-isolation.js",
       "scripts/check-batch-acceptance.js",
@@ -18945,6 +19232,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
         [
           'require("./scripts/build-database-model");',
           'require("./scripts/build-function-universe");',
+          'require("./scripts/build-workflow-spec");',
           'require("./scripts/build-verified-claims");',
           'require("./scripts/check-agent-isolation");',
           'require("./scripts/check-batch-acceptance");',

@@ -82,7 +82,7 @@ flowchart LR
 
 必须从系统本身采集，不依赖外部项目资料。
 
-- `workflow-spec.json`：Stepper、弹窗、Tab、详情页、下拉、按钮可见性、流程步骤。
+- `workflow-spec.json`：从 `operation-spec.json` 生成的流程事实层；区分 observed flows 与 planned/candidate flows，保留 partial/failed 边界，避免把按钮或计划探索写成已验证闭环。
 - `network-spec.json`：列表、详情、保存、发布、测试、监控等接口路径、请求/响应字段、状态字段。
 - `state-machine.json`：状态枚举、状态含义、触发按钮、可能前后状态。
 - `database-profile.json` / `entity-model.json`：测试库结构、字段、枚举、关系、脱敏样例。
@@ -256,12 +256,20 @@ node scripts/run-golden-eval.js --input outputs/adp --golden docs/evals/adp-gold
 
 | 任务 | 产物 | writeScope | 依赖 |
 | --- | --- | --- | --- |
-| workflow-explorer | `workflow-spec.json` 生成器 | `scripts/workflow-*` | 无 |
+| workflow-explorer | `workflow-spec.json` 生成器 | `scripts/build-workflow-spec.js` | operation-spec |
 | network-recorder | `network-spec.json` 生成器 | `scripts/network-*` | 无 |
 | state-miner | `state-machine.json` 生成器 | `scripts/state-*` | workflow/network |
 | evidence-compressor | `evidence-facts.json` 汇总 | `scripts/evidence-*` | workflow/network/state |
 
 通过标准：ADP 不用项目资料时能采到“定义参数/需求输出/用例执行/验收确认”或明确说明采不到的页面阻塞。
+
+当前最小运行入口：
+
+```bash
+npm run workflow:spec -- --input outputs/adp
+```
+
+第一阶段只生成独立 artifact，不接默认 pipeline。后续再把它接入 truth-readiness lineage、narrative quality 和 business-process-model 输入，避免在 freshness/gate 不完整时影响白皮书正文。
 
 ### Round 2：Truth Model / AI 语义融合
 

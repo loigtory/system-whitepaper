@@ -89,6 +89,7 @@ Use the npm scripts as the stable entrypoints:
 - `npm run agent:isolation:strict`: validate actual git worktrees, branches, handoff reports, coordinator cleanliness, and worker diff/writeScope boundaries before merging.
 - `npm run db:profile -- --system <code>`: build a redacted `database-profile.json` from private test-database metadata or `databaseProfile.mode=connector` / `--connector` read-only schema scan when enabled. The command reuses an existing profile for the same database/cache key by default and does not reconnect/re-read metadata; add `-- --refresh-database-profile` only after schema, metadata, includeSchemas, sampleRows, or sampleTables changed.
 - `npm run db:model -- --input outputs/<code>`: derive `data-dictionary.json` and `entity-model.json` from the redacted database profile.
+- `npm run workflow:spec -- --input outputs/<code>`: derive `workflow-spec.json` from `operation-spec.json`; observed module flows can support workflow narration, while planned flows remain candidate/pending and must not be written as verified completed processes.
 - `npm run truth:universe -- --input outputs/<code>`: merge UI evidence summary and redacted database profile into `function-universe.json` candidates.
 - `npm run truth:claims -- --input outputs/<code>`: convert the function universe into `verified-claims.json` with confidence and writable/non-writable boundaries; database-only inferred claims are not writable.
 - `npm run truth:fact-check -- --input outputs/<code>`: check `whitepaper.pending-review.md` against writable claims; block unsupported/non-writable body assertions and low writable-claim coverage.
@@ -146,6 +147,7 @@ Generate artifacts per system:
 - `database-profile.json`: redacted database schema/entity evidence; never include database secrets or raw sensitive rows.
 - `data-dictionary.json`: field-level dictionary derived from redacted database evidence; includes semantic tags and counts, not raw sample rows.
 - `entity-model.json`: entity and relation model derived from the data dictionary; database-only relationships remain inference evidence until UI confirms workflow behavior.
+- `workflow-spec.json`: deterministic workflow evidence from `operation-spec.json`; distinguishes observed flows from planned/candidate flows and records boundaries for partial or failed flows.
 - `function-universe.json`: UI + DB candidate universe for later verified claims; not final conclusions.
 - `verified-claims.json`: claim-level evidence and confidence boundary for narrative writing and fact checks.
 - `fact-check-report.json`: deterministic assertion and writable-claim coverage report for pending review/finalization gates.
