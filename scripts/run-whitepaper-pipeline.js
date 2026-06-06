@@ -576,7 +576,8 @@ async function runPipelineNode(nodeId, context) {
     ]);
   }
   if (nodeId === "narrative") {
-    return runPhase3b({
+    const pendingReviewPath = path.join(systemOutput, "whitepaper.pending-review.md");
+    const result = await runPhase3b({
       provider: args.narrativeProvider || args.provider || "manual",
       systemCode: system.code,
       systemName: system.name,
@@ -598,6 +599,18 @@ async function runPipelineNode(nodeId, context) {
       sdkCwd: systemOutput,
       pricingConfig: config.narrative?.pricing || {},
     });
+    if (
+      result?.status === "manual-required" &&
+      (!result.outputPath || !fs.existsSync(pendingReviewPath))
+    ) {
+      throw new Error(
+        [
+          "Narrative provider manual only prepared prompts and did not generate whitepaper.pending-review.md.",
+          "Configure a model provider such as --provider cursor-sdk/codex, or provide narrative-fragments.md and rerun the narrative node.",
+        ].join(" "),
+      );
+    }
+    return result;
   }
   if (nodeId === "fact-check") {
     return runNodeScript(

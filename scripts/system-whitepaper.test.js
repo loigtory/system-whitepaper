@@ -2733,6 +2733,43 @@ test("manual phase3b provider writes prompt without fabricating pending review",
   assert.equal(fs.existsSync(path.join(dir, "whitepaper.pending-review.md")), false);
 });
 
+test("pipeline narrative node fails fast when manual provider has no pending review", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runPipelineNode } = require("./run-whitepaper-pipeline");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-manual-narrative-"));
+  fs.writeFileSync(
+    path.join(dir, "evidence-summary.json"),
+    JSON.stringify({
+      system: { code: "adp", name: "AI保单数据闭环平台" },
+      metrics: { counts: { pages: 1 } },
+      modules: [],
+      functions: [],
+    }),
+    "utf8",
+  );
+  writeOperationSpecFixture(dir);
+  writeQualityReportFixture(dir);
+  writeVerifiedClaimsFixture(dir);
+
+  await assert.rejects(
+    () =>
+      runPipelineNode("narrative", {
+        args: { provider: "manual", narrativeProvider: "manual" },
+        config: {},
+        configPath: path.join(dir, "systems.local.yaml"),
+        projectRoot: path.resolve(__dirname, ".."),
+        system: { code: "adp", name: "AI保单数据闭环平台" },
+        systemOutput: dir,
+      }),
+    /manual only prepared prompts.*whitepaper\.pending-review\.md/,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "phase3b-prompt.md")), true);
+  assert.equal(fs.existsSync(path.join(dir, "whitepaper.pending-review.md")), false);
+});
+
 test("manual phase3b can expose only selected narrative part prompts", async () => {
   const fs = require("node:fs");
   const os = require("node:os");
