@@ -18,6 +18,7 @@ This skill is the main controller. Use supporting files for detailed rules:
 - `safety-rules.md`: Test data and write-operation safety rules
 - `quality-checklist.md`: 99%+ quality gate
 - `docs/narrative-guide.md`: Agent narrative writing, review rejection, and rewrite rules
+- `docs/HIGH-TRUTH-OPTIMIZATION-FRAMEWORK.md`: 95%+ business-truth optimization framework, Golden Eval, Truth Model, and 4-agent execution plan
 
 ## Required Inputs
 
