@@ -1396,6 +1396,174 @@ function isSafeInspectionClick(candidate) {
   return Boolean(text && inspection && !highImpact);
 }
 
+function classifyCaptureAction(candidate = {}) {
+  const text = normalizeUiText(candidate.text || candidate.name || candidate.label || "");
+  const role = String(candidate.role || "").toLowerCase();
+  if (!text) {
+    return { class: "unknown", safeToClick: false, reason: "missing-label", text };
+  }
+  if (
+    /删除|移除|禁用|停用|审批|审核|通过|驳回|支付|付款|结算|发送|取消订单|关闭订单|关单|作废|下架|确认删除/.test(
+      text,
+    )
+  ) {
+    return { class: "unsafe-write", safeToClick: false, reason: "unsafe-write-action", text };
+  }
+  if (/新增|新建|创建|配置|生成|执行|运行|上传|导入|编辑|修改/.test(text)) {
+    return { class: "flow-start", safeToClick: true, reason: "business-flow-entry", text };
+  }
+  if (/上一步|下一步|保存|提交|确定|确认|发布|完成|开始|运行/.test(text)) {
+    return { class: "flow-progress", safeToClick: true, reason: "business-flow-progress", text };
+  }
+  if (/查看|详情|预览/.test(text)) {
+    return { class: "read-detail", safeToClick: true, reason: "read-only-detail", text };
+  }
+  if (
+    /menu|tree|tab|navigation/.test(role) ||
+    /页签|菜单|导航|切换|高级查询|筛选|过滤|更多/.test(text)
+  ) {
+    return { class: "navigation", safeToClick: true, reason: "navigation", text };
+  }
+  return { class: "unknown", safeToClick: false, reason: "unclassified-action", text };
+}
+
+function snapshotActionLabel(value) {
+  if (typeof value === "string") return normalizeUiText(value);
+  return normalizeUiText(value?.text || value?.name || value?.label || "");
+}
+
+function uniqueSnapshotStrings(values = []) {
+  return uniqueStrings((values || []).map(snapshotActionLabel));
+}
+
+function snapshotFieldLabels(snapshot = {}) {
+  return uniqueStrings(
+    (snapshot.forms || []).flatMap((form) =>
+      (form.fields || []).map((field) => field.label || field.name),
+    ),
+  );
+}
+
+function snapshotTableSignatures(snapshot = {}) {
+  return uniqueStrings(
+    (snapshot.tables || []).map((table) => (table.columns || []).join("|")),
+  );
+}
+
+function isInspectionFlowButton(label) {
+  return /^(上一步|下一步|保存|确定|提交|完成|生成|发布|确认|开始|执行|运行)$/.test(
+    normalizeUiText(label),
+  );
+}
+
+function filterFormsByNewFields(forms = [], beforeFields = new Set()) {
+  return (forms || [])
+    .map((form) => ({
+      ...form,
+      fields: (form.fields || []).filter((field) => {
+        const label = normalizeUiText(field.label || field.name || "");
+        return label && !beforeFields.has(label);
+      }),
+    }))
+    .filter((form) => (form.fields || []).length);
+}
+
+function filterNewTables(tables = [], beforeTables = new Set()) {
+  return (tables || []).filter((table) => {
+    const signature = (table.columns || []).join("|");
+    return signature && !beforeTables.has(signature);
+  });
+}
+
+function buildInspectionSurfaceDelta(input = {}) {
+  const action =
+    input.action ||
+    classifyCaptureAction({
+      text: input.candidateText || input.triggerLabel || "",
+      role: input.role || "button",
+    });
+  if (!action.safeToClick || action.class === "unsafe-write") {
+    return {
+      valid: false,
+      reason: action.reason || "unsafe-action",
+      action,
+      forms: [],
+      tables: [],
+      buttons: [],
+    };
+  }
+
+  const beforeSnapshot = input.beforeSnapshot || {};
+  const afterSnapshot = input.afterSnapshot || {};
+  const beforeFields = new Set(snapshotFieldLabels(beforeSnapshot));
+  const afterFields = snapshotFieldLabels(afterSnapshot);
+  const newFieldLabels = afterFields.filter((label) => !beforeFields.has(label));
+  const beforeTables = new Set(snapshotTableSignatures(beforeSnapshot));
+  const afterTableSignatures = snapshotTableSignatures(afterSnapshot);
+  const hasNewTable = afterTableSignatures.some((signature) => !beforeTables.has(signature));
+  const beforeButtons = new Set(uniqueSnapshotStrings(beforeSnapshot.buttons || []));
+  const flowButtons = uniqueSnapshotStrings(afterSnapshot.buttons || []).filter(isInspectionFlowButton);
+  const deltaButtons = flowButtons.filter((button) => !beforeButtons.has(button));
+  const deltaForms = filterFormsByNewFields(afterSnapshot.forms || [], beforeFields);
+  const deltaTables = filterNewTables(afterSnapshot.tables || [], beforeTables);
+  const fieldCountGrew = afterFields.length > beforeFields.size;
+
+  if (!newFieldLabels.length && !fieldCountGrew && !hasNewTable && !deltaButtons.length) {
+    return {
+      valid: false,
+      reason: "no-meaningful-delta",
+      action,
+      forms: [],
+      tables: [],
+      buttons: [],
+    };
+  }
+  if (!deltaForms.length && !deltaTables.length && !deltaButtons.length) {
+    return {
+      valid: false,
+      reason: "url-only-or-unchanged-surface",
+      action,
+      forms: [],
+      tables: [],
+      buttons: [],
+    };
+  }
+
+  return {
+    valid: true,
+    reason: "meaningful-surface-delta",
+    action,
+    forms: deltaForms.slice(0, 12),
+    tables: deltaTables.slice(0, 12),
+    buttons: deltaButtons.slice(0, 80),
+    addedFieldLabels: newFieldLabels.slice(0, 80),
+    addedTableSignatures: afterTableSignatures
+      .filter((signature) => !beforeTables.has(signature))
+      .slice(0, 40),
+  };
+}
+
+function buildInspectionSurfaceSnapshot(input = {}) {
+  const candidateText = normalizeUiText(input.candidateText || input.triggerLabel || "");
+  if (!isSafeInspectionClick({ text: candidateText, role: input.role || "button" })) return null;
+  const action = input.action || classifyCaptureAction({ text: candidateText, role: input.role || "button" });
+  const delta = buildInspectionSurfaceDelta({ ...input, action });
+  if (!delta.valid) return null;
+
+  return {
+    type: "container",
+    title: candidateText || input.afterSnapshot?.title || "页面内表单/详情",
+    triggerLabel: candidateText,
+    captureKind: "inspection-surface",
+    captureScope: "page-delta",
+    actionClass: action.class,
+    actionClassification: action,
+    buttons: delta.buttons,
+    forms: delta.forms,
+    tables: delta.tables,
+  };
+}
+
 function normalizeUrl(candidateUrl, baseUrl) {
   const url = new URL(candidateUrl, baseUrl);
   url.hash = "";
@@ -1771,6 +1939,9 @@ function mergeContainerSnapshotIntoEvidence(evidence, snapshot) {
     triggerLabel: snapshot.triggerLabel || snapshot.triggerText || "",
     triggerActionId: snapshot.triggerActionId || "",
     captureKind: snapshot.captureKind || "container-inspection",
+    captureScope: snapshot.captureScope || "",
+    actionClass: snapshot.actionClass || snapshot.actionClassification?.class || "",
+    actionClassification: snapshot.actionClassification || null,
   });
 
   for (const [index, button] of (snapshot.buttons || []).entries()) {
@@ -2711,6 +2882,8 @@ function buildChromiumContextLaunchOptions(config = {}, options = {}) {
 module.exports = {
   buildChromiumLaunchArgs,
   buildChromiumContextLaunchOptions,
+  buildInspectionSurfaceDelta,
+  buildInspectionSurfaceSnapshot,
   DEFAULT_CHROME_USER_AGENT,
   DEFAULT_HUNTIAN_BROWSER_CONTINUE_WAIT_MS,
   detectHuntianLoginPageState,
@@ -2742,6 +2915,7 @@ module.exports = {
   shouldCollectMenu,
   buildAuthCookies,
   buildCookiesFromHeader,
+  classifyCaptureAction,
   completeHuntianQuickLogin,
   continueHuntianBrowserLogin,
   waitForApplicationReady,

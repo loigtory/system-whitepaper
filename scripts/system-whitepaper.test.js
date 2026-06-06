@@ -6,8 +6,11 @@ const {
   assertSafeWriteTarget,
   buildChromiumLaunchArgs,
   buildChromiumContextLaunchOptions,
+  buildInspectionSurfaceDelta,
+  buildInspectionSurfaceSnapshot,
   buildEvidenceSummary,
   buildQualityReport,
+  classifyCaptureAction,
   DEFAULT_CHROME_USER_AGENT,
   resolveBrowserUserAgent,
   resolveChromeUserDataDir,
@@ -1503,6 +1506,61 @@ test("isSafeInspectionClick opens read-only or form inspection entrypoints only"
   assert.equal(isSafeInspectionClick({ text: "提交审批", role: "button" }), false);
 });
 
+test("classifyCaptureAction separates flow starts progress read detail navigation unsafe and unknown actions", () => {
+  assert.deepEqual(classifyCaptureAction({ text: "新建AI任务", role: "button" }), {
+    class: "flow-start",
+    safeToClick: true,
+    reason: "business-flow-entry",
+    text: "新建AI任务",
+  });
+  assert.equal(classifyCaptureAction({ text: "下一步", role: "button" }).class, "flow-progress");
+  assert.equal(classifyCaptureAction({ text: "查看详情", role: "button" }).class, "read-detail");
+  assert.equal(classifyCaptureAction({ text: "任务页签", role: "tab" }).class, "navigation");
+  assert.equal(classifyCaptureAction({ text: "删除", role: "button" }).safeToClick, false);
+  assert.equal(classifyCaptureAction({ text: "刷新", role: "button" }).class, "unknown");
+});
+
+test("buildInspectionSurfaceDelta rejects url-only changes and keeps only business deltas", () => {
+  const beforeSnapshot = {
+    url: "https://sit-adp.hzins.com/#/tasks",
+    forms: [{ formName: "查询", fields: [{ label: "保险公司" }] }],
+    buttons: ["查询", "重置", "新建AI任务"],
+    tables: [{ columns: ["保险公司", "任务类型", "操作"] }],
+  };
+
+  assert.equal(
+    buildInspectionSurfaceDelta({
+      action: classifyCaptureAction({ text: "新建AI任务", role: "button" }),
+      beforeSnapshot,
+      afterSnapshot: { ...beforeSnapshot, url: "https://sit-adp.hzins.com/#/tasks?x=1" },
+    }).valid,
+    false,
+  );
+
+  const delta = buildInspectionSurfaceDelta({
+    action: classifyCaptureAction({ text: "新建AI任务", role: "button" }),
+    beforeSnapshot,
+    afterSnapshot: {
+      url: beforeSnapshot.url,
+      forms: [
+        {
+          formName: "定义参数",
+          fields: [
+            { label: "保险公司", type: "select", required: true },
+            { label: "接口方式", type: "select", required: true },
+          ],
+        },
+      ],
+      buttons: ["上一步", "下一步", "保存"],
+      tables: [],
+    },
+  });
+
+  assert.equal(delta.valid, true);
+  assert.deepEqual(delta.forms[0].fields.map((field) => field.label), ["接口方式"]);
+  assert.deepEqual(delta.buttons, ["上一步", "下一步", "保存"]);
+});
+
 test("mergeContainerSnapshotIntoEvidence records modal or drawer as page evidence", () => {
   const evidence = createInitialEvidence({
     code: "contract",
@@ -1535,7 +1593,6 @@ test("mergeContainerSnapshotIntoEvidence records modal or drawer as page evidenc
 });
 
 test("buildInspectionSurfaceSnapshot captures page-level form surfaces after safe clicks", () => {
-  const { buildInspectionSurfaceSnapshot } = require("./collect-evidence");
   const snapshot = buildInspectionSurfaceSnapshot({
     candidateText: "新建AI任务",
     beforeSnapshot: {
@@ -1570,7 +1627,6 @@ test("buildInspectionSurfaceSnapshot captures page-level form surfaces after saf
 });
 
 test("buildInspectionSurfaceSnapshot ignores unchanged list pages after safe clicks", () => {
-  const { buildInspectionSurfaceSnapshot } = require("./collect-evidence");
   const beforeSnapshot = {
     url: "https://sit-adp.hzins.com/",
     forms: [{ formName: "查询表单", fields: [{ label: "保险公司" }] }],
@@ -1589,7 +1645,6 @@ test("buildInspectionSurfaceSnapshot ignores unchanged list pages after safe cli
 });
 
 test("buildInspectionSurfaceSnapshot ignores url-only changes without surface delta", () => {
-  const { buildInspectionSurfaceSnapshot } = require("./collect-evidence");
   const beforeSnapshot = {
     url: "https://sit-adp.hzins.com/#/tasks",
     forms: [{ formName: "查询表单", fields: [{ label: "保险公司" }] }],
@@ -1612,7 +1667,6 @@ test("buildInspectionSurfaceSnapshot ignores url-only changes without surface de
 });
 
 test("buildInspectionSurfaceSnapshot keeps only delta fields and flow buttons", () => {
-  const { buildInspectionSurfaceSnapshot } = require("./collect-evidence");
   const snapshot = buildInspectionSurfaceSnapshot({
     candidateText: "新建AI任务",
     beforeSnapshot: {
