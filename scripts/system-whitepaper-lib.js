@@ -1768,6 +1768,9 @@ function mergeContainerSnapshotIntoEvidence(evidence, snapshot) {
     screenshot: snapshot.screenshot ? snapshot.screenshot.file : "",
     evidenceRefs: snapshot.screenshot ? [snapshot.screenshot.id] : [],
     sourcePageId: snapshot.sourcePageId || "",
+    triggerLabel: snapshot.triggerLabel || snapshot.triggerText || "",
+    triggerActionId: snapshot.triggerActionId || "",
+    captureKind: snapshot.captureKind || "container-inspection",
   });
 
   for (const [index, button] of (snapshot.buttons || []).entries()) {

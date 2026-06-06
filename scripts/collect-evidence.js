@@ -2319,6 +2319,8 @@ async function inspectSafeContainers({
     attemptedTexts.add(candidateText);
 
     try {
+      const beforeUrl = page.url();
+      const beforeSnapshot = await collectFrameSnapshot(frame).catch(() => null);
       const beforeCount = await visibleContainerCount(frame);
       const clicked = await clickInspectionCandidate(frame, candidate);
       if (!clicked) {
@@ -2330,13 +2332,64 @@ async function inspectSafeContainers({
       await waitForVisibleContainer(frame, getCollectOptions()?.fastNavigation ? 2500 : 5000);
       await page.waitForTimeout(getCollectOptions()?.fastNavigation ? 200 : 400);
       await waitForPageStable(page);
+      const urlChangedAfterClick = page.url() !== beforeUrl;
       const afterCount = await visibleContainerCount(frame);
 
       if (afterCount <= beforeCount) {
-        log("inspect-container", candidate.text, "skipped", {
-          reason: "no-new-visible-container",
+        const afterFrame = await getActiveContentFrame(page);
+        const afterSnapshot = await collectFrameSnapshot(afterFrame).catch(() => null);
+        const surface = buildInspectionSurfaceSnapshot({
+          candidateText,
+          beforeSnapshot,
+          afterSnapshot,
         });
-        await closeTopContainer(page);
+        if (!surface) {
+          log("inspect-container", candidate.text, "skipped", {
+            reason: "no-new-visible-container",
+          });
+          await restoreInspectionContext(page, beforeUrl);
+          if (urlChangedAfterClick) return inspected;
+          continue;
+        }
+
+        const screenshotFile = path
+          .join(
+            "screenshots",
+            safeScreenshotName(
+              system.name,
+              candidate.text,
+              "页面内表单",
+              timestamp,
+            ),
+          )
+          .replace(/\\/g, "/");
+        await page.screenshot({
+          path: path.join(systemOutput, screenshotFile),
+          fullPage: true,
+        });
+        mergeContainerSnapshotIntoEvidence(evidence, {
+          ...surface,
+          id: `${pageId}-container-${inspected + 1}`,
+          sourcePageId: pageId,
+          screenshot: {
+            id: `shot-${pageId}-container-${inspected + 1}`,
+            file: screenshotFile,
+            module: surface.title || candidate.text,
+            function: candidate.text,
+            step: "页面内表单/详情",
+            caption: `${candidate.text} 页面内表单/详情截图。`,
+            includeInWhitepaper: true,
+          },
+        });
+
+        log("inspect-container", candidate.text, "success", {
+          type: surface.type,
+          title: surface.title,
+          captureKind: surface.captureKind,
+        });
+        inspected += 1;
+        await restoreInspectionContext(page, beforeUrl);
+        if (urlChangedAfterClick) return inspected;
         continue;
       }
 
@@ -2368,6 +2421,8 @@ async function inspectSafeContainers({
         ...container,
         id: `${pageId}-container-${inspected + 1}`,
         sourcePageId: pageId,
+        triggerLabel: candidateText,
+        captureKind: "visible-container",
         screenshot: {
           id: `shot-${pageId}-container-${inspected + 1}`,
           file: screenshotFile,
@@ -2384,7 +2439,8 @@ async function inspectSafeContainers({
         title: container.title,
       });
       inspected += 1;
-      await closeTopContainer(page);
+      await restoreInspectionContext(page, beforeUrl);
+      if (urlChangedAfterClick) return inspected;
     } catch (error) {
       log("inspect-container", candidate.text, "skipped", {
         reason: error.message,
@@ -3078,6 +3134,84 @@ async function clickInspectionCandidate(target, candidate) {
   return false;
 }
 
+function uniqueSnapshotStrings(values = []) {
+  return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)));
+}
+
+function snapshotFieldLabels(snapshot = {}) {
+  return uniqueSnapshotStrings(
+    (snapshot.forms || []).flatMap((form) =>
+      (form.fields || []).map((field) => field.label || field.name),
+    ),
+  );
+}
+
+function snapshotTableSignatures(snapshot = {}) {
+  return uniqueSnapshotStrings(
+    (snapshot.tables || []).map((table) => (table.columns || []).join("|")),
+  );
+}
+
+function isInspectionFlowButton(label) {
+  return /^(上一步|下一步|保存|确定|提交|完成|生成|发布|确认|开始|执行|运行)$/.test(
+    String(label || "").trim(),
+  );
+}
+
+function filterFormsByNewFields(forms = [], beforeFields = new Set()) {
+  return (forms || [])
+    .map((form) => ({
+      ...form,
+      fields: (form.fields || []).filter((field) => {
+        const label = String(field.label || field.name || "").trim();
+        return label && !beforeFields.has(label);
+      }),
+    }))
+    .filter((form) => (form.fields || []).length);
+}
+
+function filterNewTables(tables = [], beforeTables = new Set()) {
+  return (tables || []).filter((table) => {
+    const signature = (table.columns || []).join("|");
+    return signature && !beforeTables.has(signature);
+  });
+}
+
+function buildInspectionSurfaceSnapshot(input = {}) {
+  const candidateText = String(input.candidateText || "").trim();
+  if (!isSafeInspectionClick({ text: candidateText, role: "button" })) return null;
+
+  const beforeSnapshot = input.beforeSnapshot || {};
+  const afterSnapshot = input.afterSnapshot || {};
+  const beforeFields = new Set(snapshotFieldLabels(beforeSnapshot));
+  const afterFields = snapshotFieldLabels(afterSnapshot);
+  const newFieldLabels = afterFields.filter((label) => !beforeFields.has(label));
+  const beforeTables = new Set(snapshotTableSignatures(beforeSnapshot));
+  const afterTableSignatures = snapshotTableSignatures(afterSnapshot);
+  const hasNewTable = afterTableSignatures.some((signature) => !beforeTables.has(signature));
+  const beforeButtons = new Set(uniqueSnapshotStrings(beforeSnapshot.buttons || []));
+  const flowButtons = uniqueSnapshotStrings(afterSnapshot.buttons || []).filter(isInspectionFlowButton);
+  const hasNewFlowButton = flowButtons.some((button) => !beforeButtons.has(button));
+  const fieldCountGrew = afterFields.length > beforeFields.size;
+  const hasSurfaceEvidence = newFieldLabels.length > 0 || fieldCountGrew || hasNewTable || hasNewFlowButton;
+  if (!hasSurfaceEvidence) return null;
+  const deltaForms = filterFormsByNewFields(afterSnapshot.forms || [], beforeFields);
+  const deltaTables = filterNewTables(afterSnapshot.tables || [], beforeTables);
+  const deltaButtons = flowButtons.filter((button) => !beforeButtons.has(button));
+  if (!deltaForms.length && !deltaTables.length && !deltaButtons.length) return null;
+
+  return {
+    type: "container",
+    title: candidateText || afterSnapshot.title || "页面内表单/详情",
+    triggerLabel: candidateText,
+    captureKind: "inspection-surface",
+    captureScope: "page-delta",
+    buttons: deltaButtons.slice(0, 80),
+    forms: deltaForms.slice(0, 12),
+    tables: deltaTables.slice(0, 12),
+  };
+}
+
 async function waitForVisibleContainer(target, timeoutMs = 4000) {
   const selectors = [
     ".ant-modal-root .ant-modal",
@@ -3216,6 +3350,16 @@ async function collectVisibleContainerSnapshot(target) {
 async function closeTopContainer(page) {
   await page.keyboard.press("Escape").catch(() => {});
   await page.waitForTimeout(200);
+}
+
+async function restoreInspectionContext(page, beforeUrl) {
+  await closeTopContainer(page).catch(() => {});
+  const currentUrl = page.url();
+  if (!beforeUrl || currentUrl === beforeUrl) return;
+  await page.goBack({ waitUntil: "domcontentloaded", timeout: 5000 }).catch(async () => {
+    await page.goto(beforeUrl, { waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {});
+  });
+  await waitForPageStable(page).catch(() => {});
 }
 
 async function expandSafeDynamicMenus(page, log) {
@@ -3835,6 +3979,7 @@ if (require.main === module) {
 } else {
   module.exports = {
     applyVisibleDomMenuCandidatesToEvidence,
+    buildInspectionSurfaceSnapshot,
     collectBrowserEvidence,
     executeWriteValidationBrowser,
     loadEvidenceForCollection,

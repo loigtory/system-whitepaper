@@ -1515,6 +1515,7 @@ test("mergeContainerSnapshotIntoEvidence records modal or drawer as page evidenc
     sourcePageId: "page-home",
     type: "modal",
     title: "新增合同",
+    triggerLabel: "新增合同",
     buttons: ["保存", "取消"],
     forms: [{ formName: "新增合同表单", fields: [{ label: "合同名称" }] }],
     screenshot: {
@@ -1527,9 +1528,120 @@ test("mergeContainerSnapshotIntoEvidence records modal or drawer as page evidenc
   });
 
   assert.equal(evidence.pageInventory[0].type, "modal");
+  assert.equal(evidence.pageInventory[0].triggerLabel, "新增合同");
   assert.equal(evidence.actionInventory.length, 2);
   assert.equal(evidence.formInventory[0].formName, "新增合同表单");
   assert.equal(evidence.screenshotIndex[0].caption, "新增合同弹窗。");
+});
+
+test("buildInspectionSurfaceSnapshot captures page-level form surfaces after safe clicks", () => {
+  const { buildInspectionSurfaceSnapshot } = require("./collect-evidence");
+  const snapshot = buildInspectionSurfaceSnapshot({
+    candidateText: "新建AI任务",
+    beforeSnapshot: {
+      url: "https://sit-adp.hzins.com/",
+      forms: [{ formName: "查询表单", fields: [{ label: "保险公司" }] }],
+      buttons: ["查询", "重置", "新建AI任务"],
+      tables: [{ columns: ["保险公司", "任务类型", "操作"] }],
+    },
+    afterSnapshot: {
+      title: "AI保单数据闭环平台",
+      url: "https://sit-adp.hzins.com/",
+      forms: [
+        {
+          formName: "任务配置",
+          fields: [
+            { label: "保险公司", type: "select", required: true },
+            { label: "接口方式", type: "select", required: true },
+            { label: "需求文档", type: "textarea", required: true },
+          ],
+        },
+      ],
+      buttons: ["上一步", "下一步", "保存"],
+      tables: [],
+    },
+  });
+
+  assert.equal(snapshot.type, "container");
+  assert.equal(snapshot.triggerLabel, "新建AI任务");
+  assert.equal(snapshot.title, "新建AI任务");
+  assert.deepEqual(snapshot.forms[0].fields.map((field) => field.label), ["接口方式", "需求文档"]);
+  assert.deepEqual(snapshot.buttons, ["上一步", "下一步", "保存"]);
+});
+
+test("buildInspectionSurfaceSnapshot ignores unchanged list pages after safe clicks", () => {
+  const { buildInspectionSurfaceSnapshot } = require("./collect-evidence");
+  const beforeSnapshot = {
+    url: "https://sit-adp.hzins.com/",
+    forms: [{ formName: "查询表单", fields: [{ label: "保险公司" }] }],
+    buttons: ["查询", "重置", "新建AI任务"],
+    tables: [{ columns: ["保险公司", "任务类型", "操作"] }],
+  };
+
+  assert.equal(
+    buildInspectionSurfaceSnapshot({
+      candidateText: "新建AI任务",
+      beforeSnapshot,
+      afterSnapshot: JSON.parse(JSON.stringify(beforeSnapshot)),
+    }),
+    null,
+  );
+});
+
+test("buildInspectionSurfaceSnapshot ignores url-only changes without surface delta", () => {
+  const { buildInspectionSurfaceSnapshot } = require("./collect-evidence");
+  const beforeSnapshot = {
+    url: "https://sit-adp.hzins.com/#/tasks",
+    forms: [{ formName: "查询表单", fields: [{ label: "保险公司" }] }],
+    buttons: ["查询", "重置", "新建AI任务"],
+    tables: [{ columns: ["保险公司", "任务类型", "操作"] }],
+  };
+  const afterSnapshot = {
+    ...JSON.parse(JSON.stringify(beforeSnapshot)),
+    url: "https://sit-adp.hzins.com/#/tasks?refresh=1",
+  };
+
+  assert.equal(
+    buildInspectionSurfaceSnapshot({
+      candidateText: "新建AI任务",
+      beforeSnapshot,
+      afterSnapshot,
+    }),
+    null,
+  );
+});
+
+test("buildInspectionSurfaceSnapshot keeps only delta fields and flow buttons", () => {
+  const { buildInspectionSurfaceSnapshot } = require("./collect-evidence");
+  const snapshot = buildInspectionSurfaceSnapshot({
+    candidateText: "新建AI任务",
+    beforeSnapshot: {
+      url: "https://sit-adp.hzins.com/#/tasks",
+      forms: [{ formName: "查询表单", fields: [{ label: "保险公司" }] }],
+      buttons: ["查询", "重置", "新建AI任务"],
+      tables: [{ columns: ["保险公司", "任务类型", "操作"] }],
+    },
+    afterSnapshot: {
+      url: "https://sit-adp.hzins.com/#/tasks",
+      forms: [
+        {
+          formName: "任务配置",
+          fields: [
+            { label: "保险公司", type: "select" },
+            { label: "接口方式", type: "select" },
+            { label: "需求文档", type: "textarea" },
+          ],
+        },
+      ],
+      buttons: ["查询", "下一步", "保存"],
+      tables: [{ columns: ["保险公司", "任务类型", "操作"] }],
+    },
+  });
+
+  assert.deepEqual(snapshot.forms[0].fields.map((field) => field.label), ["接口方式", "需求文档"]);
+  assert.deepEqual(snapshot.buttons, ["下一步", "保存"]);
+  assert.equal(snapshot.tables.length, 0);
+  assert.equal(snapshot.captureScope, "page-delta");
 });
 
 test("mergePageSnapshotIntoEvidence records pages, actions, forms, and screenshots", () => {
@@ -13753,6 +13865,90 @@ test("buildOperationSpec keeps sourcePageId tab pages as modules instead of cont
 
   assert.equal(spec.modules.some((item) => item.name === "任务明细"), true);
   assert.equal(spec.modules.find((item) => item.name === "任务明细").surfaceType, "business-list");
+});
+
+test("buildOperationSpec separates container flows by trigger label", () => {
+  const { buildOperationSpec } = require("./operation-spec/lib");
+  const { spec } = buildOperationSpec({
+    evidence: {
+      systemInfo: { code: "adp", name: "AI保单数据闭环平台" },
+      menuMap: [{ title: "AI任务管理", menuPath: "AI任务管理" }],
+      pageInventory: [
+        { id: "page-task", menuPath: "AI任务管理", title: "AI任务管理", type: "menu-page" },
+        {
+          id: "container-create",
+          sourcePageId: "page-task",
+          title: "新建AI任务",
+          type: "container",
+          triggerLabel: "新建AI任务",
+          screenshot: "screenshots/create.png",
+        },
+        {
+          id: "container-edit",
+          sourcePageId: "page-task",
+          title: "编辑AI任务",
+          type: "container",
+          triggerLabel: "编辑AI任务",
+          screenshot: "screenshots/edit.png",
+        },
+      ],
+      tableInventory: [{ pageId: "page-task", columns: ["任务名称", "状态", "操作"] }],
+      actionInventory: [
+        { pageId: "page-task", name: "新建AI任务", type: "create", risk: "normal" },
+        { pageId: "page-task", name: "编辑AI任务", type: "update", risk: "normal" },
+        { pageId: "container-create", name: "保存", type: "button", risk: "normal" },
+        { pageId: "container-edit", name: "保存", type: "button", risk: "normal" },
+      ],
+      formInventory: [
+        { pageId: "container-create", fields: [{ label: "任务名称", type: "input", required: true }] },
+        { pageId: "container-edit", fields: [{ label: "执行状态", type: "select", required: true }] },
+      ],
+      screenshotIndex: [],
+    },
+    system: { code: "adp", name: "AI保单数据闭环平台", operationGuideMinMenus: 1, operationGuideAllowDraft: true },
+  });
+
+  const taskModule = spec.modules.find((item) => item.name === "AI任务管理");
+  assert.deepEqual(taskModule.flows.map((flow) => flow.name), ["新建AI任务", "编辑AI任务"]);
+  assert.deepEqual(taskModule.flows.map((flow) => flow.steps.map((step) => step.title)), [
+    ["新建AI任务"],
+    ["编辑AI任务"],
+  ]);
+});
+
+test("buildOperationSpec does not promote read-only detail containers to flows", () => {
+  const { buildOperationSpec } = require("./operation-spec/lib");
+  const { spec } = buildOperationSpec({
+    evidence: {
+      systemInfo: { code: "adp", name: "AI保单数据闭环平台" },
+      menuMap: [{ title: "AI任务管理", menuPath: "AI任务管理" }],
+      pageInventory: [
+        { id: "page-task", menuPath: "AI任务管理", title: "AI任务管理", type: "menu-page" },
+        {
+          id: "container-detail",
+          sourcePageId: "page-task",
+          title: "任务详情",
+          type: "container",
+          triggerLabel: "查看",
+          screenshot: "screenshots/detail.png",
+        },
+      ],
+      tableInventory: [{ pageId: "page-task", columns: ["任务名称", "状态", "操作"] }],
+      actionInventory: [
+        { pageId: "page-task", name: "查看", type: "read", risk: "normal" },
+        { pageId: "container-detail", name: "返回", type: "button", risk: "normal" },
+      ],
+      formInventory: [
+        { pageId: "container-detail", fields: [{ label: "执行状态", type: "input", required: false }] },
+      ],
+      screenshotIndex: [],
+    },
+    system: { code: "adp", name: "AI保单数据闭环平台", operationGuideMinMenus: 1, operationGuideAllowDraft: true },
+  });
+
+  const taskModule = spec.modules.find((item) => item.name === "AI任务管理");
+  assert.equal(taskModule.flows.length, 0);
+  assert.equal(taskModule.surfaceType, "business-list");
 });
 
 test("loadOperationSpecInputs rejects malformed core evidence", () => {

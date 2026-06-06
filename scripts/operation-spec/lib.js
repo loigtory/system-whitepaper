@@ -867,6 +867,10 @@ function isFlowProgressButton(label) {
 }
 
 function inferContainerFlowTrigger(moduleActions = [], containers = []) {
+  const explicitTrigger = uniqueStrings(
+    containers.map((page) => page.triggerLabel || page.triggerText || page.trigger || ""),
+  )[0];
+  if (explicitTrigger) return explicitTrigger;
   const labels = uniqueStrings(moduleActions.flatMap((action) => splitActionLabels(action.name)));
   const createLabel = labels.find((label) => /新建|新增|创建/.test(label));
   if (createLabel) return createLabel;
@@ -936,6 +940,31 @@ function buildFlowFromContainerEvidence(input = {}) {
     reason: "依据页面容器/弹窗/抽屉截图与字段证据归纳，未执行真实提交。",
     steps,
   };
+}
+
+function groupContainerPagesByTrigger(containers = []) {
+  const groups = new Map();
+  for (const container of containers) {
+    const triggerKey =
+      container.triggerActionId ||
+      [
+        container.sourcePageId,
+        container.triggerLabel || container.triggerText || container.trigger || container.menuPath,
+      ]
+        .filter(Boolean)
+        .join("::") ||
+      "__default__";
+    const key = normalizeOperationText(triggerKey);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(container);
+  }
+  return Array.from(groups.values());
+}
+
+function buildFlowsFromContainerEvidence(input = {}) {
+  return groupContainerPagesByTrigger(input.containers || [])
+    .map((containers) => buildFlowFromContainerEvidence({ ...input, containers }))
+    .filter(Boolean);
 }
 
 function scenarioHasObservedFlowEvidence(scenario = {}) {
@@ -1056,7 +1085,7 @@ function buildModuleSpec(name, evidence, writeValidation, networkIndex, system =
   const validationFlows = validationScenarios
     .filter((scenario) => scenarioHasObservedFlowEvidence(scenario))
     .map((scenario) => buildFlowFromValidationScenario(scenario, networkIndex));
-  const containerFlow = buildFlowFromContainerEvidence({
+  const containerFlows = buildFlowsFromContainerEvidence({
     containers: containerPages,
     forms: containerForms,
     actions: containerActions,
@@ -1064,7 +1093,7 @@ function buildModuleSpec(name, evidence, writeValidation, networkIndex, system =
     moduleActions: actions,
     networkIndex,
   });
-  const flows = [...validationFlows, containerFlow].filter(Boolean);
+  const flows = [...validationFlows, ...containerFlows].filter(Boolean);
   const plannedFlows = prunePlannedFlowsCoveredByObserved(validationScenarios
     .filter((scenario) => !scenarioHasObservedFlowEvidence(scenario))
     .map(buildPlannedFlowFromValidationScenario), flows);
