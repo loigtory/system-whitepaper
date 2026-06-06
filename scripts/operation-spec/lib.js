@@ -101,6 +101,7 @@ function pageById(evidence, pageId) {
 function pagesForMenu(evidence, menuName) {
   const target = String(menuName || "").trim();
   return (evidence.pageInventory || []).filter((page) => {
+    if (isContainerEvidencePage(page)) return false;
     const menuPath = String(page.menuPath || "").trim();
     const title = String(page.title || "").trim();
     return menuPath === target || title === target || menuPath.endsWith(`> ${target}`);
@@ -129,6 +130,7 @@ function collectModuleNames(evidence, writeValidation = null, evidenceSummary = 
   }
   for (const page of evidence.pageInventory || []) {
     if (page.type === "home") continue;
+    if (isContainerEvidencePage(page)) continue;
     if (page.menuPath) names.push(page.menuPath);
   }
   for (const scenario of writeValidation?.scenarios || []) {
@@ -809,6 +811,133 @@ function buildFlowFromValidationScenario(scenario, networkIndex) {
   };
 }
 
+function isContainerEvidencePage(page = {}) {
+  const type = String(page.type || "").trim().toLowerCase();
+  return ["container", "modal", "drawer", "dialog", "popover", "stepper"].includes(type);
+}
+
+function containerStepOrder(page = {}, fallbackIndex = 0) {
+  for (const key of ["order", "stepOrder", "index", "sequence"]) {
+    const number = Number(page[key]);
+    if (Number.isFinite(number)) return number;
+  }
+  return fallbackIndex;
+}
+
+function containerPagesForSourcePages(evidence = {}, sourcePageIds = new Set()) {
+  return (evidence.pageInventory || [])
+    .map((page, index) => ({ page, index }))
+    .filter(({ page }) => isContainerEvidencePage(page) && sourcePageIds.has(page.sourcePageId))
+    .sort((left, right) => {
+      const leftOrder = containerStepOrder(left.page, left.index);
+      const rightOrder = containerStepOrder(right.page, right.index);
+      return leftOrder - rightOrder || left.index - right.index;
+    })
+    .map(({ page }) => page);
+}
+
+function fieldsForForms(forms = []) {
+  const byKey = new Map();
+  for (const field of forms.flatMap((form) => form.fields || [])) {
+    const label = normalizeOperationText(field.label || field.name);
+    if (!label || isTechnicalFieldLabel(label)) continue;
+    const control = normalizeControlType(field.type || field.control);
+    const key = `${label}\u0000${control}`;
+    if (byKey.has(key)) continue;
+    byKey.set(key, {
+      label,
+      required: Boolean(field.required),
+      control,
+    });
+  }
+  return Array.from(byKey.values());
+}
+
+function buttonsForActions(actions = []) {
+  return uniqueStrings(actions.flatMap((action) => splitActionLabels(action.name)))
+    .filter((label) => !/^[×xX]$/.test(label))
+    .filter((label) => !/^(取消|关闭|返回)$/.test(label) || actions.length === 1)
+    .slice(0, 12);
+}
+
+function isFlowProgressButton(label) {
+  return /^(下一步|上一步|保存|确定|提交|完成|生成|发布|确认|开始|执行|运行)$/.test(
+    normalizeOperationText(label),
+  );
+}
+
+function inferContainerFlowTrigger(moduleActions = [], containers = []) {
+  const labels = uniqueStrings(moduleActions.flatMap((action) => splitActionLabels(action.name)));
+  const createLabel = labels.find((label) => /新建|新增|创建/.test(label));
+  if (createLabel) return createLabel;
+  const semanticLabel = labels.find((label) => isSemanticBusinessAction(label));
+  if (semanticLabel) return semanticLabel;
+  const containerMenu = normalizeOperationText(containers.find((page) => page.menuPath)?.menuPath);
+  if (containerMenu) return containerMenu;
+  return normalizeOperationText(containers[0]?.title) || "页面容器流程";
+}
+
+function buildFlowFromContainerEvidence(input = {}) {
+  const {
+    containers = [],
+    forms = [],
+    actions = [],
+    tables = [],
+    moduleActions = [],
+    networkIndex = null,
+  } = input;
+  if (!containers.length) return null;
+  const containerIds = new Set(containers.map((page) => page.id).filter(Boolean));
+  const relevantForms = forms.filter((form) => containerIds.has(form.pageId));
+  const relevantActions = actions.filter((action) => containerIds.has(action.pageId));
+  const relevantTables = tables.filter((table) => containerIds.has(table.pageId));
+  const flowButtons = buttonsForActions(relevantActions).filter(isFlowProgressButton);
+  const trigger = inferContainerFlowTrigger(moduleActions, containers);
+  const hasBusinessTrigger = /新建|新增|创建|编辑|发布|提交|配置|生成|执行|运行|上传|导入/.test(trigger);
+  const hasStepEvidence =
+    relevantForms.some((form) => (form.fields || []).length) ||
+    relevantTables.some((table) => (table.columns || []).length) ||
+    flowButtons.length > 0;
+  if (!hasBusinessTrigger || !hasStepEvidence) return null;
+
+  const steps = containers
+    .map((container, index) => {
+      const pageForms = relevantForms.filter((form) => form.pageId === container.id);
+      const pageActions = relevantActions.filter((action) => action.pageId === container.id);
+      const pageTables = relevantTables.filter((table) => table.pageId === container.id);
+      const fields = fieldsForForms(pageForms);
+      const columns = uniqueStrings(pageTables.flatMap((table) => table.columns || []));
+      const title = normalizeOperationText(container.title || container.menuPath) || `步骤 ${index + 1}`;
+      return {
+        title,
+        fields,
+        buttons: buttonsForActions(pageActions),
+        tables: columns.length ? [{ columns }] : [],
+        screenshots: uniqueStrings([container.screenshot, ...(container.screenshots || [])]),
+        apis: mapApisForContext(networkIndex, [trigger, title, ...fields.map((field) => field.label)]),
+        validation: {
+          status: "observed",
+          filledFieldCount: 0,
+          source: "container-evidence",
+        },
+      };
+    })
+    .filter((step) =>
+      step.fields.length ||
+      step.buttons.length ||
+      step.tables.length ||
+      step.screenshots.length,
+    );
+  if (!steps.length) return null;
+  return {
+    name: trigger,
+    trigger,
+    status: "observed",
+    reason: "依据页面容器/弹窗/抽屉截图与字段证据归纳，未执行真实提交。",
+    steps,
+  };
+}
+
 function scenarioHasObservedFlowEvidence(scenario = {}) {
   const status = String(scenario.status || "").trim().toLowerCase();
   if (status && status !== "planned") return true;
@@ -826,6 +955,40 @@ function buildPlannedFlowFromValidationScenario(scenario = {}) {
   };
 }
 
+function flowIdentity(value = {}) {
+  return normalizeOperationText(`${value.name || ""} ${value.trigger || ""}`).toLowerCase();
+}
+
+function plannedFlowCoveredByObserved(planned = {}, observedFlows = []) {
+  if (!observedFlows.length) return false;
+  const plannedName = normalizeOperationText(planned.name || "");
+  const plannedTrigger = normalizeOperationText(planned.trigger || "");
+  const plannedKey = flowIdentity(planned);
+  return observedFlows.some((flow) => {
+    const flowName = normalizeOperationText(flow.name || "");
+    const flowTrigger = normalizeOperationText(flow.trigger || "");
+    if (plannedKey && plannedKey === flowIdentity(flow)) return true;
+    if (plannedName && (plannedName === flowName || plannedName === flowTrigger)) return true;
+    if (plannedTrigger && (plannedTrigger === flowName || plannedTrigger === flowTrigger)) return true;
+    return false;
+  });
+}
+
+function prunePlannedFlowsCoveredByObserved(plannedFlows = [], observedFlows = []) {
+  const remaining = [];
+  let genericCreateCredits = observedFlows.filter((flow) => /新建|新增|创建/.test(`${flow.name || ""} ${flow.trigger || ""}`)).length;
+  for (const flow of plannedFlows) {
+    if (plannedFlowCoveredByObserved(flow, observedFlows)) continue;
+    const trigger = normalizeOperationText(flow.trigger || "");
+    if (/^(create|new|新增|新建|创建)$/.test(trigger) && genericCreateCredits > 0) {
+      genericCreateCredits -= 1;
+      continue;
+    }
+    remaining.push(flow);
+  }
+  return remaining;
+}
+
 function resolveModuleBusinessHint(name, module, system = {}, evidenceSummary = null) {
   const hints = system.moduleBusinessHints;
   if (hints && typeof hints === "object" && hints[name]) {
@@ -841,9 +1004,14 @@ function resolveModuleBusinessHint(name, module, system = {}, evidenceSummary = 
 function buildModuleSpec(name, evidence, writeValidation, networkIndex, system = {}, evidenceSummary = null) {
   const pages = pagesForMenu(evidence, name);
   const pageIds = new Set(pages.map((page) => page.id));
+  const containerPages = containerPagesForSourcePages(evidence, pageIds);
+  const containerPageIds = new Set(containerPages.map((page) => page.id));
   const tables = (evidence.tableInventory || []).filter((table) => pageIds.has(table.pageId));
+  const containerTables = (evidence.tableInventory || []).filter((table) => containerPageIds.has(table.pageId));
   const forms = (evidence.formInventory || []).filter((form) => pageIds.has(form.pageId));
+  const containerForms = (evidence.formInventory || []).filter((form) => containerPageIds.has(form.pageId));
   const actions = (evidence.actionInventory || []).filter((action) => pageIds.has(action.pageId));
+  const containerActions = (evidence.actionInventory || []).filter((action) => containerPageIds.has(action.pageId));
   const summaryFunctions = (evidenceSummary?.functions || []).filter((fn) => {
     const haystack = `${fn.module || ""} ${fn.name || ""} ${fn.menuPath || ""}`;
     return haystack.includes(name);
@@ -876,6 +1044,7 @@ function buildModuleSpec(name, evidence, writeValidation, networkIndex, system =
   const rowActions = buildRowActions(actions);
   const screenshots = uniqueStrings(
     pages.map((page) => page.screenshot).concat(
+      containerPages.map((page) => page.screenshot),
       (evidence.screenshotIndex || [])
         .filter((shot) => shot.module === name || shot.function === name)
         .map((shot) => shot.file),
@@ -884,12 +1053,21 @@ function buildModuleSpec(name, evidence, writeValidation, networkIndex, system =
   );
   const validationScenarios = (writeValidation?.scenarios || [])
     .filter((scenario) => moduleNameFromValidationScenario(scenario) === name);
-  const flows = validationScenarios
+  const validationFlows = validationScenarios
     .filter((scenario) => scenarioHasObservedFlowEvidence(scenario))
     .map((scenario) => buildFlowFromValidationScenario(scenario, networkIndex));
-  const plannedFlows = validationScenarios
+  const containerFlow = buildFlowFromContainerEvidence({
+    containers: containerPages,
+    forms: containerForms,
+    actions: containerActions,
+    tables: containerTables,
+    moduleActions: actions,
+    networkIndex,
+  });
+  const flows = [...validationFlows, containerFlow].filter(Boolean);
+  const plannedFlows = prunePlannedFlowsCoveredByObserved(validationScenarios
     .filter((scenario) => !scenarioHasObservedFlowEvidence(scenario))
-    .map(buildPlannedFlowFromValidationScenario);
+    .map(buildPlannedFlowFromValidationScenario), flows);
   const surfaceType = classifyModuleSurface({
     name,
     pages,
@@ -907,7 +1085,7 @@ function buildModuleSpec(name, evidence, writeValidation, networkIndex, system =
     columns,
     filters: queryAnalysis.filters,
     rowActions,
-    actions,
+    actions: [...actions, ...containerActions],
   });
 
   const fallbackQueryFields = uniqueStrings(
@@ -934,7 +1112,7 @@ function buildModuleSpec(name, evidence, writeValidation, networkIndex, system =
     flows,
     plannedFlows,
     tabs: uniqueStrings(
-      pages.filter((page) => page.type === "container").map((page) => page.title),
+      containerPages.map((page) => page.title),
     ),
     screenshots,
     apis: mapApisForContext(networkIndex, [name]),

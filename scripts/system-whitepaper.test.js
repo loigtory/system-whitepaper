@@ -13536,6 +13536,225 @@ test("buildOperationSpec derives module surfaces from evidence summary screensho
   assert.equal(gate.canComposeGuide, true);
 });
 
+test("buildOperationSpec derives observed flows from container step evidence", () => {
+  const { buildOperationSpec } = require("./operation-spec/lib");
+  const { spec } = buildOperationSpec({
+    evidence: {
+      systemInfo: { code: "adp", name: "AI保单数据闭环平台", testUrl: "https://sit-adp.hzins.com/" },
+      menuMap: [
+        { title: "AI任务管理", menuPath: "AI任务管理", url: "https://sit-adp.hzins.com/#/tasks" },
+      ],
+      pageInventory: [
+        {
+          id: "page-task",
+          menuPath: "AI任务管理",
+          title: "AI任务管理",
+          type: "menu-page",
+          screenshot: "screenshots/task.png",
+        },
+        {
+          id: "container-define",
+          sourcePageId: "page-task",
+          menuPath: "新建AI任务",
+          title: "定义参数",
+          type: "modal",
+          screenshot: "screenshots/define.png",
+        },
+        {
+          id: "container-output",
+          sourcePageId: "page-task",
+          menuPath: "新建AI任务",
+          title: "需求输出",
+          type: "modal",
+          screenshot: "screenshots/output.png",
+        },
+        {
+          id: "container-case",
+          sourcePageId: "page-task",
+          menuPath: "新建AI任务",
+          title: "用例执行",
+          type: "modal",
+          screenshot: "screenshots/cases.png",
+        },
+        {
+          id: "container-accept",
+          sourcePageId: "page-task",
+          menuPath: "新建AI任务",
+          title: "验收确认",
+          type: "modal",
+          screenshot: "screenshots/accept.png",
+        },
+      ],
+      tableInventory: [
+        {
+          pageId: "page-task",
+          columns: ["保险公司", "任务类型", "接口方式", "需求状态", "操作"],
+        },
+      ],
+      actionInventory: [
+        { pageId: "page-task", name: "新建AI任务", type: "create", risk: "normal" },
+        { pageId: "container-define", name: "下一步", type: "button", risk: "normal" },
+        { pageId: "container-output", name: "下一步", type: "button", risk: "normal" },
+        { pageId: "container-case", name: "下一步", type: "button", risk: "normal" },
+        { pageId: "container-accept", name: "完成", type: "button", risk: "normal" },
+      ],
+      formInventory: [
+        {
+          pageId: "container-define",
+          formName: "定义参数",
+          fields: [
+            { label: "保险公司", type: "select", required: true },
+            { label: "接口方式", type: "select", required: true },
+          ],
+        },
+        {
+          pageId: "container-output",
+          formName: "需求输出",
+          fields: [{ label: "需求文档", type: "textarea", required: true }],
+        },
+        {
+          pageId: "container-case",
+          formName: "用例执行",
+          fields: [{ label: "测试结果", type: "textarea", required: false }],
+        },
+        {
+          pageId: "container-accept",
+          formName: "验收确认",
+          fields: [{ label: "验收意见", type: "textarea", required: false }],
+        },
+      ],
+      screenshotIndex: [],
+    },
+    system: {
+      code: "adp",
+      name: "AI保单数据闭环平台",
+      businessHint: "AI 数据闭环平台用于解决保险中介产品上架最后一公里问题。",
+      operationGuideMinMenus: 1,
+      operationGuideAllowDraft: true,
+    },
+    writeValidation: {
+      scenarios: [
+        {
+          menuPath: "AI任务管理",
+          action: "create",
+          buttonText: "新建AI任务",
+          status: "planned",
+          reason: "safe-inspection-only",
+        },
+      ],
+    },
+    networkIndex: {
+      entries: [
+        { method: "GET", url: "https://sit-adp.hzins.com/api/tasks", schemaKeys: ["taskType", "status"] },
+      ],
+    },
+  });
+
+  const taskModule = spec.modules.find((item) => item.name === "AI任务管理");
+  assert.equal(spec.modules.some((item) => item.name === "新建AI任务"), false);
+  assert.equal(taskModule.surfaceType, "business-flow");
+  assert.equal(taskModule.flows.length, 1);
+  assert.equal(taskModule.plannedFlows.length, 0);
+  assert.equal(taskModule.flows[0].name, "新建AI任务");
+  assert.equal(taskModule.flows[0].status, "observed");
+  assert.deepEqual(taskModule.flows[0].steps.map((step) => step.title), [
+    "定义参数",
+    "需求输出",
+    "用例执行",
+    "验收确认",
+  ]);
+  assert.deepEqual(taskModule.flows[0].steps[0].fields.map((field) => field.label), ["保险公司", "接口方式"]);
+  assert.deepEqual(taskModule.flows[0].steps[3].buttons, ["完成"]);
+  assert.equal(taskModule.flows[0].steps[0].screenshots[0], "screenshots/define.png");
+});
+
+test("buildOperationSpec does not promote screenshot-only containers to observed flows", () => {
+  const { buildOperationSpec } = require("./operation-spec/lib");
+  const { spec } = buildOperationSpec({
+    evidence: {
+      systemInfo: { code: "adp", name: "AI保单数据闭环平台" },
+      menuMap: [{ title: "AI任务管理", menuPath: "AI任务管理" }],
+      pageInventory: [
+        { id: "page-task", menuPath: "AI任务管理", title: "AI任务管理", type: "menu-page", screenshot: "screenshots/task.png" },
+        { id: "container-tip-1", sourcePageId: "page-task", title: "操作提示", type: "modal", screenshot: "screenshots/tip-1.png" },
+        { id: "container-tip-2", sourcePageId: "page-task", title: "帮助说明", type: "modal", screenshot: "screenshots/tip-2.png" },
+      ],
+      tableInventory: [{ pageId: "page-task", columns: ["任务名称", "状态", "操作"] }],
+      actionInventory: [
+        { pageId: "page-task", name: "新建AI任务", type: "create", risk: "normal" },
+        { pageId: "container-tip-1", name: "关闭", type: "button", risk: "normal" },
+        { pageId: "container-tip-2", name: "知道了", type: "button", risk: "normal" },
+      ],
+      formInventory: [],
+      screenshotIndex: [],
+    },
+    system: { code: "adp", name: "AI保单数据闭环平台", operationGuideMinMenus: 1, operationGuideAllowDraft: true },
+  });
+
+  const taskModule = spec.modules.find((item) => item.name === "AI任务管理");
+  assert.equal(taskModule.surfaceType, "business-list");
+  assert.equal(taskModule.flows.length, 0);
+});
+
+test("buildOperationSpec consumes only one generic planned flow per observed container flow", () => {
+  const { buildOperationSpec } = require("./operation-spec/lib");
+  const { spec } = buildOperationSpec({
+    evidence: {
+      systemInfo: { code: "adp", name: "AI保单数据闭环平台" },
+      menuMap: [{ title: "AI任务管理", menuPath: "AI任务管理" }],
+      pageInventory: [
+        { id: "page-task", menuPath: "AI任务管理", title: "AI任务管理", type: "menu-page" },
+        { id: "container-form", sourcePageId: "page-task", title: "新建AI任务", type: "modal", screenshot: "screenshots/form.png" },
+      ],
+      tableInventory: [{ pageId: "page-task", columns: ["任务名称", "状态", "操作"] }],
+      actionInventory: [
+        { pageId: "page-task", name: "新建AI任务", type: "create", risk: "normal" },
+        { pageId: "container-form", name: "保存", type: "button", risk: "normal" },
+      ],
+      formInventory: [
+        { pageId: "container-form", fields: [{ label: "任务名称", type: "input", required: true }] },
+      ],
+      screenshotIndex: [],
+    },
+    system: { code: "adp", name: "AI保单数据闭环平台", operationGuideMinMenus: 1, operationGuideAllowDraft: true },
+    writeValidation: {
+      scenarios: [
+        { id: "auto-task-create", menuPath: "AI任务管理", action: "create", status: "planned" },
+        { id: "auto-batch-create", menuPath: "AI任务管理", action: "create", status: "planned" },
+      ],
+    },
+  });
+
+  const taskModule = spec.modules.find((item) => item.name === "AI任务管理");
+  assert.equal(taskModule.flows.length, 1);
+  assert.equal(taskModule.plannedFlows.length, 1);
+});
+
+test("buildOperationSpec keeps sourcePageId tab pages as modules instead of containers", () => {
+  const { buildOperationSpec } = require("./operation-spec/lib");
+  const { spec } = buildOperationSpec({
+    evidence: {
+      systemInfo: { code: "adp", name: "AI保单数据闭环平台" },
+      menuMap: [],
+      pageInventory: [
+        { id: "page-task", menuPath: "AI任务管理", title: "AI任务管理", type: "menu-page" },
+        { id: "page-task-detail", sourcePageId: "page-task", menuPath: "任务明细", title: "任务明细", type: "tab-page" },
+      ],
+      tableInventory: [
+        { pageId: "page-task", columns: ["任务名称", "状态"] },
+        { pageId: "page-task-detail", columns: ["执行批次", "执行状态"] },
+      ],
+      actionInventory: [],
+      formInventory: [],
+      screenshotIndex: [],
+    },
+    system: { code: "adp", name: "AI保单数据闭环平台", operationGuideMinMenus: 1, operationGuideAllowDraft: true },
+  });
+
+  assert.equal(spec.modules.some((item) => item.name === "任务明细"), true);
+  assert.equal(spec.modules.find((item) => item.name === "任务明细").surfaceType, "business-list");
+});
+
 test("loadOperationSpecInputs rejects malformed core evidence", () => {
   const fs = require("node:fs");
   const os = require("node:os");
