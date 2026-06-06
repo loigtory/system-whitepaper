@@ -18455,6 +18455,275 @@ test("truth readiness blocks low writable claim coverage", () => {
   );
 });
 
+test("golden eval scores covered partial missing and overclaim facts", () => {
+  const { buildGoldenEvalReport } = require("./run-golden-eval");
+  const goldenFacts = {
+    artifactType: "golden-facts",
+    version: 1,
+    systemCode: "adp",
+    facts: [
+      {
+        id: "adp:positioning:insurer-data-loop",
+        category: "positioning",
+        priority: "P0",
+        statement: "平台面向保司数据对接闭环。",
+        match: {
+          all: ["保司", "数据", "闭环"],
+        },
+      },
+      {
+        id: "adp:workflow:main-loop",
+        category: "workflow",
+        priority: "P0",
+        statement: "主流程覆盖定义参数、需求输出、用例执行、验收确认、发布开启、定时拉保司数据、写核心、数据监控。",
+        match: {
+          groups: [
+            ["定义参数"],
+            ["需求输出"],
+            ["用例执行"],
+            ["验收确认"],
+            ["发布开启"],
+            ["定时拉保司数据", "拉取保司数据"],
+            ["写核心"],
+            ["数据监控"],
+          ],
+        },
+      },
+      {
+        id: "adp:boundary:hiagent",
+        category: "boundary",
+        priority: "P1",
+        statement: "HiAgent 负责需求和测试类生成，不直接调保司或写核心。",
+        match: {
+          all: ["HiAgent"],
+          groups: [
+            ["需求生成", "需求类生成"],
+            ["测试生成", "测试类生成"],
+            ["不直接调保司", "不负责调保司"],
+            ["不直接写核心", "不负责写核心"],
+          ],
+        },
+        forbiddenClaims: [
+          {
+            pattern: "HiAgent.{0,16}(直接)?(调用|调).{0,8}保司",
+            message: "HiAgent 不应被描述为直接调用保司。",
+          },
+        ],
+      },
+    ],
+  };
+  const markdown = [
+    "# AI保单数据闭环平台功能白皮书",
+    "平台用于保司数据对接闭环。",
+    "主流程为：定义参数 -> 需求输出 -> 用例执行 -> 验收确认。",
+    "文档错误地声称 HiAgent 直接调用保司完成数据拉取。",
+  ].join("\n");
+
+  const report = buildGoldenEvalReport({
+    goldenFacts,
+    markdown,
+    generatedAt: "2026-06-06T00:00:00.000Z",
+    minCoverageRatio: 0.95,
+  });
+
+  assert.equal(report.artifactType, "golden-eval-report");
+  assert.equal(report.canPass, false);
+  assert.equal(report.metrics.factCount, 3);
+  assert.equal(report.metrics.coveredCount, 1);
+  assert.equal(report.metrics.partialCount, 1);
+  assert.equal(report.metrics.missingCount, 0);
+  assert.equal(report.metrics.overclaimCount, 1);
+  assert.equal(report.results.find((item) => item.id === "adp:positioning:insurer-data-loop").status, "covered");
+  assert.equal(report.results.find((item) => item.id === "adp:workflow:main-loop").status, "partial");
+  assert.equal(report.results.find((item) => item.id === "adp:boundary:hiagent").status, "overclaim");
+  assert.match(report.failures.join("\n"), /Golden Eval coverage/);
+  assert.match(report.overclaims[0].message, /HiAgent/);
+});
+
+test("golden eval writes report with source fingerprints", () => {
+  const { runGoldenEval } = require("./run-golden-eval");
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "golden-eval-"));
+  const goldenFactsPath = path.join(dir, "adp-golden-facts.json");
+  const markdownPath = path.join(dir, "whitepaper.pending-review.md");
+  const outputPath = path.join(dir, "golden-eval-report.json");
+  fs.writeFileSync(
+    goldenFactsPath,
+    JSON.stringify({
+      artifactType: "golden-facts",
+      version: 1,
+      systemCode: "adp",
+      facts: [
+        {
+          id: "adp:value:shorten-implementation",
+          category: "value",
+          priority: "P0",
+          statement: "平台将保司接入周期从约 4 天缩短到约半天。",
+          match: {
+            all: ["4天", "半天"],
+            groups: [["缩短", "提效"]],
+          },
+        },
+      ],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(markdownPath, "平台把保司接入周期从约4天缩短到约半天，形成明显提效。", "utf8");
+
+  const report = runGoldenEval({
+    inputDir: dir,
+    goldenFactsPath,
+    markdownPath,
+    outputPath,
+    generatedAt: "2026-06-06T00:00:00.000Z",
+    minCoverageRatio: 0.95,
+  });
+
+  assert.equal(report.canPass, true);
+  assert.equal(report.metrics.coverageRatio, 1);
+  assert.equal(fs.existsSync(outputPath), true);
+  const written = JSON.parse(fs.readFileSync(outputPath, "utf8"));
+  assert.equal(written.sourceArtifacts.markdown.file, "whitepaper.pending-review.md");
+  assert.equal(written.sourceArtifacts.goldenFacts.file, "adp-golden-facts.json");
+  assert.match(written.sourceArtifacts.markdown.fingerprint.sha256, /^[a-f0-9]{64}$/);
+});
+
+test("golden eval treats vague noun mentions as partial not covered", () => {
+  const { buildGoldenEvalReport } = require("./run-golden-eval");
+  const report = buildGoldenEvalReport({
+    goldenFacts: {
+      artifactType: "golden-facts",
+      version: 1,
+      systemCode: "adp",
+      facts: [
+        {
+          id: "adp:module:release",
+          category: "module_responsibility",
+          priority: "P0",
+          statement: "AI发布管理需要关联验收确认后的发布开启。",
+          match: {
+            all: ["AI发布管理"],
+            groups: [
+              ["验收确认"],
+              ["发布开启"],
+            ],
+          },
+        },
+      ],
+    },
+    markdown: "系统包含 AI发布管理、AI任务管理、数据监控等模块。",
+    minCoverageRatio: 0.95,
+    minCriticalCoverageRatio: 0.8,
+  });
+
+  assert.equal(report.results[0].status, "partial");
+  assert.equal(report.metrics.coveredCount, 0);
+  assert.equal(report.metrics.partialCount, 1);
+  assert.equal(report.canPass, false);
+  assert.match(report.results[0].missingTerms.join(" "), /验收确认/);
+});
+
+test("golden eval demotes fully matched facts when forbidden claim is present", () => {
+  const { buildGoldenEvalReport } = require("./run-golden-eval");
+  const report = buildGoldenEvalReport({
+    goldenFacts: {
+      artifactType: "golden-facts",
+      version: 1,
+      facts: [
+        {
+          id: "adp:boundary:hiagent-covered-overclaim",
+          category: "external_boundary",
+          priority: "P0",
+          statement: "HiAgent 负责需求和测试类生成，不直接调保司或写核心。",
+          match: {
+            all: ["HiAgent"],
+            groups: [["需求生成"], ["测试生成"], ["不直接调保司"], ["不直接写核心"]],
+          },
+          forbiddenClaims: [
+            {
+              pattern: "HiAgent.{0,16}(执行|负责).{0,8}(保司调用|核心写入)",
+              message: "HiAgent 不应被写成执行保司调用或核心写入。",
+            },
+          ],
+        },
+      ],
+    },
+    markdown: "HiAgent 负责需求生成、测试生成，不直接调保司、不直接写核心；同时错误写成 HiAgent 负责保司调用。",
+    minCoverageRatio: 0.1,
+    minCriticalCoverageRatio: 0.1,
+    maxOverclaims: 0,
+  });
+
+  assert.equal(report.results[0].status, "overclaim");
+  assert.equal(report.metrics.coveredCount, 0);
+  assert.equal(report.metrics.overclaimCount, 1);
+  assert.equal(report.canPass, false);
+});
+
+test("golden eval does not cover facts from scattered document-level terms", () => {
+  const { buildGoldenEvalReport } = require("./run-golden-eval");
+  const report = buildGoldenEvalReport({
+    goldenFacts: {
+      artifactType: "golden-facts",
+      version: 1,
+      facts: [
+        {
+          id: "adp:workflow:write-core",
+          category: "workflow",
+          priority: "P0",
+          statement: "平台拉取保司数据后写入核心系统。",
+          match: {
+            groups: [["平台"], ["保司数据"], ["写核心", "写入核心", "核心系统"]],
+          },
+        },
+      ],
+    },
+    markdown: ["平台提供任务管理。", "页面展示保司数据字段。", "另一个章节提到核心系统边界。"].join("\n"),
+    minCoverageRatio: 0.95,
+    minCriticalCoverageRatio: 0.8,
+  });
+
+  assert.equal(report.results[0].status, "partial");
+  assert.equal(report.metrics.coveredCount, 0);
+  assert.match(report.results[0].missingTerms.join(" "), /同一证据窗口/);
+});
+
+test("golden eval forbidden claims match whitespace variants", () => {
+  const { buildGoldenEvalReport } = require("./run-golden-eval");
+  const report = buildGoldenEvalReport({
+    goldenFacts: {
+      artifactType: "golden-facts",
+      version: 1,
+      facts: [
+        {
+          id: "adp:value:no-fixed-sla",
+          category: "business_value",
+          priority: "P0",
+          statement: "ADP 接入效率不能被写成固定 SLA。",
+          match: {
+            groups: [["接入效率"]],
+          },
+          forbiddenClaims: [
+            {
+              pattern: "固定SLA",
+              message: "不能写成固定 SLA。",
+            },
+          ],
+        },
+      ],
+    },
+    markdown: "文档声称接入效率具备固定 SLA。",
+    minCoverageRatio: 0.1,
+    minCriticalCoverageRatio: 0.1,
+  });
+
+  assert.equal(report.results[0].status, "overclaim");
+  assert.equal(report.metrics.overclaimCount, 1);
+  assert.match(report.overclaims[0].message, /固定 SLA/);
+});
+
 test("package manifest whitelists only skill runtime assets", () => {
   const fs = require("node:fs");
   const path = require("node:path");
@@ -18500,6 +18769,7 @@ test("package manifest whitelists only skill runtime assets", () => {
     "scripts/repair-artifacts.js",
     "scripts/run-batch-repair-queue.js",
     "scripts/run-repair-follow-up-loop.js",
+    "scripts/run-golden-eval.js",
     "scripts/run-local-e2e-smoke.js",
     "scripts/system-whitepaper.test.js",
     "scripts/local-dashboard/",
@@ -18569,6 +18839,7 @@ test("npm pack dry-run excludes private and process-only assets", () => {
     "scripts/repair-artifacts.js",
     "scripts/run-batch-repair-queue.js",
     "scripts/run-repair-follow-up-loop.js",
+    "scripts/run-golden-eval.js",
     "scripts/run-local-e2e-smoke.js",
     "scripts/system-whitepaper.test.js",
     "scripts/local-dashboard/server.js",
@@ -18655,6 +18926,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
       "scripts/init-local-config.js",
       "scripts/sync-systems-registry.js",
       "scripts/run-phase3b.js",
+      "scripts/run-golden-eval.js",
       "scripts/run-whitepaper-batch.js",
       "scripts/run-whitepaper-pipeline.js",
       "scripts/local-dashboard/server.js",
@@ -18686,6 +18958,7 @@ test("packed skill can load packaged entrypoints from extracted tarball", () => 
           'require("./scripts/init-local-config");',
           'require("./scripts/sync-systems-registry");',
           'require("./scripts/run-phase3b");',
+          'require("./scripts/run-golden-eval");',
           'require("./scripts/run-whitepaper-batch");',
           'require("./scripts/run-whitepaper-pipeline");',
           'require("./scripts/local-dashboard/server");',

@@ -242,6 +242,14 @@ ADP 项目资料用于建立评测集，不作为生成输入。
 
 通过标准：能对当前 ADP 白皮书输出 coverage/partial/missing/overclaim 报告。
 
+当前最小运行入口：
+
+```bash
+node scripts/run-golden-eval.js --input outputs/adp --golden docs/evals/adp-golden-facts.json
+```
+
+默认读取 `outputs/adp/whitepaper.pending-review.md`，输出 `outputs/adp/golden-eval-report.json`。`docs/evals/adp-golden-facts.json` 只能作为评测标准答案使用，不随通用示例进入生成链路，不得传入 evidence、truth-model、whitepaper-plan、narrative writing 或 AI Provider prompt。
+
 ### Round 1：Workflow / API 证据
 
 目标：从系统自身取到四步流程、弹窗、Tab、发布启停、监控证据。

@@ -49,6 +49,7 @@
     "scripts/repair-artifacts.js",
     "scripts/run-batch-repair-queue.js",
     "scripts/run-repair-follow-up-loop.js",
+    "scripts/run-golden-eval.js",
     "scripts/run-whitepaper-batch.js",
     "scripts/run-whitepaper-pipeline.js",
     "scripts/start-dashboard.ps1",
