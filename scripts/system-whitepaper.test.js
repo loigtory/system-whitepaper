@@ -14673,6 +14673,38 @@ test("createNetworkRecorder stores xhr entries without response bodies", async (
   assert.equal(saved.entries[0].body, undefined);
 });
 
+test("quality-gate-auto selects smallest useful gate from changed files", () => {
+  const {
+    classifyGateImpact,
+    selectGateLevel,
+    buildGateCommand,
+  } = require("./quality-gate-auto");
+
+  assert.deepEqual(classifyGateImpact(["docs/narrative-guide.md"]), {
+    docsOnly: true,
+    hasBehavior: false,
+    hasCore: false,
+    hasFull: false,
+    reasons: ["docs-only"],
+  });
+  assert.equal(selectGateLevel(classifyGateImpact(["docs/narrative-guide.md"])), "quick");
+  assert.equal(selectGateLevel(classifyGateImpact(["scripts/system-whitepaper-lib.js"])), "core");
+  assert.equal(selectGateLevel(classifyGateImpact(["scripts/collect-evidence.js"])), "full");
+  assert.equal(selectGateLevel(classifyGateImpact(["scripts/check-truth-readiness.js"])), "full");
+  assert.equal(selectGateLevel(classifyGateImpact(["package.json"])), "core");
+  assert.deepEqual(buildGateCommand("quick"), ["npm", "run", "test:gate:quick"]);
+});
+
+test("package manifest exposes automatic quality gate entrypoint", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const repoRoot = path.resolve(__dirname, "..");
+  const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+
+  assert.equal(packageJson.scripts?.["test:gate:auto"], "node scripts/quality-gate-auto.js");
+  assert.ok((packageJson.files || []).includes("scripts/quality-gate-auto.js"));
+});
+
 test("package manifest declares external dependencies used by packaged scripts", () => {
   const fs = require("node:fs");
   const path = require("node:path");
@@ -19507,6 +19539,7 @@ test("package manifest whitelists only skill runtime assets", () => {
     "scripts/build-workflow-spec.js",
     "scripts/build-verified-claims.js",
     "scripts/check-agent-isolation.js",
+    "scripts/quality-gate-auto.js",
     "scripts/check-batch-acceptance.js",
     "scripts/check-delivery-readiness.js",
     "scripts/check-real-run-readiness.js",
@@ -19580,6 +19613,7 @@ test("npm pack dry-run excludes private and process-only assets", () => {
     "scripts/build-workflow-spec.js",
     "scripts/build-verified-claims.js",
     "scripts/check-agent-isolation.js",
+    "scripts/quality-gate-auto.js",
     "scripts/check-batch-acceptance.js",
     "scripts/check-delivery-readiness.js",
     "scripts/check-real-run-readiness.js",
