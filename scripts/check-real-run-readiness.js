@@ -59,11 +59,38 @@ function mdCell(value) {
     .replace(/\|/g, "\\|");
 }
 
+function classifyBlockedCategory(id = "") {
+  const value = String(id || "").toLowerCase();
+  const normalized = value.startsWith("doctor.") ? value.slice("doctor.".length) : value;
+  if (normalized.startsWith("auth.") || normalized.includes("token") || normalized.includes("cookie")) return "auth";
+  if (normalized.startsWith("database.") || normalized.includes("database-")) return "db";
+  if (normalized.includes("workflow")) return "workflow";
+  if (normalized.includes("narrative") || normalized.includes("fact-check") || normalized.includes("quality")) {
+    return "narrative";
+  }
+  if (normalized.includes("delivery") || normalized.includes("acceptance") || normalized.includes("final")) {
+    return "delivery";
+  }
+  if (normalized.includes("menu")) return "menu";
+  if (normalized.includes("evidence") || normalized.includes("collect") || normalized.includes("screenshot")) {
+    return "evidence";
+  }
+  if (normalized.includes("duplicate") || normalized.includes("concurrency") || normalized.includes("resource")) {
+    return "resource";
+  }
+  if (normalized.startsWith("system.") || normalized.startsWith("runtime.") || normalized.startsWith("config.")) {
+    return "config";
+  }
+  return "config";
+}
+
 function issue(id, message, extra = {}) {
+  const blockedCategory = extra.blockedCategory || classifyBlockedCategory(id);
   return {
     id,
     severity: extra.severity || "P0",
     systemCode: extra.systemCode || "",
+    blockedCategory,
     message,
   };
 }
@@ -84,6 +111,14 @@ function readJsonObjectIfExists(filePath) {
   } catch {
     return null;
   }
+}
+
+function countBlockedCategories(blockers = []) {
+  return (Array.isArray(blockers) ? blockers : []).reduce((counts, blocker) => {
+    const category = blocker.blockedCategory || classifyBlockedCategory(blocker.id);
+    counts[category] = (counts[category] || 0) + 1;
+    return counts;
+  }, {});
 }
 
 function loadRealRunContext(options = {}) {
@@ -787,6 +822,7 @@ function buildRealRunReadinessReport(input = {}) {
       readyToRun: systems.filter((system) => system.status === "ready-to-run").length,
       databaseEnabled: systems.filter((system) => system.databaseProfileEnabled).length,
       blockers: blockers.length,
+      blockedCategories: countBlockedCategories(blockers),
       warnings: warnings.length,
     },
     doctor: {
@@ -833,10 +869,17 @@ function renderRealRunReadinessMarkdown(report = {}) {
       mdCell(system.databaseProfileEnabled ? "yes" : "no"),
       mdCell(system.outputDir),
       mdCell(system.blockers?.map((item) => item.id).join(", ") || "-"),
+      mdCell([...new Set((system.blockers || []).map((item) => item.blockedCategory || classifyBlockedCategory(item.id)))].join(", ") || "-"),
     ].join(" | "),
   );
   const blockerRows = (report.blockers || []).map((item) =>
-    [mdCell(item.severity), mdCell(item.systemCode || "-"), mdCell(item.id), mdCell(item.message)].join(" | "),
+    [
+      mdCell(item.severity),
+      mdCell(item.systemCode || "-"),
+      mdCell(item.id),
+      mdCell(item.blockedCategory || classifyBlockedCategory(item.id)),
+      mdCell(item.message),
+    ].join(" | "),
   );
   const warningRows = (report.warnings || []).map((item) =>
     [mdCell(item.systemCode || "-"), mdCell(item.id), mdCell(item.message)].join(" | "),
@@ -857,15 +900,15 @@ function renderRealRunReadinessMarkdown(report = {}) {
     "",
     "## Systems",
     "",
-    "| System | Status | DB enabled | Output | Blockers |",
-    "| --- | --- | --- | --- | --- |",
-    systemRows.length ? systemRows.join("\n") : "| - | - | - | - | - |",
+    "| System | Status | DB enabled | Output | Blockers | Categories |",
+    "| --- | --- | --- | --- | --- | --- |",
+    systemRows.length ? systemRows.join("\n") : "| - | - | - | - | - | - |",
     "",
     "## Blockers",
     "",
-    "| Severity | System | ID | Message |",
-    "| --- | --- | --- | --- |",
-    blockerRows.length ? blockerRows.join("\n") : "| - | - | - | - |",
+    "| Severity | System | ID | Category | Message |",
+    "| --- | --- | --- | --- | --- |",
+    blockerRows.length ? blockerRows.join("\n") : "| - | - | - | - | - |",
     "",
     "## Warnings",
     "",
@@ -898,6 +941,7 @@ function buildRealRunReadinessStateSummary(report = {}, artifacts = {}) {
     canStartRealRun: Boolean(report.canStartRealRun),
     canDeliver: Boolean(report.canDeliver),
     summary: report.summary || {},
+    blockedCategories: report.summary?.blockedCategories || countBlockedCategories(report.blockers || []),
     batchRun: report.batchRun || null,
     acceptance: report.acceptance || null,
     deliveryReadiness: report.deliveryReadiness || null,
@@ -946,6 +990,7 @@ if (require.main === module) {
 module.exports = {
   buildRealRunReadinessReport,
   buildRealRunReadinessStateSummary,
+  classifyBlockedCategory,
   loadRealRunContext,
   renderRealRunReadinessMarkdown,
   runRealRunReadiness,

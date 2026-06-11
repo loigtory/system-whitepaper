@@ -12201,6 +12201,70 @@ test("real run readiness unifies preflight and final delivery state", () => {
   assert.equal(blockedWithStaleReady.canDeliver, false);
 });
 
+test("real run readiness classifies V7 blocked categories", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    buildRealRunReadinessReport,
+    renderRealRunReadinessMarkdown,
+  } = require("./check-real-run-readiness");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "real-run-v7-categories-"));
+  const outputRoot = path.join(dir, "outputs");
+  const dbSecretPath = path.join(dir, "secrets", "db", "finance.json");
+  fs.mkdirSync(path.dirname(dbSecretPath), { recursive: true });
+  fs.mkdirSync(path.join(dir, "fixtures"), { recursive: true });
+  fs.writeFileSync(
+    dbSecretPath,
+    JSON.stringify({ readOnly: false, metadataFile: "fixtures/finance-metadata.json" }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(dir, "fixtures", "finance-metadata.json"), JSON.stringify({ tables: [] }), "utf8");
+
+  const report = buildRealRunReadinessReport({
+    args: { systems: "finance,finance" },
+    context: {
+      projectRoot: dir,
+      configPath: path.join(dir, "systems.local.yaml"),
+      configDir: dir,
+      outputRoot,
+      config: {
+        runtime: { outputDir: "outputs" },
+        systems: [
+          {
+            code: "finance",
+            name: "Finance System",
+            url: "",
+            databaseProfile: {
+              enabled: true,
+              mode: "connector",
+              secretFile: "secrets/db/finance.json",
+            },
+          },
+        ],
+      },
+    },
+    doctor: {
+      ok: false,
+      failures: [{ id: "runtime.test-data-prefix-missing", message: "runtime.testDataPrefix is required." }],
+      warnings: [],
+      counts: { failures: 1, warnings: 0, systems: 1 },
+    },
+  });
+
+  const byId = new Map(report.blockers.map((item) => [item.id, item]));
+  assert.equal(byId.get("doctor.runtime.test-data-prefix-missing").blockedCategory, "config");
+  assert.equal(byId.get("system.url-missing").blockedCategory, "config");
+  assert.equal(byId.get("system.duplicate-request").blockedCategory, "resource");
+  assert.equal(byId.get("database.connector-not-readonly").blockedCategory, "db");
+  assert.deepEqual(report.summary.blockedCategories, { config: 2, resource: 1, db: 1 });
+
+  const markdown = renderRealRunReadinessMarkdown(report);
+  assert.match(markdown, /\| Category \|/);
+  assert.match(markdown, /database\.connector-not-readonly \| db \|/);
+});
+
 test("dashboard supports batch pipeline command and active run snapshot", () => {
   const {
     buildActiveRun,
@@ -22162,4 +22226,3 @@ test("packaged entrypoints load from the source checkout", () => {
     assert.doesNotThrow(() => require(relativePath), `${relativePath} should load`);
   }
 });
-

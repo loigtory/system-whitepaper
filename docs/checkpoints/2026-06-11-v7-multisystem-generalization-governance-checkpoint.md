@@ -21,6 +21,11 @@ This checkpoint records the first V7 implementation slice: intake governance bef
 - Updated `docs/VERSION-EXECUTION-TEMPLATE.md` so V7+ versions can record candidate systems, run levels, stop conditions, and blocked categories.
 - Updated `docs/superpowers/plans/2026-06-11-v7-multisystem-generalization-governance.md` task state for the completed governance slice.
 - Updated `docs/95-plus-truth-iteration-master-plan-2026-06-09.md` so the current next action points to `codex/v7-intake-governance` instead of the already merged roadmap branch.
+- Added V7 blocked-category reporting to `real:check`:
+  - Each real-run blocker now includes `blockedCategory`.
+  - `summary.blockedCategories` aggregates categories for coordinator decisions.
+  - The Markdown report displays blocker categories in both system and blocker tables.
+  - `buildRealRunReadinessStateSummary()` exposes category counts for dashboard or controller use.
 
 ## System Intake Checklist
 
@@ -104,13 +109,19 @@ Reason: another project may still consume multi-agent and AI-writing capacity, a
 - `npm test *> .tmp\v7-intake-npm-test.log`: exited 0. Result: 439/439 tests passed, 0 failed.
 - `npm run pack:check`: initial sandbox run exited 1 with `EPERM` while unlinking a `.npm-cache` temp file. Rerun with filesystem permission exited 0 and produced `system-whitepaper-skill-0.0.0.tgz` dry-run metadata with `entryCount=72`.
 - `npm run test:gate:quick *> .tmp\v7-intake-test-gate-quick.log`: rerun with filesystem permission exited 0. Result: tests 439/439 passed, 0 failed; package dry-run passed with `entryCount=72`.
+- RED: `node --test --test-name-pattern "real run readiness classifies V7 blocked categories" scripts/system-whitepaper.test.js *> .tmp\v7-real-run-categories-red.log`: exited 1 before implementation. Result: `blockedCategory` was `undefined`.
+- GREEN: `node --test --test-name-pattern "real run readiness classifies V7 blocked categories" scripts/system-whitepaper.test.js`: exited 0 after implementation. Result: selected test passed.
+- `node --check scripts/check-real-run-readiness.js`: exited 0.
+- `node --check scripts/system-whitepaper.test.js`: exited 0.
+- `node --test --test-name-pattern "real run readiness|batch active run|delivery readiness" scripts/system-whitepaper.test.js`: exited 0. Result: selected 3 tests passed, 437 skipped.
+- `npm run test:gate:core *> .tmp\v7-real-run-categories-test-gate-core.log`: exited 0. Result: tests 440/440 passed, package dry-run passed with `entryCount=72`, and agent isolation passed with workers 4/4.
 
 ## Residual Risk
 
 - No non-ADP systems have been selected yet.
 - `npm run doctor` and `npm run real:check -- --systems <code>` were not run for V7 candidate systems because no system codes were authorized.
 - No low-risk pipeline, AI narrative, DB profile, batch, delivery, or real-system browser run was started.
-- Blocked-category taxonomy is documented but not yet emitted directly by every script report.
+- Blocked-category taxonomy is emitted by `real:check`; batch acceptance, batch diagnosis, repair queue, and dashboard views still need a later V7 slice to consume or display the same taxonomy end to end.
 - `npm run test:gate:auto -- --dry-run` still needs a non-sandbox rerun when used as the authoritative automatic gate selector, because the sandbox blocks its internal Git child process.
 
 ## Environment And Data Safety
