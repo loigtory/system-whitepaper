@@ -33,7 +33,7 @@
 - Modify: `docs/95-plus-truth-iteration-master-plan-2026-06-09.md`
 - Create: `docs/superpowers/plans/2026-06-11-v7-multisystem-generalization-governance.md`
 
-- [ ] **Step 1: Update the version table**
+- [x] **Step 1: Update the version table**
 
 Set V0-V6 status to completed and add V7:
 
@@ -41,7 +41,7 @@ Set V0-V6 status to completed and add V7:
 | V7 | 多系统泛化试运行与接入治理 | 用非 ADP 系统验证通用性，固化系统接入、运行资源和验收边界 | P1 | 下一步 | 4-7 天 |
 ```
 
-- [ ] **Step 2: Update workflow semantic target**
+- [x] **Step 2: Update workflow semantic target**
 
 Replace any observed-only workflow target with:
 
@@ -49,11 +49,11 @@ Replace any observed-only workflow target with:
 `workflow-spec.json` 明确区分 `observed`、`inferred`、`candidate`：observed 可写为已观察流程，inferred 只能带证据边界叙述，candidate 不得写成已验证流程。
 ```
 
-- [ ] **Step 3: Add V7 section**
+- [x] **Step 3: Add V7 section**
 
 Include scope, task split, optional 4-agent model, and acceptance criteria for finance/HR/internal foundation onboarding.
 
-- [ ] **Step 4: Run document checks**
+- [x] **Step 4: Run document checks**
 
 Run:
 
@@ -69,7 +69,7 @@ Expected: no trailing whitespace or conflict marker errors.
 - Create or modify: `docs/checkpoints/2026-06-11-v7-multisystem-generalization-governance-checkpoint.md`
 - Optional modify: `docs/VERSION-EXECUTION-TEMPLATE.md`
 
-- [ ] **Step 1: Create an intake checklist**
+- [x] **Step 1: Create an intake checklist**
 
 Each candidate system must record:
 
@@ -86,7 +86,7 @@ Each candidate system must record:
 | allowed run level | yes | doctor-only, real-check, low-risk nodes, full pipeline, batch |
 ```
 
-- [ ] **Step 2: Define run-level meanings**
+- [x] **Step 2: Define run-level meanings**
 
 Use these exact levels:
 
@@ -98,7 +98,7 @@ Use these exact levels:
 - `batch-candidate`: eligible for bounded batch execution with unique output directory.
 ```
 
-- [ ] **Step 3: Define stop conditions**
+- [x] **Step 3: Define stop conditions**
 
 Stop before browser or AI-writing work when:
 
@@ -117,7 +117,7 @@ Stop before browser or AI-writing work when:
 - Create or modify: `docs/checkpoints/2026-06-11-v7-multisystem-generalization-governance-checkpoint.md`
 - Optional modify after tests: `scripts/check-real-run-readiness.js`, `scripts/run-whitepaper-batch.js`, `scripts/local-dashboard/server.js`
 
-- [ ] **Step 1: Define categories**
+- [x] **Step 1: Define categories**
 
 Use this taxonomy for each non-ADP blocked system:
 
@@ -135,7 +135,7 @@ Use this taxonomy for each non-ADP blocked system:
 | `resource` | AI/browser/CPU/multi-agent capacity is constrained | serialize systems or reduce concurrency |
 ```
 
-- [ ] **Step 2: Map categories to commands**
+- [x] **Step 2: Map categories to commands**
 
 Use:
 
@@ -193,7 +193,7 @@ npm run batch -- --systems <code1>,<code2> --concurrency 1
 **Files:**
 - Create: `docs/checkpoints/2026-06-11-v7-multisystem-generalization-governance-checkpoint.md`
 
-- [ ] **Step 1: Write checkpoint**
+- [x] **Step 1: Write checkpoint**
 
 Checkpoint must include:
 
@@ -223,7 +223,7 @@ Whether any real environment, DB metadata, secrets, cookies, runtime outputs, or
 Start bounded V7 dry-run or split into per-system worker branches.
 ```
 
-- [ ] **Step 2: Run verification**
+- [x] **Step 2: Run verification**
 
 For docs-only work:
 
@@ -252,3 +252,11 @@ npm run test:gate:full
 - Blocked categories cover auth, config, menu, evidence, workflow, DB, narrative, delivery, and resource constraints.
 - No secrets, DB credentials, browser cookies, private URLs, raw generated outputs, or customer artifacts are tracked.
 - Full-system execution remains blocked until the user explicitly names candidate systems and authorizes run level.
+
+## Current Execution Note
+
+- V7 route-map work was merged into `main` through PR #2.
+- The current implementation slice is `codex/v7-intake-governance`.
+- This slice intentionally stays docs-only: it codifies intake fields, run levels, stop conditions, blocked taxonomy, command mapping, and checkpoint format.
+- No real finance, HR, internal foundation, or other non-ADP system is selected yet.
+- No browser collection, AI writing, DB profiling, batch execution, or real-system output is allowed until the user names candidate systems and approves the run level.

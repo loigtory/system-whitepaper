@@ -408,14 +408,14 @@ YYYY-MM-DD-v<version>-checkpoint.md
 
 ## 15. 当前建议启动顺序
 
-当前 `main` 已合并 V0-V6，最新主线提交为 PR #1 merge commit。后续从 `main` 新开 `codex/v7-roadmap-multisystem` 或具体 V7 子任务分支推进。
+当前 `main` 已合并 V0-V6 和 V7 路线图，最新主线提交为 PR #2 merge commit。后续从 `main` 新开具体 V7 子任务分支推进。
 
 V7 的目标是把 ADP 试点能力迁移为多系统接入治理能力。ADP 只保留为回归样例和 Golden Eval 参照，不再作为唯一验收系统。
 
 建议下一步：
 
-1. 创建 `docs/superpowers/plans/2026-06-11-v7-multisystem-generalization-governance.md`。
-2. 先做 V7 接入治理计划，不直接跑真实系统。
+1. 在 `codex/v7-intake-governance` 中先固化 V7 接入治理入口，不直接跑真实系统。
+2. 把系统接入清单、run level、stop conditions、blocked taxonomy 和 checkpoint 模板写入版本执行口径。
 3. 根据用户授权选择 2-3 个非 ADP 系统做 `doctor`、`real:check`、低风险 pipeline 节点。
 4. 若另一项目仍占用多 agent/AI 写稿资源，V7 先用单 agent 顺序推进。
 5. V7 checkpoint 完成后，再决定是否进入 V8 的批量真实多系统交付。
