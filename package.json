@@ -17,6 +17,8 @@
     "scripts/approval-guard.js",
     "scripts/build-database-model.js",
     "scripts/build-business-process-model.js",
+    "scripts/build-whitepaper-plan.js",
+    "scripts/business-process/",
     "scripts/build-function-universe.js",
     "scripts/build-workflow-spec.js",
     "scripts/build-operation-spec.js",

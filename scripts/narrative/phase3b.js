@@ -34,6 +34,7 @@ function resolvePhase3bPaths(context = {}) {
     outputDir,
     businessProcessModelPath:
       context.businessProcessModelPath || path.join(outputDir, "business-process-model.json"),
+    whitepaperPlanPath: context.whitepaperPlanPath || path.join(outputDir, "whitepaper-plan.json"),
     briefPath: context.briefPath || path.join(outputDir, "narrative-brief.md"),
     promptPath: context.promptOutputPath || path.join(outputDir, "phase3b-prompt.md"),
     skeletonPath: context.skeletonPath || path.join(outputDir, "whitepaper.skeleton.md"),
@@ -118,6 +119,16 @@ function loadBusinessProcessModel(context = {}) {
   const modelPath = context.businessProcessModelPath || paths.businessProcessModelPath;
   if (!context.businessProcessModelPath && !fs.existsSync(modelPath)) return {};
   return readExistingJsonObject(modelPath, {}, { label: "Business process model" });
+}
+
+function loadWhitepaperPlan(context = {}) {
+  if (context.whitepaperPlan) {
+    return ensureJsonObject(context.whitepaperPlan, "Whitepaper plan");
+  }
+  const paths = resolvePhase3bPaths(context);
+  const planPath = context.whitepaperPlanPath || paths.whitepaperPlanPath;
+  if (!context.whitepaperPlanPath && !fs.existsSync(planPath)) return {};
+  return readExistingJsonObject(planPath, {}, { label: "Whitepaper plan" });
 }
 
 function compactWritableClaimGap(factCheckReport = null, claimsArtifact = {}, options = {}) {
@@ -294,6 +305,8 @@ const BUSINESS_PROCESS_MODEL_PRIORITY_KEYS = [
   "modules",
   "feedbackLoops",
   "closedLoops",
+  "derivation",
+  "rules",
   "evidenceBasis",
   "evidence",
   "pending",
@@ -438,6 +451,87 @@ function compactBusinessProcessModel(model = {}, options = {}) {
     fallbackWhenMissing:
       "If unavailable or uncovered, fall back to operation-spec with reasonable inference plus explicit evidence basis.",
     model: compacted,
+  };
+}
+
+function compactWhitepaperPlan(plan = {}, options = {}) {
+  const available = hasCompactContent(plan);
+  const targetModule = String(options.moduleName || "").trim();
+  const matchesScope = (item = {}) => {
+    if (!targetModule) return true;
+    return JSON.stringify([item.text, item.terms, item.evidence, item.source]).includes(targetModule);
+  };
+  return {
+    artifactType: "whitepaper-plan-compact",
+    available,
+    scope: targetModule ? { module: targetModule } : { module: "" },
+    priority: "highest priority and primary writing contract for all body chapters",
+    rules: {
+      aiMustUsePlanFirst: plan.rules?.aiMustUsePlanFirst === true,
+      nonWritableClaimsPendingOnly: plan.rules?.nonWritableClaimsPendingOnly !== false,
+      inferredMustKeepBoundary: plan.rules?.inferredMustKeepBoundary !== false,
+    },
+    metrics: plan.metrics || {},
+    chapters: compactList(plan.chapters, 6, (chapter) => ({
+      chapter: chapter.chapter || 0,
+      title: chapter.title || "",
+      requiredItemIds: Array.isArray(chapter.requiredItemIds) ? chapter.requiredItemIds.slice(0, 40) : [],
+      pendingItemIds: Array.isArray(chapter.pendingItemIds) ? chapter.pendingItemIds.slice(0, 40) : [],
+      writingFocus: chapter.writingFocus || "",
+    })),
+    requiredItems: (Array.isArray(plan.requiredItems) ? plan.requiredItems : [])
+      .filter(matchesScope)
+      .slice(0, options.limit || 80)
+      .map((item) => ({
+        id: item.id || "",
+        chapter: item.chapter || 0,
+        status: item.status || "",
+        type: item.type || "",
+        claimId: item.claimId || "",
+        text: compactText(item.text || "", 500),
+        terms: Array.isArray(item.terms) ? item.terms.slice(0, 12) : [],
+        boundary: item.boundary || "",
+        source: compactList(item.source, 4, (source) => ({
+          artifact: source.artifact || "",
+          pointer: source.pointer || "",
+          type: source.type || "",
+          id: source.id || "",
+          label: source.label || "",
+        })),
+        evidence: compactList(item.evidence, 4, (evidence) => ({
+          kind: evidence.kind || "",
+          label: evidence.label || "",
+          value: evidence.value || "",
+          source: evidence.source || "",
+        })),
+      })),
+    allowedFacts: (Array.isArray(plan.allowedFacts) ? plan.allowedFacts : [])
+      .filter(matchesScope)
+      .slice(0, options.factLimit || 80)
+      .map((item) => ({
+        id: item.id || "",
+        status: item.status || "",
+        type: item.type || "",
+        claimId: item.claimId || "",
+        text: compactText(item.text || "", 500),
+        terms: Array.isArray(item.terms) ? item.terms.slice(0, 12) : [],
+      })),
+    pendingItems: compactList(plan.pendingItems, 60, (item) => ({
+      id: item.id || "",
+      status: item.status || "",
+      type: item.type || "",
+      text: compactText(item.text || "", 500),
+      terms: Array.isArray(item.terms) ? item.terms.slice(0, 12) : [],
+    })),
+    forbiddenItems: compactList(plan.forbiddenItems, 20, (item) => ({
+      id: item.id || "",
+      text: compactText(item.text || "", 500),
+    })),
+    derivation: {
+      builder: plan.derivation?.builder || "",
+      algorithmVersion: plan.derivation?.algorithmVersion || 0,
+      contentHash: plan.derivation?.contentHash || "",
+    },
   };
 }
 
@@ -688,6 +782,7 @@ function buildNarrativeBrief(context = {}) {
     "- 核心功能说明优先回答谁使用、处理什么对象、关键字段表达什么、哪些操作已验证。",
     "- 典型业务流程必须围绕 `业务对象 -> 状态流转 -> 模块职责 -> 回流闭环`，不是点击步骤。",
     "- 证据不足、写操作未验证、截图缺口必须进入待确认事项。",
+    "- 合并同类待确认：同一类模块功能细节、字段、写操作或流程边界缺口集中成 1 条待确认，不要按每个模块重复写同一句边界。",
     hasBusinessProcessModel
       ? "- 本轮存在 business-process-model：第 1/2/3/4 章先按业务流程模型组织，再用菜单/字段证据佐证。"
       : "- 本轮未发现 business-process-model：允许基于 operation-spec 合理推理流程，但每条推理必须给出依据。",
@@ -712,7 +807,33 @@ function sectionExists(markdown, title) {
   return new RegExp(`^##\\s+${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "m").test(markdown);
 }
 
-function sanitizeNarrativeFragments(markdown = "") {
+function normalizeHeadingTerm(value = "") {
+  return String(value || "")
+    .trim()
+    .replace(/^["'\u300c\u300e\u3010\[]+|["'\u300d\u300f\u3011\]]+$/g, "")
+    .replace(/^\d+(\.\d+)*[\u3001\uff1a:\s-]*/, "")
+    .replace(/\s*\(.*?\)\s*$/g, "")
+    .replace(/\s*\uff08.*?\uff09\s*$/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function allowedCoreHeadingSet(claimsArtifact = null) {
+  const claims = Array.isArray(claimsArtifact?.claims) ? claimsArtifact.claims : [];
+  const headings = new Set();
+  for (const claim of claims) {
+    for (const value of [claim.module, claim.function, claim.subject, claim.entity]) {
+      const normalized = normalizeHeadingTerm(value);
+      if (normalized) headings.add(normalized);
+    }
+  }
+  return headings;
+}
+
+function sanitizeNarrativeFragments(markdown = "", options = {}) {
+  const allowedCoreHeadings = options.allowedCoreHeadings instanceof Set
+    ? options.allowedCoreHeadings
+    : allowedCoreHeadingSet(options.verifiedClaims || options.claimsArtifact);
   const lines = String(markdown || "").split(/\r?\n/);
   const result = [];
   let sectionNumber = "";
@@ -727,6 +848,15 @@ function sanitizeNarrativeFragments(markdown = "") {
     }
     const subheading = line.match(/^#{3,6}\s+(.+?)\s*$/);
     if (subheading && sectionNumber && sectionNumber !== "3") {
+      result.push(`**${subheading[1]}**`);
+      continue;
+    }
+    if (
+      subheading &&
+      sectionNumber === "3" &&
+      allowedCoreHeadings.size &&
+      !allowedCoreHeadings.has(normalizeHeadingTerm(subheading[1]))
+    ) {
       result.push(`**${subheading[1]}**`);
       continue;
     }
@@ -751,6 +881,69 @@ function stripNonWritableClaimReferences(markdown = "", claimsArtifact = null) {
   return String(markdown || "").replace(/\[claim:([^\]]+)]/g, (match, claimId) => {
     return nonWritableIds.has(String(claimId || "").trim()) ? "" : match;
   });
+}
+
+function extractRepeatedPendingModuleName(line = "") {
+  const text = String(line || "").trim();
+  if (!/^[-*]\s+/.test(text)) return "";
+  if (!/模块虽暴露/.test(text)) return "";
+  if (!/(功能级操作细节|按钮、字段、写操作|具体.*功能范围)/.test(text)) return "";
+  if (!/(证据不足|待确认|待业务确认)/.test(text)) return "";
+  const match = text.match(/^[-*]\s+(.+?)模块虽暴露/);
+  return match ? match[1].trim() : "";
+}
+
+function rewritePendingBoundaryLine(line = "") {
+  return String(line || "")
+    .replace(/证据不足/g, "细节缺口")
+    .replace(/尚未/g, "未在本次取证中")
+    .replace(/无法/g, "不能")
+    .replace(/未覆盖/g, "缺少覆盖")
+    .replace(/需补采/g, "需补充取证")
+    .replace(/不宜/g, "不应")
+    .replace(/待业务确认/g, "需业务侧复核")
+    .replace(/待确认/g, "需业务侧复核");
+}
+
+function consolidatePendingConfirmationSection(markdown = "") {
+  const text = String(markdown || "");
+  const sectionMatch = text.match(/^##\s*6[^\n]*待确认事项[^\n]*$/m);
+  if (!sectionMatch || sectionMatch.index === undefined) return text;
+  const start = sectionMatch.index;
+  const afterHeading = start + sectionMatch[0].length;
+  const rest = text.slice(afterHeading);
+  const nextMatch = rest.match(/\n##\s+(?!6\b).+$/m);
+  const end = nextMatch && nextMatch.index !== undefined ? afterHeading + nextMatch.index + 1 : text.length;
+  const before = text.slice(0, start);
+  const section = text.slice(start, end).trimEnd();
+  const after = text.slice(end);
+  const lines = section.split(/\r?\n/);
+  const heading = lines[0] || "## 6. 待确认事项";
+  const bodyLines = lines.slice(1);
+  const moduleNames = [];
+  const remaining = [];
+
+  for (const line of bodyLines) {
+    const moduleName = extractRepeatedPendingModuleName(line);
+    if (moduleName) {
+      if (!moduleNames.includes(moduleName)) moduleNames.push(moduleName);
+      continue;
+    }
+    remaining.push(rewritePendingBoundaryLine(line));
+  }
+
+  const consolidated = [];
+  if (moduleNames.length) {
+    consolidated.push(
+      `- 首页及流程/Skill 模块已形成入口和截图证据；功能级字段、按钮、写操作和模块内交互仍需业务侧复核，涉及：${moduleNames.join("、")}。`,
+    );
+  }
+  consolidated.push(...remaining.filter((line, index, array) => {
+    if (line.trim()) return true;
+    return index > 0 && index < array.length - 1 && array[index - 1].trim() && array[index + 1].trim();
+  }));
+
+  return `${before}${[heading, ...consolidated].join("\n").replace(/\n{3,}/g, "\n\n")}${after}`;
 }
 
 function appendixFromSummary(summary = {}) {
@@ -785,7 +978,7 @@ function assemblePendingReviewMarkdown(input = {}) {
   const system = summary.system || {};
   const claimsArtifact = input.verifiedClaims || input.claimsArtifact || null;
   const fragments = stripNonWritableClaimReferences(
-    sanitizeNarrativeFragments(input.fragments || ""),
+    sanitizeNarrativeFragments(input.fragments || "", { verifiedClaims: claimsArtifact }),
     claimsArtifact,
   );
   const lines = [
@@ -825,7 +1018,10 @@ function assemblePendingReviewMarkdown(input = {}) {
 
   lines.push(appendixFromSummary(summary));
   const markdown = `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
-  return stripNonWritableClaimReferences(markdown, claimsArtifact);
+  return stripNonWritableClaimReferences(
+    consolidatePendingConfirmationSection(markdown),
+    claimsArtifact,
+  );
 }
 
 function readExistingPartFragments(parts = []) {
@@ -1065,6 +1261,7 @@ function buildPhase3bPrompt(context = {}) {
     reviewComment,
   } = context;
   const paths = resolvePhase3bPaths(context);
+  const whitepaperPlanArtifact = loadWhitepaperPlan(context);
   const businessProcessModelArtifact = loadBusinessProcessModel(context);
   const operationSpecArtifact = loadOperationSpec(context);
   const evidenceSummary = compactEvidenceSummary(
@@ -1075,9 +1272,11 @@ function buildPhase3bPrompt(context = {}) {
   const qualitySummary = loadQualitySummary(context);
   const verifiedClaimsArtifact = loadVerifiedClaims(context);
   const verifiedClaims = compactVerifiedClaims(verifiedClaimsArtifact);
+  const whitepaperPlan = compactWhitepaperPlan(whitepaperPlanArtifact);
   const writableClaimGap = compactWritableClaimGap(loadFactCheckReport(context), verifiedClaimsArtifact);
   const reviewDecision = loadReviewDecision(context);
   const inlineSummary = JSON.stringify(evidenceSummary, null, 2);
+  const inlineWhitepaperPlan = JSON.stringify(whitepaperPlan, null, 2);
   const inlineBusinessProcessModel = JSON.stringify(businessProcessModel, null, 2);
   const inlineOperationSpec = JSON.stringify(operationSpec, null, 2);
   const inlineQuality = JSON.stringify(qualitySummary, null, 2);
@@ -1099,12 +1298,15 @@ function buildPhase3bPrompt(context = {}) {
     "写作要求：",
     "- 只输出 narrative-fragments.md，不要生成完整附录。",
     "- 重点写业务定位、业务价值、模块用途、核心功能说明和典型业务流程。",
+    "- whitepaper-plan 是最高优先级主写作合同（primary writing contract）；若 available=true，必须先覆盖 requiredItems，再使用 business-process-model / operation-spec / evidence-summary 做佐证。",
+    "- whitepaper-plan.requiredItems 未覆盖前不得认为写稿完成；pendingItems 只能进入待确认事项，forbiddenItems 不得进入正文。",
     "- business-process-model 是第 1/2/3/4 章最高优先级业务流程模型；若 available=true，必须先消费它，再用 operation-spec / evidence-summary 的菜单、字段、按钮作佐证。",
     "- 第 1 章用 business-process-model 说明业务链路、业务对象和闭环价值；第 2 章用它说明模块职责；第 3 章用它解释功能在流程中的职责；第 4 章按 `业务对象 -> 状态流转 -> 模块职责 -> 回流闭环` 组织。",
     "- operation-spec 是优先业务证据；如果它包含模块、字段、截图、定位，不要再写“functions 为空”“无法撰写核心功能”。",
     "- business-process-model 缺失或未覆盖时才 fallback 到 operation-spec；必须写明“合理推理 + 推理依据”，依据可来自模块名、字段、状态列、操作项、截图或页面入口。",
     "- 必须围绕 business-process-model 的模块职责或 operation-spec.modules 展开模块概览与核心功能说明；不得把「本地」作为唯一模块，除非优先证据也只有该模块。",
     "- 证据不足时写入待确认事项，不要编造。",
+    "- 合并同类待确认：同一类模块功能细节、字段、写操作或流程边界缺口集中成 1 条待确认，不要按每个模块重复写同一句边界。",
     "- 避免模板句、按钮堆砌和每页重复验证噪声。",
     "- 写操作只有存在 AI_AUTO_TEST_ 证据和 ledger 时才能写为已验证。",
     "- 只使用固定 `## 1` 到 `## 6` 章节；第 6 章待确认事项使用扁平 bullet，不新增 `###` 分组标题。",
@@ -1113,6 +1315,11 @@ function buildPhase3bPrompt(context = {}) {
     "quality 摘要：",
     "```json",
     inlineQuality,
+    "```",
+    "",
+    "whitepaper-plan（最高优先级主写作合同 primary writing contract；先覆盖 requiredItems，再参考其他证据）：",
+    "```json",
+    inlineWhitepaperPlan,
     "```",
     "",
     "business-process-model（最高优先级业务流程证据；available=false 时按 fallback 规则使用 operation-spec）：",
@@ -1181,6 +1388,7 @@ function buildPhase3bPartPrompt(context = {}) {
   } = context;
   const paths = resolvePhase3bPaths(context);
   const qualitySummary = loadQualitySummary(context);
+  const whitepaperPlanArtifact = loadWhitepaperPlan(context);
   const businessProcessModelArtifact = loadBusinessProcessModel(context);
   const operationSpecArtifact = loadOperationSpec(context);
   const verifiedClaimsArtifact = loadVerifiedClaims(context);
@@ -1193,6 +1401,9 @@ function buildPhase3bPartPrompt(context = {}) {
     moduleName: partInfo.type === "module" ? partInfo.moduleName : "",
   });
   const inlineBusinessProcessModel = JSON.stringify(compactBusinessProcessModel(businessProcessModelArtifact, {
+    moduleName: partInfo.type === "module" ? partInfo.moduleName : "",
+  }), null, 2);
+  const inlineWhitepaperPlan = JSON.stringify(compactWhitepaperPlan(whitepaperPlanArtifact, {
     moduleName: partInfo.type === "module" ? partInfo.moduleName : "",
   }), null, 2);
   const inlineSummary = JSON.stringify(partInfo.summary || {}, null, 2);
@@ -1236,6 +1447,8 @@ function buildPhase3bPartPrompt(context = {}) {
     "",
     "写作范围：",
     ...sectionInstruction.map((item) => `- ${item}`),
+    "- whitepaper-plan 是最高优先级主写作合同（primary writing contract）；若 available=true，必须先覆盖本分片相关 requiredItems，再使用其他证据佐证。",
+    "- whitepaper-plan.pendingItems 只能进入待确认事项，forbiddenItems 不得进入正文。",
     "- business-process-model 是第 1/2/3/4 章最高优先级业务流程模型；若 available=true，必须先消费它，再用 operation-spec / evidence-summary 的菜单、字段、按钮作佐证。",
     "- business-process-model 缺失或未覆盖本分片时才 fallback 到 operation-spec；必须写明“合理推理 + 推理依据”，依据可来自模块名、字段、状态列、操作项、截图或页面入口。",
     "- operation-spec 是优先业务证据；必须用其中的模块名、字段、截图和业务提示写，不要输出“functions 为空/无法撰写”。",
@@ -1247,6 +1460,11 @@ function buildPhase3bPartPrompt(context = {}) {
     "quality 摘要：",
     "```json",
     inlineQuality,
+    "```",
+    "",
+    "whitepaper-plan（最高优先级主写作合同，按本分片过滤）：",
+    "```json",
+    inlineWhitepaperPlan,
     "```",
     "",
     "business-process-model（最高优先级业务流程证据，按本分片过滤；available=false 时按 fallback 规则使用 operation-spec）：",
@@ -1390,6 +1608,7 @@ function resolveCursorApiKey(context = {}) {
 function writePreparationFiles(context = {}) {
   const paths = resolvePhase3bPaths(context);
   const evidenceSummary = loadEvidenceSummary(context);
+  const whitepaperPlan = loadWhitepaperPlan(context);
   const businessProcessModel = loadBusinessProcessModel(context);
   const operationSpec = loadOperationSpec(context);
   const writingEvidenceSummary = operationSpecToEvidenceSummary(evidenceSummary, operationSpec);
@@ -1404,6 +1623,7 @@ function writePreparationFiles(context = {}) {
   const brief = buildNarrativeBrief({
     ...context,
     evidenceSummary: writingEvidenceSummary,
+    whitepaperPlan,
     businessProcessModel,
     operationSpec,
     qualityReport: qualitySummary,
@@ -1411,6 +1631,7 @@ function writePreparationFiles(context = {}) {
   const prompt = buildPhase3bPrompt({
     ...context,
     evidenceSummary: writingEvidenceSummary,
+    whitepaperPlan,
     businessProcessModel,
     operationSpec,
     qualityReport: qualitySummary,
@@ -1435,6 +1656,7 @@ function writePreparationFiles(context = {}) {
       ...context,
       part,
       evidenceSummary: writingEvidenceSummary,
+      whitepaperPlan,
       businessProcessModel,
       operationSpec,
       qualityReport: qualitySummary,
@@ -1448,6 +1670,7 @@ function writePreparationFiles(context = {}) {
     paths,
     evidenceSummary: writingEvidenceSummary,
     sourceEvidenceSummary: evidenceSummary,
+    whitepaperPlan,
     businessProcessModel,
     operationSpec,
     qualitySummary,
@@ -1977,8 +2200,11 @@ module.exports = {
   compactModuleSummary,
   compactOperationSpec,
   compactOverviewSummary,
+  compactWhitepaperPlan,
   compactWritableClaimGap,
+  consolidatePendingConfirmationSection,
   loadBusinessProcessModel,
+  loadWhitepaperPlan,
   normalizeNarrativePartSelector,
   operationSpecToEvidenceSummary,
   resolveCursorApiKey,

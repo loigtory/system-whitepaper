@@ -29,28 +29,34 @@ function appendNarrativeGuardNodes(nodes) {
   for (const node of nodes || []) {
     result.push(node);
     if (node === "summary") {
-      result.push("db-model", "truth-universe", "truth-claims", "business-process");
+      result.push("db-model", "truth-universe", "truth-claims", "business-process", "whitepaper-plan");
     }
     if (node === "db-profile") {
-      result.push("db-model", "truth-universe", "truth-claims", "business-process");
+      result.push("db-model", "truth-universe", "truth-claims", "business-process", "whitepaper-plan");
     }
     if (node === "db-model") {
-      result.push("truth-universe", "truth-claims", "business-process");
+      result.push("truth-universe", "truth-claims", "business-process", "whitepaper-plan");
     }
     if (node === "truth-universe") {
-      result.push("truth-claims", "business-process");
+      result.push("truth-claims", "business-process", "whitepaper-plan");
     }
     if (node === "truth-claims") {
-      result.push("business-process");
+      result.push("business-process", "whitepaper-plan");
+    }
+    if (node === "business-process") {
+      result.push("whitepaper-plan");
     }
     if (node === "narrative") {
-      result.push("fact-check");
+      result.push("fact-check", "golden-eval");
+    }
+    if (node === "fact-check") {
+      result.push("golden-eval");
     }
     if (node === "quality") {
       result.push("truth-readiness");
     }
   }
-  if (result.some((node) => ["truth-claims", "business-process", "narrative", "fact-check"].includes(node))) {
+  if (result.some((node) => ["truth-claims", "business-process", "whitepaper-plan", "narrative", "fact-check", "golden-eval"].includes(node))) {
     result.push("truth-readiness");
   }
   return unique(result);

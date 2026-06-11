@@ -13,9 +13,6 @@ const {
   writeJson,
 } = require("./system-whitepaper-lib");
 const { NODES, readPipelineStateSafe } = require("./pipeline-state");
-const { runBatchAcceptance } = require("./check-batch-acceptance");
-const { runDeliveryReadiness } = require("./check-delivery-readiness");
-const { runRealRunReadiness } = require("./check-real-run-readiness");
 const { assertValidTruthReadinessReportArtifact } = require("./check-truth-readiness");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
@@ -33,12 +30,16 @@ const FULL_WHITEPAPER_NODES = [
   "db-model",
   "truth-universe",
   "truth-claims",
+  "business-process",
+  "whitepaper-plan",
   "build-spec",
+  "workflow-spec",
   "compose-guide",
   "draft",
   "summary",
   "narrative",
   "fact-check",
+  "golden-eval",
   "quality",
   "truth-readiness",
 ];
@@ -141,6 +142,96 @@ function normalizeNodes(nodes) {
 
 function compactItems(items, limit = 8) {
   return (Array.isArray(items) ? items : []).filter(Boolean).slice(0, limit);
+}
+
+const TRUTH_GATE_GAP_TYPES = [
+  { gateId: "workflow", gapType: "workflow-evidence", label: "Workflow evidence" },
+  { gateId: "businessProcess", gapType: "business-process", label: "Business process" },
+  { gateId: "whitepaperPlan", gapType: "whitepaper-plan", label: "Whitepaper plan" },
+  { gateId: "goldenEval", gapType: "golden-eval", label: "Golden Eval" },
+];
+const TRUTH_GATE_GAP_TYPE_ORDER = TRUTH_GATE_GAP_TYPES.map((item) => item.gapType);
+
+function metricSnapshot(metrics = {}, keys = []) {
+  const source = metrics && typeof metrics === "object" && !Array.isArray(metrics) ? metrics : {};
+  return keys.reduce((result, key) => {
+    if (source[key] !== undefined) result[key] = Number(source[key] || 0);
+    return result;
+  }, {});
+}
+
+function summarizeTruthGate(gate = {}, metricKeys = []) {
+  const safeGate = gate && typeof gate === "object" && !Array.isArray(gate) ? gate : {};
+  return {
+    pass: safeGate.pass === true,
+    scorePercent: Number(safeGate.scorePercent || 0),
+    failureCount: Array.isArray(safeGate.failures) ? safeGate.failures.length : 0,
+    failures: compactItems(safeGate.failures, 4).map(String),
+    metrics: metricSnapshot(safeGate.metrics, metricKeys),
+  };
+}
+
+function buildTruthGateSummaryFromGates(gates = {}) {
+  const safeGates = gates && typeof gates === "object" && !Array.isArray(gates) ? gates : {};
+  const gateOrNull = (gateId, metricKeys) =>
+    safeGates[gateId] && typeof safeGates[gateId] === "object" && !Array.isArray(safeGates[gateId])
+      ? summarizeTruthGate(safeGates[gateId], metricKeys)
+      : null;
+  return {
+    workflow: gateOrNull("workflow", [
+      "operationFlowCount",
+      "observedWorkflowCount",
+      "observedWorkflowStepCount",
+    ]),
+    businessProcess: gateOrNull("businessProcess", [
+      "processCount",
+      "staleSourceCount",
+      "stepEvidenceMissingCount",
+      "defaultDomainLeakCount",
+    ]),
+    whitepaperPlan: gateOrNull("whitepaperPlan", [
+      "requiredItemCount",
+      "coveredRequiredItemCount",
+      "planRequiredCoverageRatio",
+      "missingRequiredItemCount",
+    ]),
+    goldenEval: gateOrNull("goldenEval", [
+      "coverageRatio",
+      "criticalCoverageRatio",
+      "overclaimCount",
+    ]),
+  };
+}
+
+function appendTruthGateGaps(gaps = [], gateSummary = {}) {
+  const existingTypes = new Set((Array.isArray(gaps) ? gaps : []).map((gap) => gap.type).filter(Boolean));
+  for (const { gateId, gapType, label } of TRUTH_GATE_GAP_TYPES) {
+    const gate = gateSummary?.[gateId];
+    if (!gate || gate.pass !== false || existingTypes.has(gapType)) continue;
+    gaps.push({
+      type: gapType,
+      severity: "P0",
+      message: compactItems(gate.failures, 1)[0] || `${label} gate did not pass.`,
+    });
+    existingTypes.add(gapType);
+  }
+}
+
+function collectRepairGapTypes(gaps = []) {
+  const types = new Set((Array.isArray(gaps) ? gaps : []).map((gap) => gap.type).filter(Boolean));
+  return TRUTH_GATE_GAP_TYPE_ORDER.filter((type) => types.has(type));
+}
+
+function countGapTypes(systems = []) {
+  const counts = {};
+  for (const system of Array.isArray(systems) ? systems : []) {
+    for (const gap of Array.isArray(system.gaps) ? system.gaps : []) {
+      const type = String(gap.type || "").trim();
+      if (!type) continue;
+      counts[type] = (counts[type] || 0) + 1;
+    }
+  }
+  return counts;
 }
 
 function sanitizeDiagnosticItem(item = {}) {
@@ -554,15 +645,26 @@ function terminateBatchInFlightSystems(state = {}, options = {}) {
   return recomputeBatchState({ ...state, systems }, { now: timestamp });
 }
 
+function shouldPreserveCompletedPartialStatus(item = {}, pipelineStatus = "") {
+  return (
+    item.runStatus === "completed" &&
+    item.exitCode === 0 &&
+    isCompleteSystemStatus(item.status) &&
+    pipelineStatus === "pending"
+  );
+}
+
 function applyPipelineSnapshot(item, pipelineState, options = {}) {
   if (!pipelineState) return item;
   const currentNode = pipelineState.nodes?.[pipelineState.currentNode] || {};
+  const pipelineStatus = pipelineState.overallStatus || item.status;
+  const preserveCompletedPartialStatus = shouldPreserveCompletedPartialStatus(item, pipelineStatus);
   const next = {
     ...item,
-    status: pipelineState.overallStatus || item.status,
+    status: preserveCompletedPartialStatus ? item.status : pipelineStatus,
     currentPhase: pipelineState.currentPhase || item.currentPhase,
     currentNode: pipelineState.currentNode || item.currentNode,
-    lastError: currentNode.lastError || item.lastError || "",
+    lastError: preserveCompletedPartialStatus ? "" : currentNode.lastError || item.lastError || "",
     updatedAt: pipelineState.updatedAt || item.updatedAt,
   };
   if (item.runStatus !== "running" || isFailedSystemStatus(next.status)) {
@@ -618,6 +720,8 @@ function buildBatchTruthSummary(systemOutput) {
         blockerCount: Array.isArray(truth.blockers) ? truth.blockers.length : 0,
         blockers: compactItems(truth.blockers, 8).map(sanitizeDiagnosticItem),
         improvementActions: compactItems(truth.improvementActions, 8).map(sanitizeDiagnosticItem),
+        gates: truth.gates || {},
+        gateSummary: buildTruthGateSummaryFromGates(truth.gates),
         generatedAt: truth.generatedAt || "",
       };
     } catch (error) {
@@ -712,6 +816,8 @@ function buildSystemDiagnosis(item = {}) {
       canRetry: true,
     });
   } else {
+    const gateSummary = truth.gateSummary || buildTruthGateSummaryFromGates(truth.gates);
+    appendTruthGateGaps(gaps, gateSummary);
     if (!truth.canSubmitReview || score < TARGET_TRUTH_SCORE) {
       gaps.push({
         type: "truth-score",
@@ -759,7 +865,7 @@ function buildSystemDiagnosis(item = {}) {
     actions.push({
       id: "narrative.cover-missing-writable-claims",
       message: "Rerun function-section narrative with missing writable claim IDs.",
-      rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+      rerunNodes: ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
       narrativePart: repair?.narrativePart || "function-sections",
       missingWritableClaimIds: compactItems(coverage?.missingWritableClaimIds, 12),
       quotaImpact: "agent-writing",
@@ -810,6 +916,7 @@ function summarizeDiagnosisSystems(systems = []) {
     (sum, item) => sum + Number(item.missingWritableClaimCount || 0),
     0,
   );
+  const gapTypes = countGapTypes(systems);
   return {
     total,
     ready,
@@ -817,6 +924,7 @@ function summarizeDiagnosisSystems(systems = []) {
     recoverable,
     quotaSensitive,
     missingWritableClaims,
+    gapTypes,
   };
 }
 
@@ -990,6 +1098,7 @@ function buildRepairQueueItem(system = {}, index = 0, options = {}) {
   const actions = Array.isArray(system.actions) ? system.actions : [];
   const nodes = normalizeRepairQueueNodes(action?.rerunNodes || []);
   const nodesCsv = nodes.join(",");
+  const gapTypes = collectRepairGapTypes(system.gaps);
   const requiresAgentWriting = action?.quotaImpact === "agent-writing" || nodes.includes("narrative");
   const allowAgentWriting = Boolean(options.allowAgentWriting);
   const missingWritableClaimIds = uniqueCompactItems(
@@ -1026,6 +1135,8 @@ function buildRepairQueueItem(system = {}, index = 0, options = {}) {
     systemCode: system.code || "",
     systemName: system.name || "",
     priority: resolveRepairPriority(system.gaps),
+    gapTypes,
+    primaryGapType: gapTypes[0] || "",
     reason: gapReason,
     actionId: action?.id || "",
     actionMessage: action?.message || "",
@@ -1171,6 +1282,7 @@ function appendLog(filePath, chunk) {
 }
 
 function writeBatchAcceptance(outputRoot, context, args = {}, systems = []) {
+  const { runBatchAcceptance } = require("./check-batch-acceptance");
   const { state } = runBatchAcceptance({
     args,
     context,
@@ -1180,6 +1292,9 @@ function writeBatchAcceptance(outputRoot, context, args = {}, systems = []) {
 }
 
 function writeBatchTerminalChecks(outputRoot, context, args = {}, systems = []) {
+  const { runBatchAcceptance } = require("./check-batch-acceptance");
+  const { runDeliveryReadiness } = require("./check-delivery-readiness");
+  const { runRealRunReadiness } = require("./check-real-run-readiness");
   const acceptance = runBatchAcceptance({
     args,
     context,

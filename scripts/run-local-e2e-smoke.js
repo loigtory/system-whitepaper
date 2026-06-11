@@ -90,6 +90,13 @@ function prepareSmokeOutput(options = {}) {
       claims: { pass: true, scorePercent: 100 },
       factCheck: { pass: true, scorePercent: 100 },
       narrative: { pass: true, scorePercent: 100 },
+      workflow: {
+        pass: true,
+        scorePercent: 100,
+        metrics: { operationFlowCount: 1, observedWorkflowStepCount: 1 },
+      },
+      businessProcess: { pass: true, scorePercent: 100 },
+      whitepaperPlan: { pass: true, scorePercent: 100 },
       database: { pass: true, available: false, scorePercent: 0 },
       lineage: { pass: true, scorePercent: 100 },
     },

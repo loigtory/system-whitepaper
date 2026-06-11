@@ -154,6 +154,110 @@ function collectModuleNames(evidence, writeValidation = null, evidenceSummary = 
   return uniqueStrings(names).filter((name) => !isHomeModuleName(name));
 }
 
+function homeOverviewCardsFromEvidence(evidence = {}, evidenceSummary = null) {
+  const directCards = (evidence.pageInventory || [])
+    .filter((page) => page.type === "home")
+    .flatMap((page) =>
+      (Array.isArray(page.overviewCards) ? page.overviewCards : []).map((card) => ({
+        ...card,
+        pageId: page.id || "",
+        pageTitle: page.title || "",
+        screenshot: page.screenshot || "",
+      })),
+    );
+  const summaryCards = Array.isArray(evidenceSummary?.homeOverview?.cards)
+    ? evidenceSummary.homeOverview.cards
+    : [];
+  return [...directCards, ...summaryCards]
+    .map((card) => ({
+      title: normalizeOperationText(card.title || ""),
+      pageId: card.pageId || "",
+      pageTitle: card.pageTitle || "",
+      screenshot: card.screenshot || "",
+      items: (Array.isArray(card.items) ? card.items : [])
+        .map((item) => ({
+          title: normalizeOperationText(item.title || item.name || ""),
+          description: normalizeOperationText(item.description || item.summary || ""),
+        }))
+        .filter((item) => item.title || item.description),
+    }))
+    .filter((card) => card.title && card.items.length);
+}
+
+function buildHomeOverviewModules(evidence = {}, evidenceSummary = null, networkIndex = null) {
+  const modules = [];
+  const seen = new Set();
+  for (const card of homeOverviewCardsFromEvidence(evidence, evidenceSummary)) {
+    for (const item of card.items) {
+      const name = item.title || item.description;
+      if (!name || isOverviewModuleName(name)) continue;
+      const key = normalizeOperationText(`${card.title}:${name}`);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const description = item.description || `${card.title}中的流程环节`;
+      modules.push({
+        name,
+        entry: `首页「${card.title}」`,
+        source: "home-overview-card",
+        sourceCardTitle: card.title,
+        surfaceType: "business-flow",
+        coreBusinessModule: true,
+        businessHint: `${description}（依据首页流程卡片归纳，待业务确认）。`,
+        businessRole: {
+          value: description,
+          confidence: "medium",
+          evidence: uniqueStrings([evidenceLine("首页流程卡片", `${card.title}:${name}`)]),
+        },
+        businessObject: {
+          value: name,
+          confidence: "medium",
+          evidence: uniqueStrings([evidenceLine("首页流程卡片", description)]),
+        },
+        businessDimensions: [],
+        lifecycleSignals: [],
+        qualitySignals: [],
+        handoffHints: [],
+        list: {
+          columns: [],
+          queryFields: [],
+          filters: [],
+          enumOptions: {},
+          rowActions: [],
+          note: "首页流程卡片未提供列表字段，需通过菜单页或详情页补采确认。",
+        },
+        flows: [
+          {
+            name,
+            trigger: card.title,
+            status: "inferred-from-home-overview",
+            reason: "依据首页流程卡片和截图归纳，未形成已点击菜单或写操作证据。",
+            steps: [
+              {
+                title: name,
+                fields: [],
+                buttons: [],
+                tables: [],
+                screenshots: uniqueStrings([card.screenshot]),
+                apis: mapApisForContext(networkIndex, [card.title, name, description]),
+                validation: {
+                  status: "not-executed",
+                  filledFieldCount: 0,
+                  source: "home-overview-card",
+                },
+              },
+            ],
+          },
+        ],
+        plannedFlows: [],
+        tabs: [],
+        screenshots: uniqueStrings([card.screenshot]),
+        apis: mapApisForContext(networkIndex, [card.title, name, description]),
+      });
+    }
+  }
+  return modules;
+}
+
 function inferModuleBusinessHint(module) {
   const columns = module.list?.columns || [];
   const flowNames = (module.flows || []).map((flow) => flow.name);
@@ -1174,6 +1278,15 @@ function buildModuleAggregateHint(evidence, writeValidation, evidenceSummary = n
   return `平台提供${chunks.slice(0, 6).join("、")}等功能入口（依据菜单与页面结构归纳，非官方口径）。`;
 }
 
+function buildHomeOverviewHint(evidence = {}, evidenceSummary = null) {
+  const items = uniqueStrings(
+    homeOverviewCardsFromEvidence(evidence, evidenceSummary)
+      .flatMap((card) => card.items.map((item) => item.title || item.description)),
+  );
+  if (items.length < 2) return "";
+  return `平台首页展示${items.slice(0, 8).join("、")}等流程环节（依据首页流程卡片与截图归纳，待业务确认）。`;
+}
+
 function resolvePositioning(evidence, system = {}, writeValidation = null, evidenceSummary = null) {
   const sources = [];
   let text = "";
@@ -1190,6 +1303,15 @@ function resolvePositioning(evidence, system = {}, writeValidation = null, evide
     sources.push({ type: "module-aggregate", weight: 0.4 });
     if (!text) {
       text = aggregate;
+      confidence = "medium";
+    }
+  }
+
+  const homeOverviewHint = buildHomeOverviewHint(evidence, evidenceSummary);
+  if (homeOverviewHint) {
+    sources.push({ type: "homepage-overview-cards", weight: 0.3 });
+    if (!text) {
+      text = homeOverviewHint;
       confidence = "medium";
     }
   }
@@ -1531,6 +1653,15 @@ function buildOperationSpec(options = {}) {
   const modules = moduleNames.map((name) =>
     buildModuleSpec(name, evidence, writeValidation, networkIndex, system, evidenceSummary),
   );
+  const homeOverviewModules = buildHomeOverviewModules(evidence, evidenceSummary, networkIndex);
+  const existingModuleKeys = new Set(modules.map((module) => normalizeOperationText(module.name)));
+  for (const module of homeOverviewModules) {
+    const key = normalizeOperationText(module.name);
+    if (key && !existingModuleKeys.has(key)) {
+      modules.push(module);
+      existingModuleKeys.add(key);
+    }
+  }
 
   const homePage = (evidence.pageInventory || []).find((page) => page.type === "home");
   if (homePage) {

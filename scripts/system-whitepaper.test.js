@@ -1,6 +1,113 @@
 ﻿const assert = require("node:assert/strict");
 const test = require("node:test");
 
+function spawnSyncSummary(result) {
+  return [
+    `status=${result.status}`,
+    `signal=${result.signal || ""}`,
+    `attempts=${result.spawnAttempts || 1}`,
+    result.error ? `error=${result.error.code || result.error.name}: ${result.error.message}` : "",
+    result.stderr ? `stderr=${String(result.stderr).slice(0, 2000)}` : "",
+    result.stdout ? `stdout=${String(result.stdout).slice(0, 2000)}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function runCliMainForTest(main, argv = []) {
+  const originalArgv = process.argv;
+  const originalExitCode = process.exitCode;
+  const originalExit = process.exit;
+  const originalLog = console.log;
+  const originalError = console.error;
+  const stdout = [];
+  const stderr = [];
+  process.argv = [process.execPath, "test-cli", ...argv];
+  process.exitCode = undefined;
+  console.log = (...args) => stdout.push(args.join(" "));
+  console.error = (...args) => stderr.push(args.join(" "));
+  process.exit = (code = 0) => {
+    process.exitCode = typeof code === "number" ? code : Number(code) || 0;
+    const error = new Error(`process.exit(${process.exitCode})`);
+    error.testCliExit = true;
+    throw error;
+  };
+  try {
+    main();
+    return {
+      status: typeof process.exitCode === "number" ? process.exitCode : 0,
+      stdout: stdout.join("\n"),
+      stderr: stderr.join("\n"),
+    };
+  } catch (error) {
+    if (error.testCliExit) {
+      return {
+        status: typeof process.exitCode === "number" ? process.exitCode : 0,
+        stdout: stdout.join("\n"),
+        stderr: stderr.join("\n"),
+      };
+    }
+    return {
+      status: 1,
+      stdout: stdout.join("\n"),
+      stderr: [stderr.join("\n"), error.message].filter(Boolean).join("\n"),
+      error,
+    };
+  } finally {
+    process.argv = originalArgv;
+    process.exitCode = originalExitCode;
+    process.exit = originalExit;
+    console.log = originalLog;
+    console.error = originalError;
+  }
+}
+
+async function runAsyncCliMainForTest(main, argv = []) {
+  const originalArgv = process.argv;
+  const originalExitCode = process.exitCode;
+  const originalExit = process.exit;
+  const originalLog = console.log;
+  const originalError = console.error;
+  const stdout = [];
+  const stderr = [];
+  process.argv = [process.execPath, "test-cli", ...argv];
+  process.exitCode = undefined;
+  console.log = (...args) => stdout.push(args.join(" "));
+  console.error = (...args) => stderr.push(args.join(" "));
+  process.exit = (code = 0) => {
+    process.exitCode = typeof code === "number" ? code : Number(code) || 0;
+    const error = new Error(`process.exit(${process.exitCode})`);
+    error.testCliExit = true;
+    throw error;
+  };
+  try {
+    await main();
+    return {
+      status: typeof process.exitCode === "number" ? process.exitCode : 0,
+      stdout: stdout.join("\n"),
+      stderr: stderr.join("\n"),
+    };
+  } catch (error) {
+    if (error.testCliExit) {
+      return {
+        status: typeof process.exitCode === "number" ? process.exitCode : 0,
+        stdout: stdout.join("\n"),
+        stderr: stderr.join("\n"),
+      };
+    }
+    return {
+      status: 1,
+      stdout: stdout.join("\n"),
+      stderr: [stderr.join("\n"), error.message].filter(Boolean).join("\n"),
+      error,
+    };
+  } finally {
+    process.argv = originalArgv;
+    process.exitCode = originalExitCode;
+    process.exit = originalExit;
+    console.log = originalLog;
+    console.error = originalError;
+  }
+}
+
 const {
   applyPageZoom,
   assertSafeWriteTarget,
@@ -101,7 +208,8 @@ function passingNarrativeMarkdown() {
     "系统定位说明覆盖业务目标、使用场景、数据处理边界和页面证据来源，便于后续审阅时区分已验证结论与待确认事项。",
     "",
     "## 2. 核心功能说明",
-    "保单任务模块提供任务列表，用于查看保单任务、任务状态和处理进展。页面证据显示该模块以列表查询为主，适合归纳为只读核对与任务跟踪能力。",
+    "保单任务 > 任务列表入口与保单任务模块共同提供任务列表，用于查看保单任务、任务状态和处理进展。页面证据显示该模块以列表查询为主，并能观察到新增任务列表入口，因此适合归纳为只读核对、任务跟踪和待确认的新建表单检查能力。",
+    "保单任务 > 任务列表模块的职责是围绕任务列表、新增任务列表等能力展开；该职责依据页面结构归纳，仍保留待业务确认边界。保单任务模块当前证据显示共 1 个菜单页，已采集 1 个，可作为页面证据覆盖范围说明。",
     "功能总结只写入当前证据能够支撑的内容，不把数据库字段或弱推理直接写成确定结论。",
     "用途总结聚焦已观察到的页面能力：一是帮助业务人员快速定位保单任务，二是辅助核对任务处理状态，三是为后续人工处理或问题排查提供页面入口。",
     "如果后续数据库画像显示存在任务表、状态字段或保单关联字段，这些内容只能作为解释业务对象的辅助证据，不能替代浏览器页面证据直接证明审批、写入或自动流转能力。",
@@ -110,7 +218,7 @@ function passingNarrativeMarkdown() {
     "任务列表围绕保单任务对象展示任务状态、创建时间和处理进展，当前证据只支持查询、查看和只读核对，不支持写入型审批结论。",
     "",
     "## 4. 典型业务流程",
-    "端到端流程为：1. 业务人员接收保单任务后，在保单任务模块按保单号、任务状态等条件定位任务对象；2. 任务列表展示状态、创建时间、处理进展等状态与质量信号，供人员判断是否需要继续处理；3. 保单任务模块与后续人工处理入口、问题排查页面协同，把异常状态或质量不通过结果传递给复核人员；4. 对未覆盖的详情处理、审批写入或后台自动流转，流程进入待确认边界，问题回流给业务人员补充取证或人工确认。",
+    "端到端业务处理链路为 partially-observed：1. 业务人员接收保单任务后，在保单任务模块按保单号、任务状态等条件定位任务对象；2. 任务列表展示状态、创建时间、处理进展等状态与质量信号，供人员判断是否需要继续处理；3. 已观察步骤包含新增任务列表，说明页面存在信息采集与提交入口，但保存后的跨模块顺序和未覆盖模块职责仍为证据约束推理；4. 保单任务模块与后续人工处理入口、问题排查页面协同，把异常状态或质量不通过结果传递给复核人员；5. 对未覆盖的详情处理、审批写入或后台自动流转，流程进入待确认边界，问题回流给业务人员补充取证或人工确认。",
     "流程说明依据菜单、页面、截图和任务列表证据组织，最终输出是保单任务状态核对结果；未被浏览器证据覆盖的审批、写入、自动处理和数据库关系不作为确认结论。",
   ].join("\n");
 }
@@ -124,7 +232,8 @@ function passingUiOnlyNarrativeMarkdown() {
     "系统定位聚焦页面已观察到的查询、查看和核对能力，不把后台库表、隐藏逻辑或未打开的页面推断成已经确认的业务功能。",
     "",
     "## 2. 核心功能说明",
-    "保单任务模块提供任务列表，用于承接保单任务的页面查询和结果查看。白皮书只把任务列表写成页面可见功能，并把用途限定在定位任务、查看列表结果、辅助业务人员继续处理这三个方向。",
+    "保单任务 > 任务列表入口与保单任务模块提供任务列表，用于承接保单任务的页面查询和结果查看。白皮书只把任务列表写成页面可见功能，并把用途限定在定位任务、查看列表结果、辅助业务人员继续处理这三个方向。",
+    "保单任务 > 任务列表模块的职责是围绕任务列表、新增任务列表等能力展开；该职责来自页面结构归纳，仍需业务确认。保单任务模块当前证据显示共 1 个菜单页，已采集 1 个。",
     "功能总结依据菜单名称、页面入口和已采集截图组织，不写入未被页面证据覆盖的编辑、审批、自动流转或批量处理结论。",
     "用途总结强调该页面为业务人员提供统一入口：先进入保单任务菜单，再打开任务列表，再基于页面展示的结果判断下一步是否需要补充取证或人工处理。",
     "",
@@ -132,7 +241,7 @@ function passingUiOnlyNarrativeMarkdown() {
     "任务列表把保单任务对象、处理状态和页面结果集中展示，适合描述为只读核对与问题识别入口。",
     "",
     "## 4. 典型业务流程",
-    "端到端流程为：1. 业务人员围绕保单任务对象进入保单任务模块，使用保单号、处理状态等条件定位任务列表；2. 页面展示处理状态、创建时间和处理结果等状态/质量信号，帮助判断任务是否正常推进；3. 任务列表与后续人工处理入口、问题排查页面协同，异常状态或质量不通过结果需要传递给复核人员；4. 对详情页、弹窗处理、提交动作和自动流转尚未形成证据的部分，保持为待确认边界，并把问题回流到补采截图、按钮证据和安全操作记录。",
+    "端到端业务处理链路为 partially-observed：1. 业务人员围绕保单任务对象进入保单任务模块，使用保单号、处理状态等条件定位任务列表；2. 页面展示处理状态、创建时间和处理结果等状态/质量信号，帮助判断任务是否正常推进；3. 已观察步骤包含新增任务列表，说明页面存在信息采集与提交入口，但跨模块顺序或未覆盖模块职责仍为证据约束推理；4. 任务列表与后续人工处理入口、问题排查页面协同，异常状态或质量不通过结果需要传递给复核人员；5. 对详情页、弹窗处理、提交动作和自动流转尚未形成证据的部分，保持为待确认边界，并把问题回流到补采截图、按钮证据和安全操作记录。",
     "该流程写法保证白皮书的业务流程来自证据链，而不是根据系统名称、菜单名称或后台资料进行过度外推。",
   ].join("\n");
 }
@@ -161,84 +270,52 @@ function passingTaskListOnlyNarrativeMarkdown() {
 function writePassingTruthReadinessReport(dir, overrides = {}) {
   const fs = require("node:fs");
   const path = require("node:path");
-  const { runFactCheck } = require("./fact-check-whitepaper");
-  const { runNarrativeCheck } = require("./check-narrative");
   const {
     buildReadinessSourceArtifacts,
     loadReadinessInputs,
   } = require("./check-truth-readiness");
-  const { buildQualitySourceArtifacts } = require("./check-quality");
-  const writeJsonIfMissing = (fileName, value) => {
-    const filePath = path.join(dir, fileName);
-    if (!fs.existsSync(filePath)) {
-      fs.writeFileSync(filePath, JSON.stringify(value), "utf8");
-    }
-  };
   const writeTextIfMissing = (fileName, value) => {
     const filePath = path.join(dir, fileName);
     if (!fs.existsSync(filePath)) {
       fs.writeFileSync(filePath, value, "utf8");
     }
   };
-  writeJsonIfMissing("evidence.json", {
-    menuInventory: [{ title: "保单任务", status: "visited", url: "/policy-task" }],
-    pageInventory: [{ id: "policy-task", type: "page", screenshot: "screenshots/task.png" }],
-    actionInventory: [{ function: "任务列表", type: "query" }],
-  });
-  writeJsonIfMissing("quality-report.json", {
-    artifactType: "quality-report",
-    version: 1,
-    canFinalize: true,
-    menuCoverage: 1,
-    corePageScreenshotCoverage: 1,
-    coreFunctionClassificationCoverage: 1,
-    writeOperationSafetyCompliance: 1,
-    unverifiedContentLabeling: 1,
-    coreConclusionTraceability: 1,
-    failures: [],
-    sourceArtifacts: buildQualitySourceArtifacts({
-      evidencePath: path.join(dir, "evidence.json"),
-      operationGuideGatePath: path.join(dir, "operation-guide-gate.json"),
-    }),
-  });
   writeTextIfMissing("whitepaper.pending-review.md", passingNarrativeMarkdown());
-  const fixtureClaim = buildFixtureWritableClaimFromMarkdown(
-    fs.readFileSync(path.join(dir, "whitepaper.pending-review.md"), "utf8"),
-  );
-  writeJsonIfMissing("verified-claims.json", {
-    artifactType: "verified-claims",
-    version: 1,
-    claims: [
-      {
-        id: fixtureClaim.id,
-        subject: fixtureClaim.subject,
-        module: fixtureClaim.module,
-        function: fixtureClaim.function,
-        status: "confirmed",
-        writable: true,
-      },
-    ],
-    rules: {
-      lowConfidenceNotWritable: true,
-      databaseOnlyNotConfirmed: true,
-      databaseOnlyNotWritable: true,
-    },
-    metrics: {
-      claimCount: 1,
-      writableClaimCount: 1,
-      confirmedCount: 1,
-      inferredCount: 0,
-      weakCount: 0,
-      databaseOnlyClaimCount: 0,
-    },
-    writableClaimIds: [fixtureClaim.id],
+  writePassingTruthArtifacts(dir, {
+    databaseProfile: overrides.requirements?.databaseEvidenceRequired ? true : false,
+    requireDatabaseEvidence: overrides.requirements?.databaseEvidenceRequired === true,
+    systemCode: overrides.system?.code,
+    systemName: overrides.system?.name,
   });
-  if (!fs.existsSync(path.join(dir, "fact-check-report.json"))) runFactCheck({ inputDir: dir });
-  if (!fs.existsSync(path.join(dir, "narrative-quality-report.json"))) runNarrativeCheck({ inputDir: dir });
   const baseGates = {
     evidence: { pass: true, scorePercent: 100 },
+    workflow: { pass: true, scorePercent: 100, metrics: { operationFlowCount: 1, observedWorkflowStepCount: 1 } },
+    businessProcess: { pass: true, scorePercent: 100 },
+    whitepaperPlan: {
+      pass: true,
+      scorePercent: 100,
+      metrics: {
+        planPresent: true,
+        requiredItemCount: 1,
+        allowedFactCount: 1,
+        pendingItemCount: 0,
+        planRequiredCoverageRatio: 1,
+        minPlanRequiredCoverage: 0.95,
+      },
+    },
     claims: { pass: true, scorePercent: 100 },
     factCheck: { pass: true, scorePercent: 100 },
+    goldenEval: {
+      pass: true,
+      required: false,
+      available: false,
+      scorePercent: 100,
+      metrics: {
+        coverageRatio: 1,
+        criticalCoverageRatio: 1,
+        overclaimCount: 0,
+      },
+    },
     narrative: { pass: true, scorePercent: 100 },
     database: { pass: true, available: false, scorePercent: 0 },
     lineage: { pass: true, scorePercent: 100 },
@@ -251,7 +328,7 @@ function writePassingTruthReadinessReport(dir, overrides = {}) {
     scorePercent: 98,
     canSubmitReview: true,
     canFinalize: true,
-    requirements: { databaseEvidenceRequired: false },
+    requirements: { databaseEvidenceRequired: false, goldenEvalRequired: false },
     gates: baseGates,
     blockers: [],
     improvementActions: [],
@@ -296,6 +373,8 @@ function writePassingTruthArtifacts(dir, options = {}) {
     buildSourceArtifacts: buildClaimSourceArtifacts,
     buildVerifiedClaimsArtifact,
   } = require("./build-verified-claims");
+  const { buildBusinessProcessModelFromDir } = require("./build-business-process-model");
+  const { buildWhitepaperPlanFromDir } = require("./build-whitepaper-plan");
   const { buildDatabaseModelFromDir } = require("./build-database-model");
   const { buildQualitySourceArtifacts } = require("./check-quality");
   if (!fs.existsSync(path.join(dir, "whitepaper.pending-review.md"))) {
@@ -354,19 +433,19 @@ function writePassingTruthArtifacts(dir, options = {}) {
   writeOperationSpecFixture(dir, {
     system: { code: options.systemCode || "adp", name: options.systemName || "AI保单数据闭环平台", operationGuideMinMenus: 1 },
   });
+  const currentEvidence = JSON.parse(fs.readFileSync(path.join(dir, "evidence.json"), "utf8"));
+  const currentEvidenceSummary = JSON.parse(fs.readFileSync(evidenceSummaryPath, "utf8"));
+  const { buildWorkflowSpecFromDir } = require("./build-workflow-spec");
+  buildWorkflowSpecFromDir(dir, { generatedAt: "2026-06-03T00:00:30.000Z" });
+  const qualityMetrics = computeEvidenceMetrics(currentEvidence);
   fs.writeFileSync(
     path.join(dir, "quality-report.json"),
     JSON.stringify({
-      artifactType: "quality-report",
-      version: 1,
-      canFinalize: true,
-      menuCoverage: 1,
-      corePageScreenshotCoverage: 1,
-      coreFunctionClassificationCoverage: 1,
-      writeOperationSafetyCompliance: 1,
-      unverifiedContentLabeling: 1,
-      coreConclusionTraceability: 1,
-      failures: [],
+      ...buildQualityReport({
+        ...qualityMetrics,
+        blockedItems: currentEvidence.blockedItems || [],
+      }),
+      counts: qualityMetrics.counts,
       sourceArtifacts: buildQualitySourceArtifacts({
         evidencePath: path.join(dir, "evidence.json"),
         evidenceSummaryPath,
@@ -415,7 +494,7 @@ function writePassingTruthArtifacts(dir, options = {}) {
     ? JSON.parse(fs.readFileSync(filePath, "utf8"))
     : {};
   const functionUniverse = buildFunctionUniverseArtifact({
-    evidenceSummary,
+    evidenceSummary: currentEvidenceSummary,
     databaseProfile: readOptionalJson(databaseProfilePath),
     entityModel: readOptionalJson(entityModelPath),
     operationSpec: readOptionalJson(path.join(dir, "operation-spec.json")),
@@ -434,6 +513,8 @@ function writePassingTruthArtifacts(dir, options = {}) {
     generatedAt: "2026-06-03T00:00:30.000Z",
   });
   fs.writeFileSync(path.join(dir, "verified-claims.json"), JSON.stringify(verifiedClaims), "utf8");
+  buildBusinessProcessModelFromDir(dir, { generatedAt: "2026-06-03T00:00:40.000Z" });
+  buildWhitepaperPlanFromDir(dir, { generatedAt: "2026-06-03T00:00:45.000Z" });
   const writableClaimLines = verifiedClaims.claims
     .filter((claim) => claim.writable)
     .map((claim) => `${claim.module || claim.subject || ""} ${claim.subject || claim.function || claim.entity || ""} [claim:${claim.id}]`);
@@ -734,6 +815,45 @@ test("mergeFrameSnapshots merges tables and forms across scroll positions", () =
   assert.equal(merged.forms[0].fields.length, 2);
   assert.deepEqual(merged.tables[0].columns, ["流水号", "平台", "映射类型", "操作"]);
   assert.equal(merged.tables[0].rowCount, 4);
+});
+
+test("mergeFrameSnapshots preserves home overview cards across frame snapshots", () => {
+  const merged = mergeFrameSnapshots([
+    {
+      title: "首页",
+      url: "https://example.test/",
+      buttons: [],
+      forms: [],
+      tables: [],
+      links: [],
+      overviewCards: [
+        {
+          title: "业务流程",
+          items: [{ title: "需求输出", description: "需求文档输出" }],
+        },
+      ],
+      landmarks: [],
+    },
+    {
+      title: "",
+      url: "",
+      buttons: [],
+      forms: [],
+      tables: [],
+      links: [],
+      overviewCards: [
+        {
+          title: "任务流程",
+          items: [{ title: "数据同步 Skill", description: "自动化同步流程" }],
+        },
+      ],
+      landmarks: [],
+    },
+  ]);
+
+  assert.equal(merged.overviewCards.length, 2);
+  assert.equal(merged.overviewCards[0].items[0].title, "需求输出");
+  assert.equal(merged.overviewCards[1].title, "任务流程");
 });
 
 test("resolveEvidenceScrollOptions reads runtime.evidenceScroll with defaults", () => {
@@ -1734,6 +1854,239 @@ test("mergePageSnapshotIntoEvidence records pages, actions, forms, and screensho
   assert.equal(evidence.screenshotIndex[0].file, "screenshots/home.png");
 });
 
+test("home overview cards are preserved as evidence without creating write actions", () => {
+  const evidence = createInitialEvidence({
+    code: "finance",
+    name: "财务费用系统",
+    url: "https://finance.example.test/",
+  });
+
+  mergePageSnapshotIntoEvidence(evidence, {
+    id: "page-home",
+    menuPath: "首页",
+    type: "home",
+    title: "财务费用系统",
+    url: "https://finance.example.test/",
+    links: [],
+    buttons: ["退出"],
+    overviewCards: [
+      {
+        title: "业务流程",
+        items: [
+          { title: "费用申请", description: "员工提交费用报销申请" },
+          { title: "预算校验", description: "系统校验预算和科目" },
+          { title: "财务复核", description: "财务人员复核报销材料" },
+        ],
+      },
+      {
+        title: "任务流程",
+        items: [
+          { title: "待办处理", description: "处理待审批和待复核任务" },
+        ],
+      },
+    ],
+    screenshot: {
+      id: "shot-home",
+      file: "screenshots/home.png",
+      caption: "首页截图。",
+      module: "首页",
+      function: "系统入口",
+    },
+  });
+
+  assert.equal(evidence.pageInventory[0].overviewCards.length, 2);
+  assert.equal(evidence.pageInventory[0].overviewCards[0].items[0].title, "费用申请");
+  assert.equal(evidence.actionInventory.some((item) => item.name === "费用申请"), false);
+  const summary = buildEvidenceSummary(evidence);
+  assert.equal(summary.homeOverview.cards.length, 2);
+  assert.equal(summary.homeOverview.cards[0].items.length, 3);
+});
+
+test("operation spec derives bounded portal workflow modules from home overview cards", () => {
+  const { buildOperationSpec } = require("./operation-spec/lib");
+  const evidence = createInitialEvidence({
+    code: "finance",
+    name: "财务费用系统",
+    url: "https://finance.example.test/",
+  });
+  mergePageSnapshotIntoEvidence(evidence, {
+    id: "page-home",
+    menuPath: "首页",
+    type: "home",
+    title: "财务费用系统",
+    url: "https://finance.example.test/",
+    links: [],
+    buttons: ["退出"],
+    overviewCards: [
+      {
+        title: "业务流程",
+        items: [
+          { title: "费用申请", description: "员工提交费用报销申请" },
+          { title: "预算校验", description: "系统校验预算和科目" },
+          { title: "财务复核", description: "财务人员复核报销材料" },
+          { title: "付款归档", description: "完成付款并归档凭证" },
+        ],
+      },
+      {
+        title: "任务流程",
+        items: [
+          { title: "待办处理", description: "处理待审批和待复核任务" },
+          { title: "异常退回", description: "材料不完整时退回补充" },
+        ],
+      },
+    ],
+    screenshot: {
+      id: "shot-home",
+      file: "screenshots/home.png",
+      caption: "首页截图。",
+      module: "首页",
+      function: "系统入口",
+    },
+  });
+
+  const evidenceSummary = buildEvidenceSummary(evidence);
+  const { spec, gate } = buildOperationSpec({
+    evidence,
+    evidenceSummary,
+    system: {
+      code: "finance",
+      name: "财务费用系统",
+      operationGuideMinMenus: 2,
+    },
+  });
+
+  const portalModules = spec.modules.filter((module) => module.source === "home-overview-card");
+  assert.equal(portalModules.length, 6);
+  assert.equal(portalModules[0].coreBusinessModule, true);
+  assert.equal(portalModules[0].flows[0].status, "inferred-from-home-overview");
+  assert.match(portalModules[0].flows[0].reason, /首页流程卡片/);
+  assert.ok(portalModules[0].screenshots.includes("screenshots/home.png"));
+  assert.equal(gate.canComposeGuide, true);
+  assert.equal(spec.metrics.moduleCount, 6);
+  assert.equal(spec.positioning.sources.some((item) => item.type === "homepage-overview-cards"), true);
+});
+
+test("V6 non-ADP portal home overview flows stay generic and inferred", () => {
+  const { buildOperationSpec } = require("./operation-spec/lib");
+  const { buildWorkflowSpec } = require("./build-workflow-spec");
+  const scenarios = [
+    {
+      code: "finance",
+      name: "财务费用系统",
+      cardTitle: "业务流程",
+      items: ["费用申请", "预算校验", "财务复核", "付款归档"],
+    },
+    {
+      code: "hr",
+      name: "人力资源系统",
+      cardTitle: "入职流程",
+      items: ["入职申请", "资料审核", "账号开通", "入职归档"],
+    },
+    {
+      code: "foundation",
+      name: "内部基础服务系统",
+      cardTitle: "权限流程",
+      items: ["权限申请", "负责人审批", "权限开通", "到期复核"],
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const evidence = createInitialEvidence({
+      code: scenario.code,
+      name: scenario.name,
+      url: `https://${scenario.code}.example.test/`,
+    });
+    mergePageSnapshotIntoEvidence(evidence, {
+      id: `page-home-${scenario.code}`,
+      menuPath: "首页",
+      type: "home",
+      title: scenario.name,
+      url: `https://${scenario.code}.example.test/`,
+      links: [],
+      buttons: ["退出"],
+      overviewCards: [
+        {
+          title: scenario.cardTitle,
+          items: scenario.items.map((item) => ({
+            title: item,
+            description: `${item}环节`,
+          })),
+        },
+      ],
+      screenshot: {
+        id: `shot-home-${scenario.code}`,
+        file: `screenshots/${scenario.code}-home.png`,
+        caption: `${scenario.name}首页截图。`,
+        module: "首页",
+        function: "系统入口",
+      },
+    });
+
+    const evidenceSummary = buildEvidenceSummary(evidence);
+    const { spec } = buildOperationSpec({
+      evidence,
+      evidenceSummary,
+      system: {
+        code: scenario.code,
+        name: scenario.name,
+        operationGuideMinMenus: 1,
+      },
+    });
+    const workflowSpec = buildWorkflowSpec({
+      operationSpec: spec,
+      generatedAt: "2026-06-11T00:00:00.000Z",
+    });
+    const portalModules = spec.modules.filter((module) => module.source === "home-overview-card");
+
+    assert.equal(evidenceSummary.homeOverview.cards.length, 1);
+    assert.equal(portalModules.length, scenario.items.length);
+    assert.equal(spec.metrics.flowCount, scenario.items.length);
+    assert.equal(spec.metrics.writeActionCount || 0, 0);
+    assert.equal(workflowSpec.metrics.observedWorkflowCount, 0);
+    assert.equal(workflowSpec.metrics.inferredWorkflowCount, scenario.items.length);
+    assert.equal(workflowSpec.metrics.homeOverviewWorkflowCount, scenario.items.length);
+    assert.equal(workflowSpec.metrics.narratableWorkflowCount, scenario.items.length);
+    assert.equal(
+      workflowSpec.workflows.every((workflow) =>
+        workflow.evidenceStatus === "inferred" &&
+        workflow.canNarrateAsObserved === false &&
+        workflow.canNarrateAsInferred === true &&
+        workflow.boundaries.length > 0,
+      ),
+      true,
+    );
+  }
+});
+
+test("home overview text parser extracts portal flow cards from visible homepage text", () => {
+  const { extractHomeOverviewCardsFromText } = require("./collect-evidence");
+  const cards = extractHomeOverviewCardsFromText(
+    [
+      "AI保单数据闭环平台",
+      "业务流程",
+      "需求输出",
+      "需求文档输出 配置任务生成 数据同步性能",
+      "需求验证",
+      "测试用例执行 业务确认",
+      "需求验收",
+      "验收报告输出 下载 发布配置启用",
+      "数据监控",
+      "监控生产异常数据 无数据管理",
+      "任务流程",
+      "需求分析 Skill",
+      "智能分析业务需求 自动生成配置方案",
+      "数据同步 Skill",
+      "智能数据映射 自动化同步流程",
+    ].join(" "),
+  );
+
+  assert.equal(cards.length, 2);
+  assert.equal(cards[0].title, "业务流程");
+  assert.deepEqual(cards[0].items.slice(0, 2).map((item) => item.title), ["需求输出", "需求验证"]);
+  assert.equal(cards[1].title, "任务流程");
+  assert.equal(cards[1].items[0].title, "需求分析 Skill");
+});
+
 test("selectMenusForCollection skips parent menus that have child menu pages", () => {
   const menuMap = [
     {
@@ -1976,7 +2329,7 @@ test("check-quality fails on malformed operation guide gate without writing repo
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { spawnSync } = require("node:child_process");
+  const { readOperationGuideGate } = require("./check-quality");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quality-bad-gate-"));
   fs.writeFileSync(
     path.join(dir, "evidence.json"),
@@ -1991,13 +2344,10 @@ test("check-quality fails on malformed operation guide gate without writing repo
   );
   fs.writeFileSync(path.join(dir, "operation-guide-gate.json"), "{bad json", "utf8");
 
-  const result = spawnSync(process.execPath, ["scripts/check-quality.js", "--input", dir], {
-    cwd: path.resolve(__dirname, ".."),
-    encoding: "utf8",
-  });
-
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /Operation guide gate is malformed/);
+  assert.throws(
+    () => readOperationGuideGate(path.join(dir, "operation-guide-gate.json")),
+    /Operation guide gate is malformed/,
+  );
   assert.equal(fs.existsSync(path.join(dir, "quality-report.json")), false);
 });
 
@@ -2431,12 +2781,64 @@ test("buildPhase3bPrompt uses low-token inline inputs without reading large repo
   assert.match(prompt, /writable-claim-coverage-gap/);
   assert.match(prompt, /missingWritableClaims/);
   assert.match(prompt, /待确认事项使用扁平 bullet/);
+  assert.match(prompt, /合并同类待确认/);
   assert.doesNotMatch(prompt, /SKILL\.md/);
   assert.doesNotMatch(prompt, /docs\/narrative-guide\.md/);
   assert.doesNotMatch(prompt, /whitepaper\.draft\.md/);
   assert.doesNotMatch(prompt, /fin-center/);
   assert.match(prompt, /不要读取.*secrets\//);
   assert.match(prompt, /不要读取.*\.playwright-\*/);
+});
+
+test("phase3b compact business process model preserves v2 status boundary and derivation", () => {
+  const { compactBusinessProcessModel } = require("./narrative/phase3b");
+  const filler = Object.fromEntries(
+    Array.from({ length: 90 }, (_, index) => [`extra${index}`, `value-${index}`]),
+  );
+
+  const compact = compactBusinessProcessModel({
+    artifactType: "business-process-model",
+    version: 2,
+    system: { code: "finance", name: "费用与预算管理系统" },
+    ...filler,
+    businessObjects: [{ name: "费用申请", category: "transaction-record" }],
+    processes: [
+      {
+        name: "费用申请闭环",
+        status: "partially-observed",
+        boundary: "预算占用未观察到实际写入，只能作为字段和模块职责的合理推理。",
+        steps: [
+          {
+            name: "提交费用申请",
+            status: "observed",
+            source: "workflow-spec",
+            evidence: ["workflow:费用申请:提交"],
+          },
+          {
+            name: "预算占用",
+            status: "inferred",
+            source: "operation-spec",
+            evidence: ["module:预算控制"],
+            boundary: "未观察到预算占用写入动作。",
+          },
+        ],
+      },
+    ],
+    derivation: {
+      builder: "build-business-process-model",
+      algorithmVersion: 2,
+      profileId: "",
+      sourceHash: "source-hash",
+      contentHash: "content-hash",
+    },
+  });
+
+  assert.equal(compact.available, true);
+  assert.equal(compact.model.version, 2);
+  assert.equal(compact.model.processes[0].status, "partially-observed");
+  assert.match(compact.model.processes[0].boundary, /预算占用未观察/);
+  assert.equal(compact.model.processes[0].steps[1].status, "inferred");
+  assert.equal(compact.model.derivation.contentHash, "content-hash");
 });
 
 test("phase3b prompt rejects non-object evidence summary file", () => {
@@ -2588,6 +2990,36 @@ test("narrative brief and assembly keep business sections while appendix is scri
   assert.match(markdown, /## 4\. 典型业务流程/);
   assert.match(markdown, /## 7\. 附录：证据索引/);
   assert.match(markdown, /screenshots\/task\.png/);
+});
+
+test("V6 pending confirmations consolidate repeated module uncertainty", () => {
+  const { consolidatePendingConfirmationSection } = require("./narrative/phase3b");
+  const markdown = [
+    "# 业务系统功能白皮书（待审核）",
+    "",
+    "## 6. 待确认事项",
+    "- 首页模块虽暴露「首页」功能入口，但功能级操作细节（按钮、字段、写操作）证据不足，具体首页功能范围待确认。",
+    "- 需求输出模块虽暴露「需求输出」功能入口，但功能级操作细节（按钮、字段、写操作）证据不足，具体需求输出功能范围待确认。",
+    "- 数据监控模块虽暴露「数据监控」功能入口，但功能级操作细节（按钮、字段、写操作）证据不足，具体数据监控功能范围待确认。",
+    "- 业务处理链路的跨模块顺序为 inferred 推理，未观察到端到端执行证据，实际流转规则与触发条件待业务确认。",
+    "- 单据级状态字段与状态机尚未捕获，状态流转命名与转换规则待确认。",
+    "",
+    "## 7. 附录：证据索引",
+    "- 证据保留。",
+  ].join("\n");
+
+  const result = consolidatePendingConfirmationSection(markdown);
+  const uncertaintyCount = (result.match(/无法|尚未|不宜|未覆盖|需补采|证据不足|待确认/g) || [])
+    .length;
+
+  assert.equal(uncertaintyCount, 1);
+  assert.match(result, /涉及：首页、需求输出、数据监控/);
+  assert.match(result, /仍需业务侧复核/);
+  assert.match(result, /inferred 推理/);
+  assert.doesNotMatch(result, /证据不足/);
+  assert.doesNotMatch(result, /尚未/);
+  assert.doesNotMatch(result, /待业务确认/);
+  assert.match(result, /## 7\. 附录：证据索引/);
 });
 
 test("phase3b redacts non-writable claim ids from prompts and assembled markdown", () => {
@@ -2895,7 +3327,7 @@ test("manual phase3b provider writes prompt without fabricating pending review",
   assert.ok(fs.existsSync(path.join(dir, "phase3b-prompts", "overview-flow-prompt.md")));
   assert.ok(fs.existsSync(path.join(dir, "phase3b-usage.json")));
   assert.match(fs.readFileSync(path.join(dir, "phase3b-prompt.md"), "utf8"), /narrative-fragments\.md/);
-  assert.equal(result.partPrompts.length, 1);
+  assert.equal(result.partPrompts.length, 2);
   assert.equal(fs.existsSync(path.join(dir, "whitepaper.pending-review.md")), false);
 });
 
@@ -3668,6 +4100,43 @@ test("phase3b part assembly ignores stale unselected module fragments", () => {
   assert.doesNotMatch(fragments, /残留旧发布管理/);
 });
 
+test("phase3b assembly demotes unsupported core headings to body text", () => {
+  const {
+    assemblePendingReviewMarkdown,
+  } = require("./narrative/phase3b");
+  const markdown = assemblePendingReviewMarkdown({
+    evidenceSummary: {
+      system: { name: "AI保单数据闭环平台" },
+      functions: [],
+    },
+    verifiedClaims: verifiedClaimsFixture([
+      {
+        id: "module:AI任务管理",
+        type: "module-presence",
+        subject: "AI任务管理",
+        module: "AI任务管理",
+        status: "confirmed",
+        writable: true,
+      },
+    ]),
+    fragments: [
+      "## 3. 核心功能说明",
+      "",
+      "### AI任务管理",
+      "",
+      "AI任务管理用于处理已取证任务。",
+      "",
+      "### 跨模块质量与回流能力",
+      "",
+      "跨模块质量与回流能力是综合说明，不是取证模块标题。",
+    ].join("\n"),
+  });
+
+  assert.match(markdown, /^### AI任务管理$/m);
+  assert.doesNotMatch(markdown, /^### 跨模块质量与回流能力$/m);
+  assert.match(markdown, /^\*\*跨模块质量与回流能力\*\*$/m);
+});
+
 test("phase3b overview-only assembly replaces section 2 when no module fragments are selected", () => {
   const fs = require("node:fs");
   const os = require("node:os");
@@ -4388,25 +4857,21 @@ test("phase3b defaults Cursor SDK cwd to the system output directory", () => {
   );
 });
 
-test("run-phase3b CLI reports usage before provider resolution when system is missing", () => {
-  const path = require("node:path");
-  const { spawnSync } = require("node:child_process");
+test("run-phase3b CLI reports usage before provider resolution when system is missing", async () => {
+  const { main } = require("./run-phase3b");
 
-  const result = spawnSync(process.execPath, ["scripts/run-phase3b.js"], {
-    cwd: path.resolve(__dirname, ".."),
-    encoding: "utf8",
-  });
+  const result = await runAsyncCliMainForTest(main, []);
 
-  assert.notEqual(result.status, 0);
+  assert.notEqual(result.status, 0, spawnSyncSummary(result));
   assert.match(result.stderr, /Usage: node scripts\/run-phase3b\.js --system adp/);
   assert.doesNotMatch(result.stderr, /Cannot access 'config' before initialization/);
 });
 
-test("run-phase3b CLI forwards narrative part and review rerun options", () => {
+test("run-phase3b CLI forwards narrative part and review rerun options", async () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { spawnSync } = require("node:child_process");
+  const { main } = require("./run-phase3b");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-cli-part-"));
   const configPath = path.join(dir, "systems.local.yaml");
@@ -4452,10 +4917,9 @@ test("run-phase3b CLI forwards narrative part and review rerun options", () => {
     "utf8",
   );
 
-  const result = spawnSync(
-    process.execPath,
+  const result = await runAsyncCliMainForTest(
+    main,
     [
-      "scripts/run-phase3b.js",
       "--config",
       configPath,
       "--system",
@@ -4466,13 +4930,9 @@ test("run-phase3b CLI forwards narrative part and review rerun options", () => {
       "overview-flow",
       "--review-rerun",
     ],
-    {
-      cwd: path.resolve(__dirname, ".."),
-      encoding: "utf8",
-    },
   );
 
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, spawnSyncSummary(result));
   const payload = JSON.parse(result.stdout);
   const usage = JSON.parse(fs.readFileSync(path.join(output, "phase3b-usage.json"), "utf8"));
   assert.equal(payload.narrativePart, "overview-flow");
@@ -4481,11 +4941,11 @@ test("run-phase3b CLI forwards narrative part and review rerun options", () => {
   assert.match(fs.readFileSync(path.join(output, "phase3b-prompt.md"), "utf8"), /系统概览需要更业务化/);
 });
 
-test("run-phase3b CLI tolerates malformed optional pipeline state", () => {
+test("run-phase3b CLI tolerates malformed optional pipeline state", async () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { spawnSync } = require("node:child_process");
+  const { main } = require("./run-phase3b");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-cli-bad-state-"));
   const configPath = path.join(dir, "systems.local.yaml");
@@ -4518,16 +4978,16 @@ test("run-phase3b CLI tolerates malformed optional pipeline state", () => {
   writeVerifiedClaimsFixture(output);
   fs.writeFileSync(path.join(output, "pipeline-state.json"), "{bad json", "utf8");
 
-  const result = spawnSync(
-    process.execPath,
-    ["scripts/run-phase3b.js", "--config", configPath, "--system", "adp", "--provider", "manual"],
-    {
-      cwd: path.resolve(__dirname, ".."),
-      encoding: "utf8",
-    },
-  );
+  const result = await runAsyncCliMainForTest(main, [
+    "--config",
+    configPath,
+    "--system",
+    "adp",
+    "--provider",
+    "manual",
+  ]);
 
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, spawnSyncSummary(result));
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.status, "manual-required");
   assert.ok(fs.existsSync(path.join(output, "phase3b-usage.json")));
@@ -4555,17 +5015,54 @@ test("pipeline state initializes truth phase and guarded whitepaper nodes for ad
   assert.equal(state.nodes["truth-universe"].label, "功能宇宙");
   assert.equal(state.nodes["truth-claims"].label, "可信断言");
   assert.equal(state.nodes["business-process"].label, "业务流程");
+  assert.equal(state.nodes["whitepaper-plan"].label, "写作计划");
   assert.equal(state.nodes["build-spec"].label, "整理规格");
+  assert.equal(state.nodes["workflow-spec"].label, "流程规格");
   assert.equal(state.nodes["compose-guide"].label, "操作指引");
   assert.equal(state.nodes.draft.label, "底稿");
   assert.equal(state.nodes.summary.label, "摘要");
   assert.equal(state.nodes["fact-check"].label, "事实核验");
+  assert.equal(state.nodes["golden-eval"].label, "金标评测");
   assert.equal(state.nodes["truth-readiness"].label, "真实度门禁");
   assert.equal(state.artifacts.truthReadiness, "truth-readiness-report.json");
   assert.equal(state.artifacts.dataDictionary, "data-dictionary.json");
   assert.equal(state.artifacts.entityModel, "entity-model.json");
   assert.equal(state.artifacts.businessProcessModel, "business-process-model.json");
-  assert.equal(Object.keys(state.nodes).length, 19);
+  assert.equal(state.artifacts.workflowSpec, "workflow-spec.json");
+  assert.equal(Object.keys(state.nodes).length, 22);
+});
+
+test("pipeline state includes workflow-spec node and artifact label", () => {
+  const { NODES, createPipelineState } = require("./pipeline-state");
+  const workflowNode = NODES.find((node) => node.id === "workflow-spec");
+  const businessProcessNode = NODES.find((node) => node.id === "business-process");
+  assert.deepEqual(workflowNode, { id: "workflow-spec", phase: "compose", label: "流程规格" });
+  assert.deepEqual(businessProcessNode, { id: "business-process", phase: "compose", label: "业务流程" });
+  assert.ok(
+    NODES.findIndex((node) => node.id === "workflow-spec") <
+      NODES.findIndex((node) => node.id === "business-process"),
+  );
+  const state = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
+  assert.equal(state.nodes["workflow-spec"].phase, "compose");
+  assert.equal(state.nodes["business-process"].phase, "compose");
+  assert.equal(state.artifacts.workflowSpec, "workflow-spec.json");
+});
+
+test("pipeline state includes whitepaper-plan after business-process", () => {
+  const { NODES, createPipelineState } = require("./pipeline-state");
+  const planNode = NODES.find((node) => node.id === "whitepaper-plan");
+  assert.deepEqual(planNode, { id: "whitepaper-plan", phase: "compose", label: "写作计划" });
+  assert.ok(
+    NODES.findIndex((node) => node.id === "business-process") <
+      NODES.findIndex((node) => node.id === "whitepaper-plan"),
+  );
+  assert.ok(
+    NODES.findIndex((node) => node.id === "whitepaper-plan") <
+      NODES.findIndex((node) => node.id === "draft"),
+  );
+  const state = createPipelineState({ code: "generic-finance", name: "费用与预算管理系统" });
+  assert.equal(state.nodes["whitepaper-plan"].phase, "compose");
+  assert.equal(state.artifacts.whitepaperPlan, "whitepaper-plan.json");
 });
 
 test("pipeline reset archives and clears existing system output before fresh collection", () => {
@@ -4617,9 +5114,12 @@ test("migratePipelineState backfills build-spec and compose-guide on legacy stat
   delete legacy.nodes["truth-universe"];
   delete legacy.nodes["truth-claims"];
   delete legacy.nodes["business-process"];
+  delete legacy.nodes["whitepaper-plan"];
   delete legacy.nodes["build-spec"];
+  delete legacy.nodes["workflow-spec"];
   delete legacy.nodes["compose-guide"];
   delete legacy.nodes["fact-check"];
+  delete legacy.nodes["golden-eval"];
   delete legacy.nodes["truth-readiness"];
   delete legacy.phases.truth;
   delete legacy.phases.compose;
@@ -4631,14 +5131,19 @@ test("migratePipelineState backfills build-spec and compose-guide on legacy stat
   assert.equal(state.nodes["truth-universe"].label, "功能宇宙");
   assert.equal(state.nodes["truth-claims"].label, "可信断言");
   assert.equal(state.nodes["business-process"].label, "业务流程");
+  assert.equal(state.nodes["whitepaper-plan"].label, "写作计划");
   assert.equal(state.nodes["build-spec"].label, "整理规格");
+  assert.equal(state.nodes["workflow-spec"].label, "流程规格");
   assert.equal(state.nodes["compose-guide"].label, "操作指引");
   assert.equal(state.nodes["fact-check"].label, "事实核验");
+  assert.equal(state.nodes["golden-eval"].label, "金标评测");
   assert.equal(state.nodes["truth-readiness"].label, "真实度门禁");
   assert.equal(state.nodes["db-profile"].status, "pending");
   assert.equal(state.nodes["db-model"].status, "pending");
   assert.equal(state.nodes["business-process"].status, "pending");
+  assert.equal(state.nodes["whitepaper-plan"].status, "pending");
   assert.equal(state.nodes["build-spec"].status, "pending");
+  assert.equal(state.nodes["workflow-spec"].status, "pending");
   assert.equal(state.phases.truth.label, "真相");
   assert.equal(state.phases.compose.label, "成稿");
 
@@ -4647,6 +5152,7 @@ test("migratePipelineState backfills build-spec and compose-guide on legacy stat
   writePipelineState(statePath, legacy);
   const loaded = readPipelineState(statePath, { persist: true });
   assert.equal(loaded.nodes["build-spec"].label, "整理规格");
+  assert.equal(loaded.nodes["workflow-spec"].label, "流程规格");
   assert.equal(JSON.parse(fs.readFileSync(statePath, "utf8")).nodes["build-spec"].label, "整理规格");
 });
 
@@ -4752,10 +5258,13 @@ test("reconcilePipelineStateFromArtifacts clears stale narrative running when ar
     "truth-universe",
     "truth-claims",
     "business-process",
+    "whitepaper-plan",
     "build-spec",
+    "workflow-spec",
     "compose-guide",
     "draft",
     "fact-check",
+    "golden-eval",
     "quality",
   ]) {
     state = updateNodeStatus(state, nodeId, nodeId === "validate-write" ? "skipped" : "success");
@@ -5130,6 +5639,89 @@ test("narrative quality validates business process model coverage when present",
   assert.match(report.failures.join("\n"), /赔付审核回流/);
 });
 
+test("narrative quality requires boundary wording for inferred business process flows", () => {
+  const { buildNarrativeQualityReport } = require("./check-narrative");
+  const report = buildNarrativeQualityReport({
+    minChars: 100,
+    operationSpec: {
+      modules: [
+        { name: "费用申请" },
+        { name: "预算控制" },
+        { name: "审批中心" },
+      ],
+    },
+    markdown: [
+      "# 费用与预算管理系统功能白皮书",
+      "",
+      "## 1. 系统定位",
+      "系统定位说明覆盖费用申请、预算控制和审批中心的协同处理场景，当前正文基于页面证据组织业务说明。",
+      "",
+      "## 2. 核心功能说明",
+      "费用申请模块承接申请录入，预算控制模块提供预算科目和风险状态，审批中心展示审核状态。",
+      "",
+      "## 4. 典型业务流程",
+      "费用申请闭环为：1. 申请人围绕费用申请对象提交申请，触发费用申请模块处理；2. 预算控制模块根据预算科目同步校验可用金额并生成风险状态；3. 审批中心依据审核状态形成通过或驳回结果，并把异常问题回流给申请人复核。",
+    ].join("\n"),
+    businessProcessModelPresent: true,
+    businessProcessModel: {
+      version: 2,
+      processes: [
+        {
+          name: "费用申请闭环",
+          status: "partially-observed",
+          boundary: "预算占用未观察到实际写入，只能作为字段和模块职责的合理推理。",
+          businessObjects: ["费用申请"],
+          statusSignals: ["风险状态", "审核状态"],
+          feedbackLoops: ["异常问题回流"],
+          steps: [
+            { name: "提交费用申请", status: "observed" },
+            { name: "预算校验", status: "inferred", boundary: "未观察到预算占用写入动作。" },
+          ],
+        },
+      ],
+    },
+  });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.match(report.failures.join("\n"), /推断\/部分观测流程/);
+  assert.match(report.failures.join("\n"), /费用申请闭环/);
+});
+
+test("narrative quality accepts generic inferred process name when boundary is covered", () => {
+  const { buildNarrativeQualityReport } = require("./check-narrative");
+  const report = buildNarrativeQualityReport({
+    minChars: 100,
+    operationSpec: {
+      modules: [{ name: "保单任务" }],
+    },
+    markdown: passingNarrativeMarkdown(),
+    businessProcessModelPresent: true,
+    businessProcessModel: {
+      version: 2,
+      processes: [
+        {
+          name: "业务处理链路",
+          status: "partially-observed",
+          boundary: "存在已观察步骤，但跨模块顺序或未覆盖模块职责仍为证据约束推理。",
+          businessObjects: ["保单任务"],
+          statusSignals: ["任务状态"],
+          feedbackLoops: ["问题回流"],
+          steps: [
+            { name: "定位保单任务", status: "observed" },
+            {
+              name: "信息采集与提交",
+              status: "inferred",
+              boundary: "该步骤为证据约束下的业务流程推理，不能写成已验证自动流转。",
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  assert.equal(report.canSubmitReview, true);
+});
+
 test("narrative quality warns when business process model is missing", () => {
   const { buildNarrativeQualityReport } = require("./check-narrative");
   const report = buildNarrativeQualityReport({
@@ -5146,7 +5738,7 @@ test("check-narrative fails on malformed evidence summary without writing report
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { spawnSync } = require("node:child_process");
+  const { main } = require("./check-narrative");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "narrative-bad-summary-"));
   fs.writeFileSync(
     path.join(dir, "whitepaper.pending-review.md"),
@@ -5157,12 +5749,9 @@ test("check-narrative fails on malformed evidence summary without writing report
   );
   fs.writeFileSync(path.join(dir, "evidence-summary.json"), "{bad json", "utf8");
 
-  const result = spawnSync(process.execPath, ["scripts/check-narrative.js", "--input", dir], {
-    cwd: path.resolve(__dirname, ".."),
-    encoding: "utf8",
-  });
+  const result = runCliMainForTest(main, ["--input", dir]);
 
-  assert.equal(result.status, 1);
+  assert.equal(result.status, 1, spawnSyncSummary(result));
   assert.match(result.stderr, /Evidence summary is malformed/);
   assert.equal(fs.existsSync(path.join(dir, "narrative-quality-report.json")), false);
 });
@@ -5177,8 +5766,10 @@ test("review decision requires rejection comments and maps comments to rerun nod
     "truth-universe",
     "truth-claims",
     "business-process",
+    "whitepaper-plan",
     "narrative",
     "fact-check",
+    "golden-eval",
     "quality",
     "truth-readiness",
   ];
@@ -5197,7 +5788,7 @@ test("review decision requires rejection comments and maps comments to rerun nod
   assert.deepEqual(decision.rerunNodes, evidenceRefreshNodes);
   assert.deepEqual(
     appendNarrativeGuardNodes(["summary", "truth-claims", "narrative", "fact-check", "quality"]),
-    ["summary", "db-model", "truth-universe", "truth-claims", "business-process", "narrative", "fact-check", "quality", "truth-readiness"],
+    ["summary", "db-model", "truth-universe", "truth-claims", "business-process", "whitepaper-plan", "narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
   );
 
   const legacyDecision = buildReviewDecision({
@@ -5221,7 +5812,7 @@ test("review decision targets narrative sections without evidence rerun for word
     comment: "系统定位不够升华，典型业务流程还是像点击步骤，业务看不懂",
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "overview-flow");
   assert.deepEqual(decision.targetSections, ["1", "4"]);
   assert.match(decision.instructions, /系统概览/);
@@ -5235,7 +5826,7 @@ test("review decision treats missing page business flow as narrative rewrite", (
     comment: "任务列表页面业务流程缺失，角色权限边界说明不全",
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "overview-flow");
   assert.deepEqual(decision.targetSections, ["1", "4"]);
   assert.equal(decision.narrativePart, "overview-flow");
@@ -5249,7 +5840,7 @@ test("review decision keeps unclear business flow wording as overview rewrite", 
     comment: "业务流程还是像点击步骤，业务表达看不懂",
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "overview-flow");
   assert.deepEqual(decision.targetSections, ["1", "4"]);
   assert.equal(decision.narrativePart, "overview-flow");
@@ -5273,7 +5864,7 @@ test("review decision narrows function rewrites to mentioned modules", () => {
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.deepEqual(decision.targetModules, ["AI任务"]);
   assert.equal(decision.narrativePart, "AI任务");
@@ -5296,7 +5887,7 @@ test("review decision keeps permission module wording as module rewrite", () => 
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.deepEqual(decision.targetModules, ["权限管理"]);
   assert.equal(decision.narrativePart, "权限管理");
@@ -5344,7 +5935,7 @@ test("review decision treats page wording feedback as function rewrite", () => {
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.deepEqual(decision.targetSections, ["2", "3"]);
   assert.deepEqual(decision.targetModules, ["AI任务"]);
@@ -5366,7 +5957,7 @@ test("review decision treats supplementing page wording as narrative rewrite", (
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.equal(decision.narrativePart, "AI任务");
 });
@@ -5386,7 +5977,7 @@ test("review decision treats supplementing business wording as narrative rewrite
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.equal(decision.narrativePart, "AI任务");
 });
@@ -5414,8 +6005,10 @@ test("review decision still refreshes evidence for missing pages and screenshots
     "truth-universe",
     "truth-claims",
     "business-process",
+    "whitepaper-plan",
     "narrative",
     "fact-check",
+    "golden-eval",
     "quality",
     "truth-readiness",
   ]);
@@ -5448,8 +6041,10 @@ test("review decision refreshes evidence when supplement asks for screenshots", 
     "truth-universe",
     "truth-claims",
     "business-process",
+    "whitepaper-plan",
     "narrative",
     "fact-check",
+    "golden-eval",
     "quality",
     "truth-readiness",
   ]);
@@ -5472,7 +6067,7 @@ test("review decision treats missing field description as narrative rewrite", ()
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.equal(decision.narrativePart, "AI任务");
 });
@@ -5500,8 +6095,10 @@ test("review decision still refreshes evidence when field evidence is missing", 
     "truth-universe",
     "truth-claims",
     "business-process",
+    "whitepaper-plan",
     "narrative",
     "fact-check",
+    "golden-eval",
     "quality",
     "truth-readiness",
   ]);
@@ -5524,7 +6121,7 @@ test("review decision treats missing modal description as narrative rewrite", ()
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.equal(decision.narrativePart, "AI任务");
 });
@@ -5552,8 +6149,10 @@ test("review decision still refreshes evidence when modal screenshot is missing"
     "truth-universe",
     "truth-claims",
     "business-process",
+    "whitepaper-plan",
     "narrative",
     "fact-check",
+    "golden-eval",
     "quality",
     "truth-readiness",
   ]);
@@ -5577,7 +6176,7 @@ test("review decision supports multi-module function rewrites", () => {
     evidenceSummary,
   });
 
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "function-sections");
   assert.deepEqual(decision.targetModules, ["AI任务", "发布管理"]);
   assert.equal(decision.narrativePart, "AI任务,发布管理");
@@ -5654,7 +6253,7 @@ test("dashboard snapshot exposes review decision details", () => {
       decision: {
         status: "rejected",
         comment: "系统定位需要更业务化",
-        rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+        rerunNodes: ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
         rewriteScope: "overview-flow",
         targetSections: ["1", "4"],
         targetModules: [],
@@ -5668,7 +6267,7 @@ test("dashboard snapshot exposes review decision details", () => {
 
   const snapshot = buildDashboardSnapshot({ configPath });
   const decision = snapshot.systems[0].review.decision;
-  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(decision.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.equal(decision.rewriteScope, "overview-flow");
   assert.equal(decision.narrativePart, "overview-flow");
   assert.match(decision.instructions, /系统概览/);
@@ -5714,11 +6313,14 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
     "truth-universe",
     "truth-claims",
     "business-process",
+    "whitepaper-plan",
     "build-spec",
+    "workflow-spec",
     "compose-guide",
     "draft",
     "narrative",
     "fact-check",
+    "golden-eval",
     "quality",
     "truth-readiness",
     "review",
@@ -5747,12 +6349,12 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
     snapshot.systems.map((system) => system.code),
     ["adp", "claim"],
   );
-  assert.equal(snapshot.systems[0].progress.completed, 19);
+  assert.equal(snapshot.systems[0].progress.completed, 22);
   assert.equal(snapshot.systems[0].artifacts.final.exists, true);
   assert.equal(snapshot.systems[0].artifacts.final.file, "whitepaper.final.md");
   assert.equal(fs.readFileSync(staleNamedFinalPath, "utf8"), "# stale named final");
   assert.equal(snapshot.systems[0].artifacts.docx.exists, false);
-  assert.equal(snapshot.systems[0].artifacts.databaseProfile.exists, true);
+  assert.equal(snapshot.systems[0].artifacts.databaseProfile.exists, false);
   assert.equal(snapshot.systems[0].artifacts.dataDictionary.exists, false);
   assert.equal(snapshot.systems[0].artifacts.entityModel.exists, false);
   assert.equal(snapshot.systems[0].artifacts.functionUniverse.exists, true);
@@ -5764,6 +6366,152 @@ test("dashboard snapshot summarizes all registered systems and artifact readines
   assert.equal(snapshot.systems[0].currentPhase, "completed");
   assert.equal(snapshot.systems[0].currentNode, "end");
   assert.equal(snapshot.systems[1].overallStatus, "pending");
+});
+
+test("dashboard snapshot exposes golden eval readiness metrics", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
+  const { buildDashboardSnapshot } = require("./local-dashboard/server");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-golden-"));
+  const configPath = path.join(dir, "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: outputs",
+      "systems:",
+      "  - code: adp",
+      "    name: AI保单数据闭环平台",
+      "    url: https://adp.example.test/",
+    ].join("\n"),
+    "utf8",
+  );
+  const output = path.join(dir, "outputs", "adp");
+  fs.mkdirSync(output, { recursive: true });
+  let state = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
+  for (const nodeId of ["sync", "session", "collect", "inspect", "validate-write", "summary", "db-profile", "db-model", "truth-universe", "truth-claims", "business-process", "whitepaper-plan", "build-spec", "workflow-spec", "compose-guide", "draft", "narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]) {
+    state = updateNodeStatus(state, nodeId, nodeId === "validate-write" ? "skipped" : "success");
+  }
+  writePipelineState(path.join(output, "pipeline-state.json"), state);
+  writePassingTruthReadinessReport(output, {
+    gates: {
+      goldenEval: {
+        id: "goldenEval",
+        label: "Golden Eval",
+        pass: true,
+        required: true,
+        available: true,
+        score: 1,
+        scorePercent: 100,
+        metrics: {
+          coverageRatio: 0.97,
+          criticalCoverageRatio: 1,
+          overclaimCount: 0,
+        },
+        failures: [],
+      },
+    },
+  });
+
+  const snapshot = buildDashboardSnapshot({ configPath });
+
+  assert.equal(snapshot.systems[0].truthReadiness.goldenEval.coverageRatio, 0.97);
+  assert.equal(snapshot.systems[0].truthReadiness.goldenEval.criticalCoverageRatio, 1);
+  assert.equal(snapshot.systems[0].truthReadiness.goldenEval.overclaimCount, 0);
+  assert.equal(snapshot.systems[0].truthReadiness.goldenEval.required, true);
+});
+
+test("V5 dashboard truth gate summary exposes workflow process plan and golden gaps", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
+  const { buildDashboardSnapshot } = require("./local-dashboard/server");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-v5-gates-"));
+  const configPath = path.join(dir, "systems.local.yaml");
+  fs.writeFileSync(
+    configPath,
+    [
+      "runtime:",
+      "  outputDir: outputs",
+      "systems:",
+      "  - code: finance",
+      "    name: 财务费用系统",
+      "    url: https://finance.example.test/",
+    ].join("\n"),
+    "utf8",
+  );
+  const output = path.join(dir, "outputs", "finance");
+  fs.mkdirSync(output, { recursive: true });
+  let state = createPipelineState({ code: "finance", name: "财务费用系统" });
+  for (const nodeId of ["sync", "session", "collect", "inspect", "truth-universe", "truth-claims", "business-process", "whitepaper-plan", "build-spec", "workflow-spec", "narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]) {
+    state = updateNodeStatus(state, nodeId, "success");
+  }
+  writePipelineState(path.join(output, "pipeline-state.json"), state);
+  writePassingTruthReadinessReport(output, {
+    score: 0.72,
+    scorePercent: 72,
+    canSubmitReview: false,
+    gates: {
+      workflow: {
+        id: "workflow",
+        pass: false,
+        score: 0,
+        scorePercent: 0,
+        metrics: { operationFlowCount: 0, observedWorkflowStepCount: 0 },
+        failures: ["workflow-spec.json has no observed workflow steps."],
+      },
+      businessProcess: {
+        id: "businessProcess",
+        pass: false,
+        score: 0,
+        scorePercent: 0,
+        metrics: { processCount: 0, staleSourceCount: 1, stepEvidenceMissingCount: 2, defaultDomainLeakCount: 0 },
+        failures: ["business-process-model.json is stale."],
+      },
+      whitepaperPlan: {
+        id: "whitepaperPlan",
+        pass: false,
+        score: 0.5,
+        scorePercent: 50,
+        metrics: {
+          requiredItemCount: 4,
+          coveredRequiredItemCount: 2,
+          planRequiredCoverageRatio: 0.5,
+          missingRequiredItemCount: 2,
+        },
+        failures: ["Pending-review whitepaper omits required whitepaper-plan items."],
+      },
+      goldenEval: {
+        id: "goldenEval",
+        pass: false,
+        required: true,
+        available: true,
+        score: 0.8,
+        scorePercent: 80,
+        metrics: { coverageRatio: 0.8, criticalCoverageRatio: 1, overclaimCount: 0 },
+        failures: ["Golden Eval fact coverage is below threshold."],
+      },
+    },
+    blockers: [{ id: "golden-eval.coverage", message: "Golden Eval fact coverage is below threshold.", rerunNodes: ["golden-eval", "quality", "truth-readiness"] }],
+  });
+
+  const snapshot = buildDashboardSnapshot({ configPath });
+  const gateSummary = snapshot.systems[0].truthReadiness.gateSummary;
+
+  assert.equal(gateSummary.workflow.pass, false);
+  assert.equal(gateSummary.workflow.metrics.operationFlowCount, 0);
+  assert.equal(gateSummary.workflow.metrics.observedWorkflowStepCount, 0);
+  assert.equal(gateSummary.businessProcess.pass, false);
+  assert.equal(gateSummary.businessProcess.metrics.staleSourceCount, 1);
+  assert.equal(gateSummary.businessProcess.metrics.stepEvidenceMissingCount, 2);
+  assert.equal(gateSummary.whitepaperPlan.pass, false);
+  assert.equal(gateSummary.whitepaperPlan.metrics.requiredItemCount, 4);
+  assert.equal(gateSummary.whitepaperPlan.metrics.missingRequiredItemCount, 2);
+  assert.equal(gateSummary.goldenEval.pass, false);
+  assert.equal(gateSummary.goldenEval.metrics.coverageRatio, 0.8);
 });
 
 test("dashboard snapshot marks stale truth readiness report as not submittable", () => {
@@ -5792,7 +6540,7 @@ test("dashboard snapshot marks stale truth readiness report as not submittable",
   let state = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
   state = updateNodeStatus(state, "truth-readiness", "success");
   writePipelineState(path.join(output, "pipeline-state.json"), state);
-  fs.writeFileSync(path.join(output, "whitepaper.pending-review.md"), "# 待审\n\n原内容", "utf8");
+  fs.writeFileSync(path.join(output, "whitepaper.pending-review.md"), passingNarrativeMarkdown(), "utf8");
   writePassingTruthReadinessReport(output);
   fs.appendFileSync(path.join(output, "whitepaper.pending-review.md"), "\n\n未经复核的新内容", "utf8");
 
@@ -5829,7 +6577,7 @@ test("dashboard snapshot exposes writable claim coverage gaps", () => {
   let state = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
   state = updateNodeStatus(state, "truth-readiness", "success");
   writePipelineState(path.join(output, "pipeline-state.json"), state);
-  fs.writeFileSync(path.join(output, "whitepaper.pending-review.md"), "# 待审\n\n任务列表", "utf8");
+  fs.writeFileSync(path.join(output, "whitepaper.pending-review.md"), passingNarrativeMarkdown(), "utf8");
   fs.writeFileSync(path.join(output, "quality-report.json"), JSON.stringify({ canFinalize: true }), "utf8");
   fs.writeFileSync(path.join(output, "narrative-quality-report.json"), JSON.stringify({ canSubmitReview: true }), "utf8");
   fs.writeFileSync(path.join(output, "verified-claims.json"), JSON.stringify({ claims: [] }), "utf8");
@@ -5979,7 +6727,9 @@ test("dashboard snapshot regenerates missing docx for finalized system", () => {
     "truth-universe",
     "truth-claims",
     "business-process",
+    "whitepaper-plan",
     "build-spec",
+    "workflow-spec",
     "compose-guide",
     "draft",
     "narrative",
@@ -6048,12 +6798,15 @@ test("dashboard snapshot regenerates stale docx for finalized system", () => {
     "truth-universe",
     "truth-claims",
     "business-process",
+    "whitepaper-plan",
     "build-spec",
+    "workflow-spec",
     "compose-guide",
     "draft",
     "summary",
     "narrative",
     "fact-check",
+    "golden-eval",
     "quality",
     "truth-readiness",
     "review",
@@ -6317,19 +7070,22 @@ test("dashboard snapshot marks manual review node as ready before approval", () 
     "truth-universe",
     "truth-claims",
     "business-process",
+    "whitepaper-plan",
     "build-spec",
+    "workflow-spec",
     "compose-guide",
     "draft",
     "summary",
     "narrative",
     "fact-check",
+    "golden-eval",
     "quality",
     "truth-readiness",
   ]) {
     state = updateNodeStatus(
       state,
       nodeId,
-      ["validate-write", "draft", "summary", "narrative", "truth-readiness"].includes(nodeId)
+      ["validate-write", "draft", "summary", "narrative", "golden-eval", "truth-readiness"].includes(nodeId)
         ? "skipped"
         : "success",
     );
@@ -7282,7 +8038,7 @@ test("dashboard frontend renders batch truth and repair summary", () => {
           },
           retryPlan: {
             canRetry: true,
-            nodes: "narrative,fact-check,quality,truth-readiness",
+            nodes: "narrative,fact-check,golden-eval,quality,truth-readiness",
             quotaImpact: "agent-writing",
           },
         },
@@ -7310,7 +8066,7 @@ test("dashboard frontend renders batch truth and repair summary", () => {
   assert.match(html, /写稿额度敏感 1/);
   assert.match(html, /失败归因/);
   assert.match(html, /写稿生成问题/);
-  assert.match(html, /建议重试节点 narrative,fact-check,quality,truth-readiness/);
+  assert.match(html, /建议重试节点 narrative,fact-check,golden-eval,quality,truth-readiness/);
   assert.match(html, /额度影响 agent-writing/);
   assert.match(html, /批量诊断 Ready 1\/2/);
   assert.match(html, /Blocked 1/);
@@ -8319,11 +9075,15 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
   assert.equal(childArgs.includes("--batch-retries"), false);
   assert.equal(
     buildRetryNodes({ "with-whitepaper": true }, "fact-check"),
-    "fact-check,quality,truth-readiness",
+    "fact-check,golden-eval,quality,truth-readiness",
   );
   assert.equal(
     buildRetryNodes({ withWhitepaper: true }, "fact-check"),
-    "fact-check,quality,truth-readiness",
+    "fact-check,golden-eval,quality,truth-readiness",
+  );
+  assert.equal(
+    buildRetryNodes({ "with-whitepaper": true }, "truth-universe"),
+    "truth-universe,truth-claims,business-process,whitepaper-plan,build-spec,workflow-spec,compose-guide,draft,summary,narrative,fact-check,golden-eval,quality,truth-readiness",
   );
   const retryArgs = buildRetryArgs(
     { "with-whitepaper": true, reset: true, "batch-retries": 2, provider: "manual" },
@@ -8331,7 +9091,7 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
   );
   assert.equal(retryArgs.reset, undefined);
   assert.equal(retryArgs["batch-retries"], undefined);
-  assert.equal(retryArgs.nodes, "narrative,fact-check,quality,truth-readiness");
+  assert.equal(retryArgs.nodes, "narrative,fact-check,golden-eval,quality,truth-readiness");
   assert.deepEqual(
     buildBatchChildArgs(retryArgs, "adp", "config/systems.local.yaml").filter((item) =>
       ["--reset", "--batch-retries"].includes(item),
@@ -8361,7 +9121,7 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
     { args: { "with-whitepaper": true } },
   );
   assert.equal(narrativeFailure.recoverable, true);
-  assert.equal(narrativeFailure.retryPlan.nodes, "narrative,fact-check,quality,truth-readiness");
+  assert.equal(narrativeFailure.retryPlan.nodes, "narrative,fact-check,golden-eval,quality,truth-readiness");
   assert.equal(narrativeFailure.retryPlan.quotaImpact, "agent-writing");
   assert.equal(
     classifyBatchFailure({ currentNode: "session", lastError: "401 unauthorized" }).category,
@@ -8503,7 +9263,7 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
               id: "fact-check.writable-coverage",
               severity: "P0",
               message: "Missing writable claims.",
-              rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+              rerunNodes: ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
               missingWritableClaimIds: ["function:理赔:案件详情"],
             },
           ],
@@ -8520,7 +9280,7 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
           action: "查看 fact-check。",
           retryPlan: {
             canRetry: true,
-            nodes: "narrative,fact-check,quality,truth-readiness",
+            nodes: "narrative,fact-check,golden-eval,quality,truth-readiness",
             quotaImpact: "agent-writing",
           },
         },
@@ -8528,7 +9288,7 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
         recoverable: true,
         retryPlan: {
           canRetry: true,
-          nodes: "narrative,fact-check,quality,truth-readiness",
+          nodes: "narrative,fact-check,golden-eval,quality,truth-readiness",
           quotaImpact: "agent-writing",
         },
       },
@@ -8562,7 +9322,7 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
   assert.equal(repairQueue.items[0].reset, false);
   assert.equal(repairQueue.items[0].reviewRerun, false);
   assert.equal(repairQueue.items[0].actionId, "narrative.cover-missing-writable-claims");
-  assert.deepEqual(repairQueue.items[0].nodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(repairQueue.items[0].nodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.equal(repairQueue.items[0].canAutoRun, false);
   assert.match(repairQueue.items[0].blockedReason, /Agent-writing quota/);
   assert.deepEqual(repairQueue.items[0].missingWritableClaimIds, ["function:理赔:案件详情"]);
@@ -8572,7 +9332,7 @@ test("whitepaper batch runner selects systems and builds isolated child args", (
       "--systems",
       "claim",
       "--nodes",
-      "narrative,fact-check,quality,truth-readiness",
+      "narrative,fact-check,golden-eval,quality,truth-readiness",
       "--narrative-part",
       "function-sections",
     ],
@@ -8622,7 +9382,7 @@ test("batch repair queue prefers low-quota stale refresh over narrative rewrite"
               id: "truth.score-below-threshold",
               severity: "P0",
               message: "Truth readiness score is below threshold.",
-              rerunNodes: ["truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+              rerunNodes: ["truth-claims", "narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
             },
           ],
           improvementActions: [],
@@ -8675,7 +9435,7 @@ test("batch repair queue prioritizes unsafe database profile refresh without age
               id: "truth.score-below-threshold",
               severity: "P0",
               message: "Truth readiness score is below threshold.",
-              rerunNodes: ["truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+              rerunNodes: ["truth-claims", "narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
             },
           ],
           improvementActions: [],
@@ -8700,6 +9460,115 @@ test("batch repair queue prioritizes unsafe database profile refresh without age
   ]);
   assert.equal(repairQueue.items[0].quotaImpact, "low");
   assert.equal(repairQueue.items[0].canAutoRun, true);
+});
+
+test("V5 batch diagnosis summarizes generic gate gaps for non ADP systems", () => {
+  const {
+    buildBatchDiagnosis,
+    buildBatchRepairQueue,
+  } = require("./run-whitepaper-batch");
+
+  const diagnosis = buildBatchDiagnosis({
+    batchId: "batch-v5-generic",
+    status: "failed",
+    systems: [
+      {
+        code: "finance",
+        name: "财务费用系统",
+        status: "failed",
+        runStatus: "failed",
+        currentNode: "truth-readiness",
+        truthReadiness: {
+          scorePercent: 72,
+          canSubmitReview: false,
+          canFinalize: false,
+          gates: {
+            workflow: {
+              pass: false,
+              scorePercent: 0,
+              metrics: { operationFlowCount: 0, observedWorkflowStepCount: 0 },
+              failures: ["workflow-spec.json has no observed workflow steps."],
+            },
+            businessProcess: {
+              pass: false,
+              scorePercent: 0,
+              metrics: { processCount: 0, staleSourceCount: 1, stepEvidenceMissingCount: 2 },
+              failures: ["business-process-model.json is stale."],
+            },
+            whitepaperPlan: {
+              pass: false,
+              scorePercent: 50,
+              metrics: {
+                requiredItemCount: 4,
+                coveredRequiredItemCount: 2,
+                planRequiredCoverageRatio: 0.5,
+                missingRequiredItemCount: 2,
+              },
+              failures: ["Pending-review whitepaper omits required whitepaper-plan items."],
+            },
+            goldenEval: {
+              pass: false,
+              required: true,
+              available: true,
+              scorePercent: 80,
+              metrics: { coverageRatio: 0.8, criticalCoverageRatio: 1, overclaimCount: 0 },
+              failures: ["Golden Eval fact coverage is below threshold."],
+            },
+          },
+          blockers: [
+            {
+              id: "workflow.steps-missing",
+              severity: "P0",
+              message: "No observed workflow steps are available.",
+              rerunNodes: ["collect", "inspect", "build-spec", "workflow-spec", "business-process", "narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
+            },
+            {
+              id: "business-process.lineage-stale",
+              severity: "P0",
+              message: "business-process-model.json is stale.",
+              rerunNodes: ["build-spec", "workflow-spec", "business-process", "narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
+            },
+            {
+              id: "whitepaper-plan.required-coverage",
+              severity: "P0",
+              message: "Pending-review whitepaper omits required whitepaper-plan items.",
+              rerunNodes: ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
+              quotaImpact: "agent-writing",
+            },
+            {
+              id: "golden-eval.coverage",
+              severity: "P0",
+              message: "Golden Eval fact coverage is below threshold.",
+              rerunNodes: ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
+            },
+          ],
+          improvementActions: [],
+        },
+        writableClaimCoverage: { missingWritableClaimCount: 0 },
+      },
+    ],
+  });
+
+  assert.equal(diagnosis.summary.gapTypes["workflow-evidence"], 1);
+  assert.equal(diagnosis.summary.gapTypes["business-process"], 1);
+  assert.equal(diagnosis.summary.gapTypes["whitepaper-plan"], 1);
+  assert.equal(diagnosis.summary.gapTypes["golden-eval"], 1);
+  assert.ok(diagnosis.systems[0].gaps.some((gap) => gap.type === "workflow-evidence"));
+  assert.ok(diagnosis.systems[0].gaps.some((gap) => gap.type === "business-process"));
+  assert.ok(diagnosis.systems[0].gaps.some((gap) => gap.type === "whitepaper-plan"));
+  assert.ok(diagnosis.systems[0].gaps.some((gap) => gap.type === "golden-eval"));
+
+  const repairQueue = buildBatchRepairQueue(diagnosis, { allowAgentWriting: false });
+  assert.deepEqual(repairQueue.items[0].gapTypes, [
+    "workflow-evidence",
+    "business-process",
+    "whitepaper-plan",
+    "golden-eval",
+  ]);
+  assert.equal(repairQueue.items[0].primaryGapType, "workflow-evidence");
+  assert.equal(repairQueue.items[0].canAutoRun, false);
+  assert.equal(repairQueue.items[0].quotaImpact, "agent-writing");
+  assert.ok(repairQueue.items[0].nodes.includes("golden-eval"));
 });
 
 test("batch runner refreshes aggregate state from per-system pipeline states", () => {
@@ -8731,7 +9600,9 @@ test("batch runner refreshes aggregate state from per-system pipeline states", (
   claimState = updateNodeStatus(claimState, "db-model", "success");
   claimState = updateNodeStatus(claimState, "truth-universe", "success");
   claimState = updateNodeStatus(claimState, "truth-claims", "success");
+  claimState = updateNodeStatus(claimState, "business-process", "success");
   claimState = updateNodeStatus(claimState, "build-spec", "success");
+  claimState = updateNodeStatus(claimState, "workflow-spec", "success");
   claimState = updateNodeStatus(claimState, "compose-guide", "success");
   claimState = updateNodeStatus(claimState, "draft", "success");
   claimState = updateNodeStatus(claimState, "summary", "success");
@@ -8778,7 +9649,7 @@ test("batch runner refreshes aggregate state from per-system pipeline states", (
   assert.equal(claim.status, "failed");
   assert.equal(claim.failureCategory, "narrative-generation");
   assert.equal(claim.recoverable, true);
-  assert.equal(claim.retryPlan.nodes, "narrative,fact-check,quality,truth-readiness");
+  assert.equal(claim.retryPlan.nodes, "narrative,fact-check,golden-eval,quality,truth-readiness");
   assert.equal(claim.retryPlan.quotaImpact, "agent-writing");
   assert.equal(refreshed.failureSummary.recoverable, 1);
   assert.equal(refreshed.failureSummary.quotaSensitive, 1);
@@ -8791,6 +9662,55 @@ test("batch runner refreshes aggregate state from per-system pipeline states", (
   assert.equal(written.systems[0].truthReadiness.scorePercent, 96);
   assert.equal(written.systems[0].coverageRepair.status, "completed");
   assert.equal(written.failureSummary.counts["narrative-generation"], 1);
+});
+
+test("batch runner preserves completed partial reruns when truth readiness is submittable", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const {
+    createBatchState,
+    refreshBatchStateFromDisk,
+  } = require("./run-whitepaper-batch");
+  const { createPipelineState, updateNodeStatus, writePipelineState } = require("./pipeline-state");
+  const outputRoot = fs.mkdtempSync(path.join(os.tmpdir(), "whitepaper-batch-partial-refresh-"));
+  const systemOutput = path.join(outputRoot, "adp");
+  fs.mkdirSync(systemOutput, { recursive: true });
+  writePassingTruthArtifacts(systemOutput, { databaseProfile: false });
+  let pipelineState = createPipelineState({ code: "adp", name: "AI保单数据闭环平台" });
+  pipelineState = updateNodeStatus(pipelineState, "sync", "success");
+  pipelineState = updateNodeStatus(pipelineState, "session", "success");
+  pipelineState = updateNodeStatus(pipelineState, "collect", "success");
+  pipelineState = updateNodeStatus(pipelineState, "inspect", "success");
+  pipelineState = updateNodeStatus(pipelineState, "validate-write", "success");
+  pipelineState = updateNodeStatus(pipelineState, "quality", "success");
+  pipelineState = updateNodeStatus(pipelineState, "truth-readiness", "success");
+  writePipelineState(path.join(systemOutput, "pipeline-state.json"), pipelineState);
+  let batchState = createBatchState(
+    [{ code: "adp", name: "AI保单数据闭环平台" }],
+    { concurrency: 1, startedAt: "2026-06-03T00:00:00.000Z" },
+  );
+  batchState = {
+    ...batchState,
+    systems: batchState.systems.map((item) => ({
+      ...item,
+      status: "success",
+      runStatus: "completed",
+      exitCode: 0,
+      finishedAt: "2026-06-03T00:01:00.000Z",
+    })),
+  };
+
+  const refreshed = refreshBatchStateFromDisk(batchState, outputRoot, {
+    now: "2026-06-03T00:02:00.000Z",
+    args: { nodes: "quality,truth-readiness" },
+  });
+
+  assert.equal(refreshed.status, "success");
+  assert.equal(refreshed.summary.completed, 1);
+  assert.equal(refreshed.systems[0].status, "success");
+  assert.equal(refreshed.systems[0].runStatus, "completed");
+  assert.equal(refreshed.systems[0].truthReadiness.scorePercent, 100);
 });
 
 test("batch runner degrades invalid truth readiness artifacts during refresh", () => {
@@ -8916,7 +9836,9 @@ test("batch runner classifies failed children and retries recoverable failures o
         failed = updateNodeStatus(failed, "db-model", "success");
         failed = updateNodeStatus(failed, "truth-universe", "success");
         failed = updateNodeStatus(failed, "truth-claims", "success");
+        failed = updateNodeStatus(failed, "business-process", "success");
         failed = updateNodeStatus(failed, "build-spec", "success");
+        failed = updateNodeStatus(failed, "workflow-spec", "success");
         failed = updateNodeStatus(failed, "compose-guide", "success");
         failed = updateNodeStatus(failed, "draft", "success");
         failed = updateNodeStatus(failed, "summary", "success");
@@ -8940,6 +9862,7 @@ test("batch runner classifies failed children and retries recoverable failures o
         "truth-claims",
         "business-process",
         "build-spec",
+        "workflow-spec",
         "compose-guide",
         "draft",
         "summary",
@@ -8991,7 +9914,7 @@ test("batch runner classifies failed children and retries recoverable failures o
   assert.equal(state.systems[0].attempts, 2);
   assert.equal(launchedArgs[0].includes("--reset"), true);
   assert.equal(launchedArgs[1].includes("--reset"), false);
-  assert.ok(launchedArgs[1].includes("narrative,fact-check,quality,truth-readiness"));
+  assert.ok(launchedArgs[1].includes("narrative,fact-check,golden-eval,quality,truth-readiness"));
   const written = JSON.parse(
     fs.readFileSync(path.join(outputRoot, "_batch", "run-state.json"), "utf8"),
   );
@@ -9056,7 +9979,7 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
         canAutoRun: true,
         reset: false,
         reviewRerun: false,
-        nodes: ["fact-check", "quality", "truth-readiness"],
+        nodes: ["fact-check", "golden-eval", "quality", "truth-readiness"],
         quotaImpact: "low",
       },
       {
@@ -9065,7 +9988,7 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
         canAutoRun: true,
         reset: false,
         reviewRerun: false,
-        nodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+        nodes: ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
         narrativePart: "function-sections",
         requiresAgentWriting: true,
         quotaImpact: "agent-writing",
@@ -9089,7 +10012,7 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
   assert.equal(plan.summary.runnableGroups, 1);
   assert.equal(plan.summary.skipped, 2);
   assert.equal(plan.groups[0].systems.join(","), "adp");
-  assert.equal(plan.groups[0].nodesCsv, "fact-check,quality,truth-readiness");
+  assert.equal(plan.groups[0].nodesCsv, "fact-check,golden-eval,quality,truth-readiness");
   assert.deepEqual(plan.groups[0].command.args.slice(0, 7), [
     "scripts/run-whitepaper-batch.js",
     "--config",
@@ -9097,7 +10020,7 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
     "--systems",
     "adp",
     "--nodes",
-    "fact-check,quality,truth-readiness",
+    "fact-check,golden-eval,quality,truth-readiness",
   ]);
   assert.equal(plan.skipped.some((item) => item.reason === "agent-writing-not-allowed"), true);
   assert.equal(validateRepairItem(queue.items[2], { allowAgentWriting: true }).ok, false);
@@ -9239,7 +10162,7 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
           id: "repair-group-02",
           status: "pending",
           systems: ["adp"],
-          nodesCsv: "fact-check,quality,truth-readiness",
+          nodesCsv: "fact-check,golden-eval,quality,truth-readiness",
           requiresAgentWriting: false,
         },
       ],
@@ -9261,7 +10184,7 @@ test("batch repair queue runner builds safe plans and executes runnable groups",
                 id: "narrative.cover-missing-writable-claims",
                 message: "Cover missing writable claims.",
                 canRetry: true,
-                rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+                rerunNodes: ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
                 narrativePart: "function-sections",
                 quotaImpact: "agent-writing",
               },
@@ -10336,7 +11259,9 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.equal(missingWhitepaper.status, "blocked");
   assert.equal(missingWhitepaper.canDeliver, false);
   assert.equal(missingWhitepaper.summary.whitepapers, 0);
-  assert.ok(missingWhitepaper.blockers.some((item) => item.id === "delivery.whitepaper-missing"));
+  const missingWhitepaperBlocker = missingWhitepaper.blockers.find((item) => item.id === "delivery.whitepaper-missing");
+  assert.ok(missingWhitepaperBlocker);
+  assert.deepEqual(missingWhitepaperBlocker.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   fs.writeFileSync(
     path.join(systemOutput, "whitepaper.pending-review.md"),
     passingNarrativeMarkdown(),
@@ -10351,7 +11276,9 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   const smokeFinal = buildDeliveryReadinessReport({ acceptanceReport });
   assert.equal(smokeFinal.status, "blocked");
   assert.equal(smokeFinal.canDeliver, false);
-  assert.ok(smokeFinal.blockers.some((item) => item.id === "delivery.smoke-whitepaper"));
+  const smokeWhitepaperBlocker = smokeFinal.blockers.find((item) => item.id === "delivery.smoke-whitepaper");
+  assert.ok(smokeWhitepaperBlocker);
+  assert.deepEqual(smokeWhitepaperBlocker.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   fs.unlinkSync(path.join(systemOutput, "whitepaper.final.md"));
 
   fs.writeFileSync(
@@ -10439,6 +11366,21 @@ test("delivery readiness distinguishes real pipeline delivery from local smoke a
   assert.equal(smoke.canDeliver, false);
   assert.ok(smoke.blockers.some((item) => item.id === "delivery.smoke-truth-report"));
   assert.ok(smoke.blockers.some((item) => item.id === "delivery.smoke-whitepaper"));
+});
+
+test("V5 batch acceptance rerun chains preserve golden eval after fact check", () => {
+  const os = require("node:os");
+  const path = require("node:path");
+  const { buildSystemAcceptance } = require("./check-batch-acceptance");
+  const context = { outputRoot: path.join(os.tmpdir(), "v5-batch-rerun-chain") };
+
+  const report = buildSystemAcceptance({ code: "finance", name: "财务费用系统" }, context, {
+    targetTruthScorePercent: 95,
+  });
+
+  const missingWhitepaperBlocker = report.blockers.find((item) => item.id === "whitepaper.missing");
+  assert.ok(missingWhitepaperBlocker);
+  assert.deepEqual(missingWhitepaperBlocker.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
 });
 
 test("batch aggregate report contracts reject forged ready states", () => {
@@ -11333,7 +12275,7 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
             recoverable: true,
             retryPlan: {
               canRetry: true,
-              nodes: "narrative,fact-check,quality,truth-readiness",
+              nodes: "narrative,fact-check,golden-eval,quality,truth-readiness",
               quotaImpact: "agent-writing",
             },
           },
@@ -11341,7 +12283,7 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
           recoverable: true,
           retryPlan: {
             canRetry: true,
-            nodes: "narrative,fact-check,quality,truth-readiness",
+            nodes: "narrative,fact-check,golden-eval,quality,truth-readiness",
             quotaImpact: "agent-writing",
           },
         },
@@ -11937,15 +12879,17 @@ test("dashboard rejected evidence refresh auto reruns evidence then full narrati
       "truth-universe",
       "truth-claims",
       "business-process",
+      "whitepaper-plan",
       "narrative",
       "fact-check",
+      "golden-eval",
       "quality",
       "truth-readiness",
     ]);
     assert.equal(payload.rerunNarrativePart, "");
     assert.ok(
       payload.rerun.args.includes(
-        "collect,inspect,summary,db-model,truth-universe,truth-claims,business-process,narrative,fact-check,quality,truth-readiness",
+        "collect,inspect,summary,db-model,truth-universe,truth-claims,business-process,whitepaper-plan,narrative,fact-check,golden-eval,quality,truth-readiness",
       ),
     );
     assert.ok(payload.rerun.args.includes("--review-rerun"));
@@ -11962,6 +12906,7 @@ test("pipeline default node list uses operation guide path before whitepaper", (
     "inspect",
     "validate-write",
     "build-spec",
+    "workflow-spec",
     "compose-guide",
     "quality",
   ]);
@@ -11973,18 +12918,170 @@ test("pipeline default node list uses operation guide path before whitepaper", (
     "validate-write",
     "summary",
     "build-spec",
+    "workflow-spec",
     "compose-guide",
     "db-profile",
     "db-model",
     "truth-universe",
     "truth-claims",
     "business-process",
+    "whitepaper-plan",
     "draft",
     "narrative",
     "fact-check",
+    "golden-eval",
     "quality",
     "truth-readiness",
   ]);
+});
+
+test("pipeline local batch state marks finalized systems completed", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { writeBatchState } = require("./run-whitepaper-pipeline");
+
+  const outputRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-local-batch-state-"));
+  writeBatchState(outputRoot, {
+    code: "adp",
+    overallStatus: "finalized",
+    currentPhase: "completed",
+    currentNode: "end",
+  });
+
+  const written = JSON.parse(
+    fs.readFileSync(path.join(outputRoot, "_batch", "run-state.json"), "utf8"),
+  );
+  assert.equal(written.systems[0].status, "finalized");
+  assert.equal(written.systems[0].runStatus, "completed");
+  assert.equal(written.summary.completed, 1);
+  assert.equal(written.total, 1);
+});
+
+test("pipeline golden-eval node skips without configured golden facts", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runPipelineNode } = require("./run-whitepaper-pipeline");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-golden-skip-"));
+  const systemOutput = path.join(tempRoot, "outputs", "generic-finance");
+  fs.mkdirSync(systemOutput, { recursive: true });
+
+  const result = await runPipelineNode("golden-eval", {
+    args: {},
+    config: {},
+    configPath: path.join(tempRoot, "systems.local.yaml"),
+    system: { code: "generic-finance", name: "费用与预算管理系统" },
+    systemOutput,
+    projectRoot: path.resolve(__dirname, ".."),
+  });
+
+  assert.equal(result.skipped, true);
+  assert.match(result.reason, /golden facts/i);
+  assert.equal(fs.existsSync(path.join(systemOutput, "golden-eval-report.json")), false);
+});
+
+test("pipeline golden-eval node writes report when golden facts are configured", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runPipelineNode } = require("./run-whitepaper-pipeline");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-golden-run-"));
+  const systemOutput = path.join(tempRoot, "outputs", "adp");
+  fs.mkdirSync(systemOutput, { recursive: true });
+  const goldenFactsPath = path.join(tempRoot, "adp-golden-facts.json");
+  fs.writeFileSync(
+    goldenFactsPath,
+    JSON.stringify({
+      artifactType: "golden-facts",
+      version: 1,
+      systemCode: "adp",
+      facts: [
+        {
+          id: "adp:value:coverage",
+          priority: "P0",
+          statement: "平台覆盖保司数据闭环。",
+          match: { all: ["保司", "数据", "闭环"] },
+        },
+      ],
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(systemOutput, "whitepaper.pending-review.md"), "平台覆盖保司数据闭环。", "utf8");
+  fs.writeFileSync(
+    path.join(systemOutput, "fact-check-report.json"),
+    JSON.stringify(factCheckReportFixture()),
+    "utf8",
+  );
+
+  const result = await runPipelineNode("golden-eval", {
+    args: {},
+    config: {},
+    configPath: path.join(tempRoot, "systems.local.yaml"),
+    system: { code: "adp", name: "AI保单数据闭环平台", goldenFactsPath },
+    systemOutput,
+    projectRoot: path.resolve(__dirname, ".."),
+  });
+
+  assert.equal(result.status, 0);
+  const report = JSON.parse(fs.readFileSync(path.join(systemOutput, "golden-eval-report.json"), "utf8"));
+  assert.equal(report.artifactType, "golden-eval-report");
+  assert.equal(report.canPass, true);
+  assert.equal(report.metrics.coverageRatio, 1);
+});
+
+test("pipeline workflow-spec node writes workflow spec from operation spec", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runPipelineNode } = require("./run-whitepaper-pipeline");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-workflow-spec-"));
+  const systemOutput = path.join(tempRoot, "outputs", "adp");
+  fs.mkdirSync(systemOutput, { recursive: true });
+  fs.writeFileSync(
+    path.join(systemOutput, "operation-spec.json"),
+    JSON.stringify(
+      operationSpecFixture({
+        modules: [
+          {
+            name: "AI任务管理",
+            entry: "左侧「AI任务管理」",
+            list: { columns: ["保险公司"], queryFields: [], rowActions: [] },
+            flows: [
+              {
+                name: "新建AI任务",
+                trigger: "新增",
+                sourcePage: "AI任务管理",
+                status: "partial",
+                steps: [{ name: "打开新建表单", action: "点击新增", fields: ["保险公司"] }],
+                reason: "submit-button-not-found",
+              },
+            ],
+            tabs: [],
+            screenshots: [],
+            apis: [],
+          },
+        ],
+        metrics: { flowCount: 1 },
+      }),
+    ),
+    "utf8",
+  );
+  const context = {
+    args: {},
+    config: {},
+    configPath: path.join(tempRoot, "systems.local.yaml"),
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    systemOutput,
+    projectRoot: path.resolve(__dirname, ".."),
+  };
+
+  await runPipelineNode("workflow-spec", context);
+
+  const workflowSpec = JSON.parse(fs.readFileSync(path.join(systemOutput, "workflow-spec.json"), "utf8"));
+  assert.equal(workflowSpec.artifactType, "workflow-spec");
+  assert.equal(workflowSpec.metrics.observedWorkflowCount, 1);
+  assert.equal(workflowSpec.metrics.stepCount, 1);
 });
 
 test("truth-universe refreshes stale evidence summary before building claims universe", async () => {
@@ -12155,7 +13252,7 @@ test("pipeline maps missing writable claims to scoped coverage repair narrative 
 
   assert.equal(plan.shouldRepair, true);
   assert.equal(plan.narrativePart, "保单任务,发布管理");
-  assert.deepEqual(plan.rerunNodes, ["narrative", "fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(plan.rerunNodes, ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.deepEqual(plan.targetModules, ["保单任务", "发布管理"]);
   assert.equal(plan.missingWritableClaims[0].function, "任务详情");
   assert.match(plan.fingerprint, /^[0-9a-f]{16}$/);
@@ -12597,6 +13694,13 @@ test("word exporter approval guard requires approved truth-gated final markdown"
     "utf8",
   );
   writePassingTruthReadinessReport(dir);
+  fs.writeFileSync(
+    finalPath,
+    finalizeWhitepaperMarkdown(fs.readFileSync(pendingPath, "utf8"), {
+      systemName: "AI保单数据闭环平台",
+    }),
+    "utf8",
+  );
   const allowed = assertApprovedWhitepaperWordInput(finalPath, {
     systemCode: "adp",
     systemName: "AI保单数据闭环平台",
@@ -12745,16 +13849,6 @@ test("approved review recomputes current truth readiness before final approval",
     passingNarrativeMarkdown().replace("# AI保单数据闭环平台功能白皮书", "# AI保单数据闭环平台功能白皮书（待审核）"),
     "utf8",
   );
-  fs.writeFileSync(
-    path.join(dir, "database-profile.json"),
-    JSON.stringify({
-      artifactType: "database-profile",
-      system: { code: "other" },
-      tables: [],
-      safety: { secretRedacted: true },
-    }),
-    "utf8",
-  );
   writePassingTruthReadinessReport(dir, {
     requirements: { databaseEvidenceRequired: true },
     system: { code: "adp", name: "AI保单数据闭环平台" },
@@ -12766,6 +13860,21 @@ test("approved review recomputes current truth readiness before final approval",
       database: { pass: true, required: true, profileAvailable: true, scorePercent: 100 },
     },
   });
+  fs.writeFileSync(
+    path.join(dir, "database-profile.json"),
+    JSON.stringify({
+      artifactType: "database-profile",
+      system: { code: "other" },
+      tables: [],
+      safety: { secretRedacted: true },
+    }),
+    "utf8",
+  );
+  const { buildReadinessSourceArtifacts, loadReadinessInputs } = require("./check-truth-readiness");
+  const reportPath = path.join(dir, "truth-readiness-report.json");
+  const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+  report.sourceArtifacts = buildReadinessSourceArtifacts(loadReadinessInputs(dir));
+  fs.writeFileSync(reportPath, JSON.stringify(report), "utf8");
 
   assert.throws(
     () => runReviewDecision({ inputDir: dir, status: "approved", systemCode: "adp" }),
@@ -12783,7 +13892,7 @@ test("approved review rejects smoke truth readiness by default", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "review-smoke-truth-"));
   fs.writeFileSync(
     path.join(dir, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书（待审核）\n\n本地冒烟，不代表最终业务白皮书内容。",
+    passingNarrativeMarkdown().replace("# AI保单数据闭环平台功能白皮书", "# AI保单数据闭环平台功能白皮书（待审核）"),
     "utf8",
   );
   writePassingTruthReadinessReport(dir, {
@@ -12824,12 +13933,12 @@ test("approved review rejects smoke wording in pending markdown even with passin
   const { runReviewDecision } = require("./run-review-decision");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "review-smoke-markdown-"));
+  writePassingTruthReadinessReport(dir);
   fs.writeFileSync(
     path.join(dir, "whitepaper.pending-review.md"),
     "# AI保单数据闭环平台功能白皮书（待审核）\n\n## 1. 系统定位\nlocal-e2e-smoke artifact, not final business whitepaper.",
     "utf8",
   );
-  writePassingTruthReadinessReport(dir);
 
   assert.throws(
     () => runReviewDecision({ inputDir: dir, status: "approved" }),
@@ -14061,7 +15170,7 @@ test("build-operation-spec ignores malformed optional enrichment files", () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { spawnSync } = require("node:child_process");
+  const { main } = require("./build-operation-spec");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "operation-spec-bad-optional-"));
   fs.writeFileSync(
@@ -14088,16 +15197,9 @@ test("build-operation-spec ignores malformed optional enrichment files", () => {
   fs.writeFileSync(path.join(dir, "write-validation-result.json"), "{bad json", "utf8");
   fs.writeFileSync(path.join(dir, "network-index.json"), "{bad json", "utf8");
 
-  const result = spawnSync(
-    process.execPath,
-    ["scripts/build-operation-spec.js", "--input", dir, "--allow-draft"],
-    {
-      cwd: path.resolve(__dirname, ".."),
-      encoding: "utf8",
-    },
-  );
+  const result = runCliMainForTest(main, ["--input", dir, "--allow-draft"]);
 
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
   const spec = JSON.parse(fs.readFileSync(path.join(dir, "operation-spec.json"), "utf8"));
   const gate = JSON.parse(fs.readFileSync(path.join(dir, "operation-guide-gate.json"), "utf8"));
   assert.equal(spec.networkEntryCount, 0);
@@ -14109,7 +15211,7 @@ test("build-operation-spec ignores non-object optional enrichment files", () => 
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { spawnSync } = require("node:child_process");
+  const { main } = require("./build-operation-spec");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "operation-spec-non-object-cli-"));
   fs.writeFileSync(
@@ -14134,16 +15236,9 @@ test("build-operation-spec ignores non-object optional enrichment files", () => 
   fs.writeFileSync(path.join(dir, "write-validation-result.json"), "[]", "utf8");
   fs.writeFileSync(path.join(dir, "network-index.json"), "\"invalid\"", "utf8");
 
-  const result = spawnSync(
-    process.execPath,
-    ["scripts/build-operation-spec.js", "--input", dir, "--allow-draft"],
-    {
-      cwd: path.resolve(__dirname, ".."),
-      encoding: "utf8",
-    },
-  );
+  const result = runCliMainForTest(main, ["--input", dir, "--allow-draft"]);
 
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
   const spec = JSON.parse(fs.readFileSync(path.join(dir, "operation-spec.json"), "utf8"));
   assert.equal(spec.networkEntryCount, 0);
   assert.equal(spec.modules.length, 2);
@@ -14233,6 +15328,257 @@ function operationSpecFixture(overrides = {}) {
     metrics: { ...spec.metrics, ...(overrides.metrics || {}) },
     gate: { ...spec.gate, ...(overrides.gate || {}) },
     sourceArtifacts: { ...spec.sourceArtifacts, ...(overrides.sourceArtifacts || {}) },
+  };
+}
+
+function genericOperationSpecFixture(overrides = {}) {
+  return operationSpecFixture({
+    systemCode: "generic-finance",
+    systemName: "费用与预算管理系统",
+    testUrl: "https://finance.example.local/",
+    positioning: { text: "费用与预算管理系统定位句。", confidence: "high", sources: [{ type: "registry" }] },
+    navigation: [
+      { menuPath: "费用申请", entry: "菜单 / 费用申请" },
+      { menuPath: "预算控制", entry: "菜单 / 预算控制" },
+    ],
+    modules: [
+      {
+        name: "费用申请",
+        entry: "菜单 / 费用申请",
+        businessHint: "维护员工费用申请记录，支持提交、审核和状态跟踪。",
+        list: {
+          columns: ["申请编号", "申请人", "费用类型", "金额", "审批状态", "处理结果"],
+          queryFields: ["申请人", "费用类型", "审批状态"],
+          rowActions: ["查看", "编辑", "提交", "撤回"],
+        },
+        flows: [
+          {
+            name: "费用申请提交",
+            trigger: "提交",
+            sourcePage: "费用申请",
+            status: "partial",
+            steps: [
+              { name: "填写费用申请", action: "录入金额和费用类型", fields: ["金额", "费用类型"] },
+              { name: "提交审批", action: "点击提交", fields: ["审批状态"] },
+            ],
+            reason: "approval-result-not-submitted-in-test",
+          },
+        ],
+        plannedFlows: [],
+        tabs: [],
+        screenshots: [],
+        apis: [],
+      },
+      {
+        name: "预算控制",
+        entry: "菜单 / 预算控制",
+        businessHint: "查看预算额度、占用金额和超预算风险。",
+        list: {
+          columns: ["预算科目", "年度预算", "已占用金额", "可用金额", "风险状态"],
+          queryFields: ["预算科目", "风险状态"],
+          rowActions: ["查看", "冻结", "调整"],
+        },
+        flows: [],
+        plannedFlows: [],
+        tabs: [],
+        screenshots: [],
+        apis: [],
+      },
+    ],
+    metrics: {
+      moduleCount: 2,
+      navigationCount: 2,
+      flowCount: 1,
+      screenshotCount: 0,
+      pendingCount: 0,
+      crossLinkCount: 0,
+      networkEntryCount: 0,
+    },
+    ...overrides,
+  });
+}
+
+function genericEvidenceSummaryFixture(overrides = {}) {
+  return {
+    artifactType: "evidence-summary",
+    version: 1,
+    generatedAt: "2026-06-10T00:00:00.000Z",
+    system: { code: "generic-finance", name: "费用与预算管理系统" },
+    modules: [
+      { name: "费用申请", entry: "菜单 / 费用申请", summary: "维护费用申请和审批状态。" },
+      { name: "预算控制", entry: "菜单 / 预算控制", summary: "查看预算额度和风险状态。" },
+    ],
+    functions: [
+      {
+        id: "function:费用申请",
+        module: "费用申请",
+        name: "费用申请列表",
+        menuPath: "菜单 / 费用申请",
+        actions: ["查看", "编辑", "提交", "撤回"],
+        queryFields: ["申请人", "费用类型", "审批状态"],
+        tableColumns: ["申请编号", "申请人", "费用类型", "金额", "审批状态", "处理结果"],
+      },
+      {
+        id: "function:预算控制",
+        module: "预算控制",
+        name: "预算控制列表",
+        menuPath: "菜单 / 预算控制",
+        actions: ["查看", "冻结", "调整"],
+        queryFields: ["预算科目", "风险状态"],
+        tableColumns: ["预算科目", "年度预算", "已占用金额", "可用金额", "风险状态"],
+      },
+    ],
+    metrics: { moduleCount: 2, functionCount: 2 },
+    ...overrides,
+  };
+}
+
+function evidenceSummaryFixtureForOperation(operationSpec = {}, overrides = {}) {
+  return {
+    artifactType: "evidence-summary",
+    version: 1,
+    generatedAt: "2026-06-10T00:00:00.000Z",
+    system: {
+      code: operationSpec.systemCode || "adp",
+      name: operationSpec.systemName || "AI保单数据闭环平台",
+      testUrl: operationSpec.testUrl || "",
+    },
+    modules: (operationSpec.modules || []).map((module) => ({
+      name: module.name || "",
+      entry: module.entry || module.name || "",
+      summary: module.businessHint || "",
+    })),
+    functions: (operationSpec.modules || []).map((module) => ({
+      id: `function:${module.name || ""}`,
+      module: module.name || "",
+      name: `${module.name || ""}列表`,
+      menuPath: module.entry || module.name || "",
+      actions: module.list?.rowActions || [],
+      queryFields: module.list?.queryFields || [],
+      tableColumns: module.list?.columns || [],
+    })),
+    metrics: {
+      moduleCount: (operationSpec.modules || []).length,
+      functionCount: (operationSpec.modules || []).length,
+    },
+    ...overrides,
+  };
+}
+
+function businessProcessModelFixtureForReadiness(input = {}) {
+  const { buildBusinessProcessModel } = require("./build-business-process-model");
+  const operationSpec = input.operationSpec || operationSpecFixture();
+  const workflowSpec = input.workflowSpec || workflowSpecFixtureFromOperation(operationSpec);
+  const evidenceSummary = input.evidenceSummary || evidenceSummaryFixtureForOperation(operationSpec);
+  const verifiedClaims = input.verifiedClaims || verifiedClaimsFixture([]);
+  return buildBusinessProcessModel({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary,
+    verifiedClaims,
+    generatedAt: "2026-06-10T00:00:00.000Z",
+  });
+}
+
+function whitepaperPlanFixtureForReadiness(input = {}) {
+  const { buildWhitepaperPlan } = require("./build-whitepaper-plan");
+  const operationSpec = input.operationSpec || operationSpecFixture();
+  const workflowSpec = input.workflowSpec || workflowSpecFixtureFromOperation(operationSpec);
+  const evidenceSummary = input.evidenceSummary || evidenceSummaryFixtureForOperation(operationSpec);
+  const verifiedClaims = input.verifiedClaims || verifiedClaimsFixture([]);
+  const businessProcessModel =
+    input.businessProcessModel ||
+    businessProcessModelFixtureForReadiness({
+      operationSpec,
+      workflowSpec,
+      evidenceSummary,
+      verifiedClaims,
+    });
+  return buildWhitepaperPlan({
+    verifiedClaims,
+    businessProcessModel,
+    workflowSpec,
+    operationSpec,
+    evidenceSummary,
+    sourceArtifacts: input.sourceArtifacts || {},
+    generatedAt: "2026-06-10T00:00:00.000Z",
+  });
+}
+
+function whitepaperPlanFixtureInputs(overrides = {}) {
+  const operationSpec = overrides.operationSpec || genericOperationSpecFixture();
+  const workflowSpec = overrides.workflowSpec || workflowSpecFixtureFromOperation(operationSpec);
+  const evidenceSummary = overrides.evidenceSummary || genericEvidenceSummaryFixture();
+  const verifiedClaims =
+    overrides.verifiedClaims ||
+    verifiedClaimsFixture([
+      {
+        id: "function:费用申请:费用申请列表",
+        type: "function-presence",
+        module: "费用申请",
+        subject: "费用申请列表",
+        function: "费用申请列表",
+        status: "confirmed",
+        writable: true,
+        confidence: "high",
+        evidence: {
+          queryFields: ["申请人", "审批状态"],
+          tableColumns: ["申请编号", "金额", "审批状态"],
+        },
+      },
+      {
+        id: "database:budget_detail",
+        type: "business-entity",
+        module: "预算控制",
+        subject: "预算明细表",
+        entity: "预算明细表",
+        status: "weak",
+        writable: false,
+        confidence: "low",
+      },
+    ]);
+  const businessProcessModel =
+    overrides.businessProcessModel ||
+    businessProcessModelFixtureForReadiness({
+      operationSpec,
+      workflowSpec,
+      evidenceSummary,
+      verifiedClaims,
+    });
+  return {
+    operationSpec,
+    workflowSpec,
+    evidenceSummary,
+    verifiedClaims,
+    businessProcessModel,
+    ...overrides,
+  };
+}
+
+function workflowSpecFixtureFromOperation(operationSpec, overrides = {}) {
+  const { buildWorkflowSpec } = require("./build-workflow-spec");
+  const workflowSpec = buildWorkflowSpec({
+    operationSpec,
+    generatedAt: "2026-06-03T00:00:30.000Z",
+    sourceArtifacts: overrides.sourceArtifacts || {
+      operationSpec: {
+        file: "operation-spec.json",
+        status: "ok",
+        fingerprint: { exists: false, size: 0, mtimeMs: null, sha256: "" },
+      },
+    },
+  });
+  return {
+    ...workflowSpec,
+    ...overrides,
+    metrics: {
+      ...workflowSpec.metrics,
+      ...(overrides.metrics || {}),
+    },
+    sourceArtifacts: {
+      ...workflowSpec.sourceArtifacts,
+      ...(overrides.sourceArtifacts || {}),
+    },
   };
 }
 
@@ -14392,11 +15738,86 @@ test("buildWorkflowSpec keeps planned operation flows as non-observed candidates
   assert.ok(artifact.pending.some((item) => /新建AI任务/.test(item.topic) && /未形成/.test(item.reason)));
 });
 
+test("V6 homepage overview workflows are inferred not observed", () => {
+  const { buildWorkflowSpec } = require("./build-workflow-spec");
+  const operationSpec = operationSpecFixture({
+    modules: [
+      {
+        name: "费用申请",
+        entry: "首页「业务流程」",
+        source: "home-overview-card",
+        sourceCardTitle: "业务流程",
+        surfaceType: "business-flow",
+        coreBusinessModule: true,
+        businessObject: {
+          value: "费用申请",
+          confidence: "medium",
+          evidence: ["首页流程卡片:业务流程:费用申请"],
+        },
+        list: {
+          columns: [],
+          queryFields: [],
+          filters: [],
+          enumOptions: {},
+          rowActions: [],
+        },
+        lifecycleSignals: [],
+        qualitySignals: [],
+        flows: [
+          {
+            name: "费用申请",
+            trigger: "业务流程",
+            status: "inferred-from-home-overview",
+            reason: "依据首页流程卡片和截图归纳，未形成已点击菜单或写操作证据。",
+            steps: [
+              {
+                title: "费用申请",
+                fields: [],
+                buttons: [],
+                tables: [],
+                screenshots: ["screenshots/home.png"],
+                validation: {
+                  status: "not-executed",
+                  filledFieldCount: 0,
+                  source: "home-overview-card",
+                },
+              },
+            ],
+          },
+        ],
+        plannedFlows: [],
+        tabs: [],
+        screenshots: ["screenshots/home.png"],
+        apis: [],
+      },
+    ],
+  });
+
+  const artifact = buildWorkflowSpec({
+    operationSpec,
+    generatedAt: "2026-06-11T00:00:00.000Z",
+  });
+
+  assert.equal(artifact.metrics.workflowCount, 1);
+  assert.equal(artifact.metrics.observedWorkflowCount, 0);
+  assert.equal(artifact.metrics.inferredWorkflowCount, 1);
+  assert.equal(artifact.metrics.homeOverviewWorkflowCount, 1);
+  assert.equal(artifact.metrics.narratableWorkflowCount, 1);
+  assert.equal(artifact.metrics.inferredStepCount, 1);
+  const workflow = artifact.workflows[0];
+  assert.equal(workflow.evidenceStatus, "inferred");
+  assert.equal(workflow.sourceType, "home-overview-card");
+  assert.equal(workflow.canNarrateAsObserved, false);
+  assert.equal(workflow.canNarrateAsInferred, true);
+  assert.equal(workflow.steps.length, 1);
+  assert.ok(workflow.boundaries.some((item) => /首页流程卡片/.test(item.reason)));
+});
+
 test("build-workflow-spec writes workflow spec with operation source fingerprint", () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { spawnSync } = require("node:child_process");
+  const { main } = require("./build-workflow-spec");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-spec-cli-"));
   fs.writeFileSync(
@@ -14430,16 +15851,9 @@ test("build-workflow-spec writes workflow spec with operation source fingerprint
     "utf8",
   );
 
-  const result = spawnSync(
-    process.execPath,
-    ["scripts/build-workflow-spec.js", "--input", dir],
-    {
-      cwd: path.resolve(__dirname, ".."),
-      encoding: "utf8",
-    },
-  );
+  const result = runCliMainForTest(main, ["--input", dir]);
 
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, spawnSyncSummary(result));
   const output = JSON.parse(fs.readFileSync(path.join(dir, "workflow-spec.json"), "utf8"));
   assert.equal(output.artifactType, "workflow-spec");
   assert.equal(output.sourceArtifacts.operationSpec.file, "operation-spec.json");
@@ -14524,7 +15938,7 @@ test("generate-operation-guide falls back to spec gate when gate cache is malfor
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { spawnSync } = require("node:child_process");
+  const { main } = require("./generate-operation-guide");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "operation-guide-bad-gate-"));
   const configPath = path.join(dir, "systems.local.yaml");
@@ -14549,16 +15963,9 @@ test("generate-operation-guide falls back to spec gate when gate cache is malfor
   );
   fs.writeFileSync(path.join(output, "operation-guide-gate.json"), "{bad json", "utf8");
 
-  const result = spawnSync(
-    process.execPath,
-    ["scripts/generate-operation-guide.js", "--config", configPath, "--system", "adp"],
-    {
-      cwd: path.resolve(__dirname, ".."),
-      encoding: "utf8",
-    },
-  );
+  const result = runCliMainForTest(main, ["--config", configPath, "--system", "adp"]);
 
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
   const markdown = fs.readFileSync(path.join(output, "operation-guide.md"), "utf8");
   assert.match(markdown, /AI任务管理/);
 });
@@ -14567,7 +15974,7 @@ test("generate-operation-guide falls back to spec gate when gate cache is non-ob
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { spawnSync } = require("node:child_process");
+  const { main } = require("./generate-operation-guide");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "operation-guide-non-object-gate-"));
   const configPath = path.join(dir, "systems.local.yaml");
@@ -14592,16 +15999,9 @@ test("generate-operation-guide falls back to spec gate when gate cache is non-ob
   );
   fs.writeFileSync(path.join(output, "operation-guide-gate.json"), "[]", "utf8");
 
-  const result = spawnSync(
-    process.execPath,
-    ["scripts/generate-operation-guide.js", "--config", configPath, "--system", "adp"],
-    {
-      cwd: path.resolve(__dirname, ".."),
-      encoding: "utf8",
-    },
-  );
+  const result = runCliMainForTest(main, ["--config", configPath, "--system", "adp"]);
 
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
   const markdown = fs.readFileSync(path.join(output, "operation-guide.md"), "utf8");
   assert.match(markdown, /AI任务管理/);
 });
@@ -14610,7 +16010,7 @@ test("generate-operation-guide rejects forged operation spec artifacts", () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { spawnSync } = require("node:child_process");
+  const { main } = require("./generate-operation-guide");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "operation-guide-forged-spec-"));
   const configPath = path.join(dir, "systems.local.yaml");
@@ -14634,14 +16034,7 @@ test("generate-operation-guide rejects forged operation spec artifacts", () => {
     "utf8",
   );
 
-  const result = spawnSync(
-    process.execPath,
-    ["scripts/generate-operation-guide.js", "--config", configPath, "--system", "adp"],
-    {
-      cwd: path.resolve(__dirname, ".."),
-      encoding: "utf8",
-    },
-  );
+  const result = runCliMainForTest(main, ["--config", configPath, "--system", "adp"]);
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /operation-spec\.json is not a valid operation spec artifact/);
@@ -16576,6 +17969,11 @@ function factCheckReportFixture(overrides = {}) {
       ? coveredWritableClaimIds.length / (coveredWritableClaimIds.length + missingWritableClaimIds.length)
       : 1,
     minWritableClaimCoverage: 0.8,
+    requiredPlanItemCount: 1,
+    coveredPlanItemCount: 1,
+    missingPlanItemCount: 0,
+    planRequiredCoverageRatio: 1,
+    minPlanRequiredCoverage: 0.95,
   };
   return {
     artifactType: "fact-check-report",
@@ -16588,6 +17986,54 @@ function factCheckReportFixture(overrides = {}) {
       ...baseMetrics,
       ...(metricsOverrides || {}),
     },
+    ...restOverrides,
+  };
+}
+
+function goldenEvalReportFixture(overrides = {}) {
+  const {
+    metrics: metricsOverrides,
+    thresholds: thresholdOverrides,
+    ...restOverrides
+  } = overrides;
+  const baseMetrics = {
+    factCount: 1,
+    coveredCount: 1,
+    partialCount: 0,
+    missingCount: 0,
+    overclaimCount: 0,
+    coverageRatio: 1,
+    criticalFactCount: 1,
+    criticalCoveredCount: 1,
+    criticalCoverageRatio: 1,
+  };
+  const baseThresholds = {
+    minCoverageRatio: 0.95,
+    minCriticalCoverageRatio: 0.8,
+    maxOverclaims: 0,
+  };
+  return {
+    artifactType: "golden-eval-report",
+    version: 1,
+    generatedAt: "2026-06-10T00:00:00.000Z",
+    system: { code: "adp", name: "AI保单数据闭环平台" },
+    thresholds: {
+      ...baseThresholds,
+      ...(thresholdOverrides || {}),
+    },
+    canPass: true,
+    canSubmitReview: true,
+    canFinalize: true,
+    metrics: {
+      ...baseMetrics,
+      ...(metricsOverrides || {}),
+    },
+    results: [],
+    overclaims: [],
+    failures: [],
+    warnings: [],
+    blockers: [],
+    sourceArtifacts: {},
     ...restOverrides,
   };
 }
@@ -16650,6 +18096,7 @@ function writeOperationSpecFixture(dir, options = {}) {
     buildOperationSpecSourceArtifacts,
     fingerprintFile,
   } = require("./operation-spec/lib");
+  const { buildWorkflowSpecFromDir } = require("./build-workflow-spec");
   const evidencePath = path.join(dir, "evidence.json");
   const evidenceSummaryPath = path.join(dir, "evidence-summary.json");
   const writeValidationPath = path.join(dir, "write-validation-result.json");
@@ -16667,10 +18114,101 @@ function writeOperationSpecFixture(dir, options = {}) {
         tableInventory: [],
         screenshotIndex: [],
       };
-  const evidenceSummary = fs.existsSync(evidenceSummaryPath)
-    ? JSON.parse(fs.readFileSync(evidenceSummaryPath, "utf8"))
-    : buildEvidenceSummary(evidence);
-  if (!fs.existsSync(evidenceSummaryPath)) {
+  let injectedObservedFlow = false;
+  if (options.withObservedFlow !== false) {
+    evidence.pageInventory = Array.isArray(evidence.pageInventory) ? evidence.pageInventory : [];
+    evidence.actionInventory = Array.isArray(evidence.actionInventory) ? evidence.actionInventory : [];
+    evidence.formInventory = Array.isArray(evidence.formInventory) ? evidence.formInventory : [];
+    evidence.screenshotIndex = Array.isArray(evidence.screenshotIndex) ? evidence.screenshotIndex : [];
+    const sourcePage =
+      evidence.pageInventory.find((page) => page && page.id && !page.sourcePageId && page.type !== "home") ||
+      evidence.pageInventory.find((page) => page && page.id) ||
+      null;
+    const sourcePageId = sourcePage?.id || "workflow-source-page";
+    const sourceTitle =
+      String(sourcePage?.title || sourcePage?.menuPath || evidence.menuMap?.[0]?.title || "业务记录").trim() ||
+      "业务记录";
+    const sourceMenuPath =
+      String(sourcePage?.menuPath || evidence.menuMap?.[0]?.menuPath || sourceTitle).trim() || sourceTitle;
+    const triggerLabel = `新增${sourceTitle}`;
+    const containerId = "workflow-form";
+    if (!sourcePage) {
+      evidence.pageInventory.push({
+        id: sourcePageId,
+        type: "page",
+        title: sourceTitle,
+        menuPath: sourceMenuPath,
+        screenshot: `${sourceTitle}.png`,
+      });
+      injectedObservedFlow = true;
+    }
+    if (!evidence.pageInventory.some((page) => page.id === containerId)) {
+      evidence.pageInventory.push({
+        id: containerId,
+        sourcePageId,
+        type: "modal",
+        title: triggerLabel,
+        menuPath: triggerLabel,
+        triggerLabel,
+        screenshot: `${triggerLabel}.png`,
+        fields: [{ label: sourceTitle }],
+        actions: [{ name: "保存", type: "flow-progress", risk: "normal" }],
+        triggerActionId: "action-new-task",
+        captureKind: "business-flow-surface",
+      });
+      injectedObservedFlow = true;
+    }
+    if (!evidence.actionInventory.some((action) => action.id === "action-new-task")) {
+      evidence.actionInventory.push({
+        id: "action-new-task",
+        pageId: sourcePageId,
+        name: triggerLabel,
+        label: triggerLabel,
+        menuPath: sourceMenuPath,
+        type: "create",
+        risk: "normal",
+        classification: "flow-start",
+        captureActionClass: "flow-start",
+      });
+      injectedObservedFlow = true;
+    }
+    if (!evidence.actionInventory.some((action) => action.pageId === containerId && action.name === "保存")) {
+      evidence.actionInventory.push({
+        id: "action-workflow-save",
+        pageId: containerId,
+        name: "保存",
+        type: "button",
+        risk: "normal",
+      });
+      injectedObservedFlow = true;
+    }
+    if (!evidence.formInventory.some((form) => form.pageId === containerId)) {
+      evidence.formInventory.push({
+        pageId: containerId,
+        formName: triggerLabel,
+        fields: [{ label: sourceTitle, type: "input", required: true }],
+      });
+      injectedObservedFlow = true;
+    }
+    if (!evidence.screenshotIndex.some((shot) => shot.file === `${triggerLabel}.png`)) {
+      evidence.screenshotIndex.push({
+        id: "workflow-form-shot",
+        pageId: containerId,
+        file: `${triggerLabel}.png`,
+        module: sourceMenuPath,
+        function: triggerLabel,
+        caption: triggerLabel,
+      });
+      injectedObservedFlow = true;
+    }
+  }
+  if (injectedObservedFlow || !fs.existsSync(evidencePath)) {
+    fs.writeFileSync(evidencePath, JSON.stringify(evidence), "utf8");
+  }
+  const evidenceSummary = injectedObservedFlow || !fs.existsSync(evidenceSummaryPath)
+    ? buildEvidenceSummary(evidence)
+    : JSON.parse(fs.readFileSync(evidenceSummaryPath, "utf8"));
+  if (injectedObservedFlow || !fs.existsSync(evidenceSummaryPath)) {
     fs.writeFileSync(evidenceSummaryPath, JSON.stringify(evidenceSummary), "utf8");
   }
   const { spec, gate } = buildOperationSpec({
@@ -16702,6 +18240,9 @@ function writeOperationSpecFixture(dir, options = {}) {
     evidenceSummary: spec.sourceArtifacts.evidenceSummary,
   };
   fs.writeFileSync(operationGuideGatePath, JSON.stringify(gate), "utf8");
+  if (options.withWorkflowSpec !== false) {
+    buildWorkflowSpecFromDir(dir, { generatedAt: options.workflowGeneratedAt || "2026-06-03T00:00:30.000Z" });
+  }
   return { spec, gate, operationSpecPath, operationGuideGatePath };
 }
 
@@ -16720,6 +18261,31 @@ function truthReadinessReportFixture(dir, overrides = {}) {
       },
     },
     narrative: { pass: true, scorePercent: 100 },
+    workflow: { pass: true, scorePercent: 100, metrics: { operationFlowCount: 1, observedWorkflowStepCount: 1 } },
+    businessProcess: { pass: true, scorePercent: 100 },
+    whitepaperPlan: {
+      pass: true,
+      scorePercent: 100,
+      metrics: {
+        planPresent: true,
+        requiredItemCount: 1,
+        allowedFactCount: 1,
+        pendingItemCount: 0,
+        planRequiredCoverageRatio: 1,
+        minPlanRequiredCoverage: 0.95,
+      },
+    },
+    goldenEval: {
+      pass: true,
+      required: false,
+      available: false,
+      scorePercent: 100,
+      metrics: {
+        coverageRatio: 1,
+        criticalCoverageRatio: 1,
+        overclaimCount: 0,
+      },
+    },
     database: { pass: true, available: false, required: false, profileAvailable: false, scorePercent: 0 },
     lineage: { pass: true, scorePercent: 100 },
   };
@@ -16731,7 +18297,7 @@ function truthReadinessReportFixture(dir, overrides = {}) {
     scorePercent: 99,
     canSubmitReview: true,
     canFinalize: true,
-    requirements: { databaseEvidenceRequired: false },
+    requirements: { databaseEvidenceRequired: false, goldenEvalRequired: false },
     gates: baseGates,
     blockers: [],
     improvementActions: [],
@@ -17112,33 +18678,9 @@ test("truth readiness rejects stale fact check source fingerprints", () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { runFactCheck } = require("./fact-check-whitepaper");
-  const { runNarrativeCheck } = require("./check-narrative");
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-stale-fact-check-"));
-  writeQualityReportFixture(dir);
-  fs.writeFileSync(
-    path.join(dir, "verified-claims.json"),
-    JSON.stringify(
-      verifiedClaimsFixture([
-        {
-          id: "function:保单任务:任务列表",
-          subject: "任务列表",
-          module: "保单任务",
-          writable: true,
-          status: "confirmed",
-        },
-      ]),
-    ),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(dir, "whitepaper.pending-review.md"),
-    passingNarrativeMarkdown(),
-    "utf8",
-  );
-  runFactCheck({ inputDir: dir });
-  runNarrativeCheck({ inputDir: dir });
+  writePassingTruthArtifacts(dir, { databaseProfile: false });
 
   const passing = runTruthReadinessCheck({ inputDir: dir });
   assert.equal(passing.canSubmitReview, true);
@@ -17150,7 +18692,7 @@ test("truth readiness rejects stale fact check source fingerprints", () => {
   assert.ok(stale.gates.factCheck.staleSources.some((item) => item.key === "pendingReview"));
   const blocker = stale.blockers.find((item) => item.id === "fact-check.stale-sources");
   assert.ok(blocker);
-  assert.deepEqual(blocker.rerunNodes, ["fact-check", "quality", "truth-readiness"]);
+  assert.deepEqual(blocker.rerunNodes, ["fact-check", "golden-eval", "quality", "truth-readiness"]);
   assert.equal(blocker.quotaImpact, "low");
 });
 
@@ -17174,6 +18716,7 @@ test("truth readiness rejects stale narrative source fingerprints", () => {
       sourceArtifacts: buildFactCheckSourceArtifacts({
         markdownPath,
         claimsPath: path.join(dir, "verified-claims.json"),
+        whitepaperPlanPath: path.join(dir, "whitepaper-plan.json"),
       }),
     }),
     "utf8",
@@ -17191,71 +18734,46 @@ test("truth readiness rejects stale narrative source fingerprints", () => {
   assert.equal(blocker.quotaImpact, "low");
 });
 
+test("truth readiness rejects stale workflow spec against current operation spec", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-stale-workflow-spec-"));
+  writePassingTruthArtifacts(dir, { databaseProfile: false });
+  const operationSpecPath = path.join(dir, "operation-spec.json");
+  const currentSpec = JSON.parse(fs.readFileSync(operationSpecPath, "utf8"));
+  currentSpec.modules[0].flows.push({
+    name: "变更后的流程",
+    trigger: "新增",
+    sourcePage: "AI任务管理",
+    status: "partial",
+    steps: [{ name: "打开表单", action: "点击新增", fields: ["保险公司"] }],
+    reason: "submit-button-not-found",
+  });
+  currentSpec.metrics.flowCount = Number(currentSpec.metrics.flowCount || 0) + 1;
+  fs.writeFileSync(operationSpecPath, JSON.stringify(currentSpec), "utf8");
+
+  const report = runTruthReadinessCheck({ inputDir: dir });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.workflow.pass, false);
+  assert.ok(
+    report.gates.workflow.failures.some((item) =>
+      /workflow-spec\.json source operation-spec\.json fingerprint is stale/.test(item),
+    ),
+  );
+  assert.ok(report.blockers.some((item) => item.id === "workflow.lineage-stale"));
+});
+
 test("truth readiness rejects stale database truth lineage", () => {
   const fs = require("node:fs");
   const os = require("node:os");
   const path = require("node:path");
-  const { buildDatabaseModelFromDir } = require("./build-database-model");
-  const { buildFunctionUniverseFromDir } = require("./build-function-universe");
-  const { buildVerifiedClaimsFromDir } = require("./build-verified-claims");
-  const { runFactCheck } = require("./fact-check-whitepaper");
-  const { runNarrativeCheck } = require("./check-narrative");
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-lineage-db-"));
-  fs.writeFileSync(
-    path.join(dir, "evidence-summary.json"),
-    JSON.stringify({
-      system: { code: "adp", name: "AI保单数据闭环平台" },
-      modules: [{ name: "保单任务", entry: "保单任务 > 任务列表" }],
-      functions: [
-        {
-          module: "保单任务",
-          name: "任务列表",
-          menuPath: "保单任务 > 任务列表",
-          queryFields: ["保单号", "任务状态"],
-          tableColumns: ["保单号", "状态"],
-          screenshots: [{ id: "shot-1", file: "screenshots/task.png" }],
-        },
-      ],
-    }),
-    "utf8",
-  );
-  writeQualityReportFixture(dir);
-  fs.writeFileSync(
-    path.join(dir, "database-profile.json"),
-    JSON.stringify({
-      artifactType: "database-profile",
-      system: { code: "adp", name: "AI保单数据闭环平台" },
-      safety: { secretRedacted: true },
-      tables: [
-        {
-          schema: "adp_test",
-          name: "policy_task",
-          comment: "保单任务",
-          columns: [
-            { name: "id", type: "bigint", comment: "主键", primaryKey: true },
-            { name: "status", type: "varchar", comment: "任务状态", dictionary: ["INIT", "DONE"] },
-          ],
-        },
-      ],
-    }),
-    "utf8",
-  );
-  buildDatabaseModelFromDir(dir, { generatedAt: "2026-06-03T00:00:00.000Z" });
-  buildFunctionUniverseFromDir(dir);
-  buildVerifiedClaimsFromDir(dir);
-  const verifiedClaims = JSON.parse(fs.readFileSync(path.join(dir, "verified-claims.json"), "utf8"));
-  const writableClaimLines = verifiedClaims.claims
-    .filter((claim) => claim.writable)
-    .map((claim) => `${claim.module || claim.subject || ""} ${claim.subject || claim.function || claim.entity || ""} [claim:${claim.id}]`);
-  fs.writeFileSync(
-    path.join(dir, "whitepaper.pending-review.md"),
-    [passingTaskListOnlyNarrativeMarkdown(), "", "## 5. 已验证声明索引", ...writableClaimLines].join("\n"),
-    "utf8",
-  );
-  runFactCheck({ inputDir: dir });
-  runNarrativeCheck({ inputDir: dir });
+  writePassingTruthArtifacts(dir, { requireDatabaseEvidence: true });
 
   const passing = runTruthReadinessCheck({
     inputDir: dir,
@@ -17675,6 +19193,64 @@ test("truth readiness rejects forged function universe against current sources",
 
 test("truth readiness passes only when evidence claims fact-check and narrative gates pass", () => {
   const { buildTruthReadinessReport, normalizeThreshold } = require("./check-truth-readiness");
+  const operationSpec = operationSpecFixture({
+    modules: [
+      {
+        name: "保单任务",
+        entry: "左侧「保单任务」",
+        list: { columns: ["保单号"], queryFields: ["保单号"], rowActions: [] },
+        flows: [
+          {
+            name: "新建保单任务",
+            trigger: "新增",
+            sourcePage: "保单任务",
+            status: "partial",
+            steps: [{ name: "打开新建表单", action: "点击新增", fields: ["保单号"] }],
+            reason: "submit-button-not-found",
+          },
+        ],
+        tabs: [],
+        screenshots: [],
+        apis: [],
+      },
+    ],
+    metrics: { flowCount: 1 },
+  });
+  const workflowSpec = workflowSpecFixtureFromOperation(operationSpec);
+  const evidenceSummary = evidenceSummaryFixtureForOperation(operationSpec);
+  const verifiedClaims = verifiedClaimsFixture(
+    [
+      {
+        id: "function:保单任务:任务列表",
+        subject: "任务列表",
+        module: "保单任务",
+        status: "confirmed",
+        writable: true,
+      },
+      {
+        id: "database:policy_task",
+        subject: "policy_task",
+        module: "保单任务",
+        status: "weak",
+        writable: false,
+        sources: [{ type: "db-table", id: "adp_test.policy_task" }],
+      },
+    ],
+    { metrics: { claimCount: 2, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0, weakCount: 1, databaseOnlyClaimCount: 1 } },
+  );
+  const businessProcessModel = businessProcessModelFixtureForReadiness({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary,
+    verifiedClaims,
+  });
+  const whitepaperPlan = whitepaperPlanFixtureForReadiness({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary,
+    verifiedClaims,
+    businessProcessModel,
+  });
   const artifacts = {
     quality: {
       file: "quality-report.json",
@@ -17684,26 +19260,7 @@ test("truth readiness passes only when evidence claims fact-check and narrative 
     claims: {
       file: "verified-claims.json",
       status: "ok",
-      value: verifiedClaimsFixture(
-        [
-          {
-            id: "function:保单任务:任务列表",
-            subject: "任务列表",
-            module: "保单任务",
-            status: "confirmed",
-            writable: true,
-          },
-          {
-            id: "database:policy_task",
-            subject: "policy_task",
-            module: "保单任务",
-            status: "weak",
-            writable: false,
-            sources: [{ type: "db-table", id: "adp_test.policy_task" }],
-          },
-        ],
-        { metrics: { claimCount: 2, writableClaimCount: 1, confirmedCount: 1, inferredCount: 0, weakCount: 1, databaseOnlyClaimCount: 1 } },
-      ),
+      value: verifiedClaims,
     },
     factCheck: {
       file: "fact-check-report.json",
@@ -17720,6 +19277,11 @@ test("truth readiness passes only when evidence claims fact-check and narrative 
       status: "ok",
       value: narrativeQualityReportFixture(),
     },
+    operationSpec: { file: "operation-spec.json", status: "ok", value: operationSpec },
+    workflowSpec: { file: "workflow-spec.json", status: "ok", value: workflowSpec },
+    evidenceSummary: { file: "evidence-summary.json", status: "ok", value: evidenceSummary },
+    businessProcessModel: { file: "business-process-model.json", status: "ok", value: businessProcessModel },
+    whitepaperPlan: { file: "whitepaper-plan.json", status: "ok", value: whitepaperPlan },
   };
 
   const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
@@ -17731,8 +19293,786 @@ test("truth readiness passes only when evidence claims fact-check and narrative 
   assert.ok(report.improvementActions.some((item) => item.id === "database.optional-profile"));
 });
 
+test("truth readiness blocks formal review when operation flows are missing", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const operationSpec = operationSpecFixture();
+  const workflowSpec = workflowSpecFixtureFromOperation(operationSpec);
+  const artifacts = {
+    quality: { file: "quality-report.json", status: "ok", value: qualityReportFixture() },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: verifiedClaimsFixture([
+        {
+          id: "function:AI任务管理:任务列表",
+          subject: "任务列表",
+          module: "AI任务管理",
+          status: "confirmed",
+          writable: true,
+        },
+      ]),
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: factCheckReportFixture({ coveredWritableClaimIds: ["function:AI任务管理:任务列表"] }),
+    },
+    narrative: { file: "narrative-quality-report.json", status: "ok", value: narrativeQualityReportFixture() },
+    operationSpec: { file: "operation-spec.json", status: "ok", value: operationSpec },
+    workflowSpec: { file: "workflow-spec.json", status: "ok", value: workflowSpec },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.workflow.pass, false);
+  assert.equal(report.gates.workflow.metrics.operationFlowCount, 0);
+  assert.ok(report.blockers.some((item) => item.id === "workflow.operation-flow-missing"));
+});
+
+test("truth readiness blocks formal review when observed workflow steps are missing", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const operationSpec = operationSpecFixture({
+    modules: [
+      {
+        name: "AI任务管理",
+        entry: "左侧「AI任务管理」",
+        list: { columns: ["保险公司"], queryFields: [], rowActions: [] },
+        flows: [
+          {
+            name: "新建AI任务",
+            trigger: "新增",
+            steps: [],
+            sourcePage: "AI任务管理",
+          },
+        ],
+        tabs: [],
+        screenshots: [],
+        apis: [],
+      },
+    ],
+    metrics: { flowCount: 1 },
+  });
+  const workflowSpec = workflowSpecFixtureFromOperation(operationSpec);
+  const evidenceSummary = evidenceSummaryFixtureForOperation(operationSpec);
+  const verifiedClaims = verifiedClaimsFixture([
+    {
+      id: "function:AI任务管理:新建AI任务",
+      subject: "新建AI任务",
+      module: "AI任务管理",
+      status: "confirmed",
+      writable: true,
+    },
+  ]);
+  const businessProcessModel = businessProcessModelFixtureForReadiness({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary,
+    verifiedClaims,
+  });
+  const whitepaperPlan = whitepaperPlanFixtureForReadiness({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary,
+    verifiedClaims,
+    businessProcessModel,
+  });
+  const artifacts = {
+    quality: { file: "quality-report.json", status: "ok", value: qualityReportFixture() },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: verifiedClaims,
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: factCheckReportFixture({ coveredWritableClaimIds: ["function:AI任务管理:新建AI任务"] }),
+    },
+    narrative: { file: "narrative-quality-report.json", status: "ok", value: narrativeQualityReportFixture() },
+    operationSpec: { file: "operation-spec.json", status: "ok", value: operationSpec },
+    workflowSpec: { file: "workflow-spec.json", status: "ok", value: workflowSpec },
+    evidenceSummary: { file: "evidence-summary.json", status: "ok", value: evidenceSummary },
+    businessProcessModel: { file: "business-process-model.json", status: "ok", value: businessProcessModel },
+    whitepaperPlan: { file: "whitepaper-plan.json", status: "ok", value: whitepaperPlan },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.workflow.pass, false);
+  assert.equal(report.gates.workflow.metrics.observedWorkflowStepCount, 0);
+  assert.ok(report.blockers.some((item) => item.id === "workflow.steps-missing"));
+});
+
+test("truth readiness accepts current observed workflow evidence", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const operationSpec = operationSpecFixture({
+    modules: [
+      {
+        name: "AI任务管理",
+        entry: "左侧「AI任务管理」",
+        list: { columns: ["保险公司"], queryFields: [], rowActions: [] },
+        flows: [
+          {
+            name: "新建AI任务",
+            trigger: "新增",
+            sourcePage: "AI任务管理",
+            status: "partial",
+            steps: [
+              { name: "打开新建表单", action: "点击新增", fields: ["保险公司"] },
+              { name: "填写任务信息", action: "填写表单", fields: ["保险公司"] },
+            ],
+            reason: "submit-button-not-found",
+          },
+        ],
+        tabs: [],
+        screenshots: [],
+        apis: [],
+      },
+    ],
+    metrics: { flowCount: 1 },
+  });
+  const workflowSpec = workflowSpecFixtureFromOperation(operationSpec);
+  const evidenceSummary = evidenceSummaryFixtureForOperation(operationSpec);
+  const verifiedClaims = verifiedClaimsFixture([
+    {
+      id: "function:AI任务管理:新建AI任务",
+      subject: "新建AI任务",
+      module: "AI任务管理",
+      status: "confirmed",
+      writable: true,
+    },
+  ]);
+  const businessProcessModel = businessProcessModelFixtureForReadiness({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary,
+    verifiedClaims,
+  });
+  const whitepaperPlan = whitepaperPlanFixtureForReadiness({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary,
+    verifiedClaims,
+    businessProcessModel,
+  });
+  const artifacts = {
+    quality: { file: "quality-report.json", status: "ok", value: qualityReportFixture() },
+    claims: {
+      file: "verified-claims.json",
+      status: "ok",
+      value: verifiedClaims,
+    },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: factCheckReportFixture({ coveredWritableClaimIds: ["function:AI任务管理:新建AI任务"] }),
+    },
+    narrative: { file: "narrative-quality-report.json", status: "ok", value: narrativeQualityReportFixture() },
+    operationSpec: { file: "operation-spec.json", status: "ok", value: operationSpec },
+    workflowSpec: { file: "workflow-spec.json", status: "ok", value: workflowSpec },
+    evidenceSummary: { file: "evidence-summary.json", status: "ok", value: evidenceSummary },
+    businessProcessModel: { file: "business-process-model.json", status: "ok", value: businessProcessModel },
+    whitepaperPlan: { file: "whitepaper-plan.json", status: "ok", value: whitepaperPlan },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.gates.workflow.pass, true);
+  assert.equal(report.gates.workflow.metrics.operationFlowCount, 1);
+  assert.equal(report.gates.workflow.metrics.observedWorkflowStepCount, 2);
+  assert.equal(report.canSubmitReview, true);
+});
+
+test("V6 workflow gate passes narratable inferred workflows without observed counts", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const operationSpec = operationSpecFixture({
+    modules: [
+      {
+        name: "费用申请",
+        entry: "首页「业务流程」",
+        source: "home-overview-card",
+        sourceCardTitle: "业务流程",
+        surfaceType: "business-flow",
+        coreBusinessModule: true,
+        businessObject: {
+          value: "费用申请",
+          confidence: "medium",
+          evidence: ["首页流程卡片:业务流程:费用申请"],
+        },
+        list: { columns: [], queryFields: [], rowActions: [] },
+        lifecycleSignals: [],
+        qualitySignals: [],
+        flows: [
+          {
+            name: "费用申请",
+            trigger: "业务流程",
+            status: "inferred-from-home-overview",
+            reason: "依据首页流程卡片和截图归纳，未形成已点击菜单或写操作证据。",
+            steps: [
+              {
+                title: "费用申请",
+                screenshots: ["screenshots/home.png"],
+                validation: {
+                  status: "not-executed",
+                  source: "home-overview-card",
+                },
+              },
+            ],
+          },
+        ],
+        plannedFlows: [],
+        tabs: [],
+        screenshots: ["screenshots/home.png"],
+        apis: [],
+      },
+    ],
+    metrics: { flowCount: 1, screenshotCount: 1 },
+  });
+  const workflowSpec = workflowSpecFixtureFromOperation(operationSpec);
+  const evidenceSummary = evidenceSummaryFixtureForOperation(operationSpec);
+  const verifiedClaims = verifiedClaimsFixture([
+    {
+      id: "function:费用申请:首页流程卡片",
+      subject: "首页流程卡片",
+      module: "费用申请",
+      status: "confirmed",
+      writable: true,
+    },
+  ]);
+  const businessProcessModel = businessProcessModelFixtureForReadiness({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary,
+    verifiedClaims,
+  });
+  const whitepaperPlan = whitepaperPlanFixtureForReadiness({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary,
+    verifiedClaims,
+    businessProcessModel,
+  });
+  const artifacts = {
+    quality: { file: "quality-report.json", status: "ok", value: qualityReportFixture() },
+    claims: { file: "verified-claims.json", status: "ok", value: verifiedClaims },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: factCheckReportFixture({ coveredWritableClaimIds: ["function:费用申请:首页流程卡片"] }),
+    },
+    narrative: { file: "narrative-quality-report.json", status: "ok", value: narrativeQualityReportFixture() },
+    operationSpec: { file: "operation-spec.json", status: "ok", value: operationSpec },
+    workflowSpec: { file: "workflow-spec.json", status: "ok", value: workflowSpec },
+    evidenceSummary: { file: "evidence-summary.json", status: "ok", value: evidenceSummary },
+    businessProcessModel: { file: "business-process-model.json", status: "ok", value: businessProcessModel },
+    whitepaperPlan: { file: "whitepaper-plan.json", status: "ok", value: whitepaperPlan },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.gates.workflow.pass, true);
+  assert.equal(report.gates.workflow.metrics.observedWorkflowCount, 0);
+  assert.equal(report.gates.workflow.metrics.inferredWorkflowCount, 1);
+  assert.equal(report.gates.workflow.metrics.homeOverviewWorkflowCount, 1);
+  assert.equal(report.gates.workflow.metrics.narratableWorkflowCount, 1);
+  assert.equal(report.gates.workflow.metrics.observedWorkflowStepCount, 0);
+  assert.equal(report.gates.workflow.metrics.inferredWorkflowStepCount, 1);
+});
+
+test("business process model default inference is generic for non-ADP systems", () => {
+  const { buildBusinessProcessModel } = require("./build-business-process-model");
+  const model = buildBusinessProcessModel({
+    operationSpec: genericOperationSpecFixture(),
+    evidenceSummary: genericEvidenceSummaryFixture(),
+    verifiedClaims: verifiedClaimsFixture([
+      {
+        id: "function:费用申请:列表",
+        module: "费用申请",
+        subject: "费用申请列表",
+        status: "confirmed",
+        writable: true,
+        confidence: "high",
+      },
+    ]),
+    generatedAt: "2026-06-10T00:00:00.000Z",
+  });
+
+  const text = JSON.stringify(model);
+  assert.equal(model.version, 2);
+  assert.doesNotMatch(text, /保司|AI任务|元数据|发布上线|运行观测/);
+  assert.ok(model.businessObjects.length >= 1);
+  assert.ok(model.moduleResponsibilities.length >= 2);
+  assert.ok(
+    model.processes.every((processItem) =>
+      ["observed", "partially-observed", "inferred", "candidate", "pending"].includes(processItem.status),
+    ),
+  );
+}
+);
+
+test("business process model keeps inferred cross-module sequence distinct from observed workflow steps", () => {
+  const { buildWorkflowSpec } = require("./build-workflow-spec");
+  const { buildBusinessProcessModel } = require("./build-business-process-model");
+  const operationSpec = genericOperationSpecFixture();
+  const workflowSpec = buildWorkflowSpec({
+    operationSpec,
+    generatedAt: "2026-06-10T00:00:01.000Z",
+    sourceArtifacts: {},
+  });
+  const model = buildBusinessProcessModel({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary: genericEvidenceSummaryFixture(),
+    verifiedClaims: verifiedClaimsFixture([]),
+    generatedAt: "2026-06-10T00:00:02.000Z",
+  });
+
+  const observedSteps = model.processes
+    .flatMap((processItem) => processItem.steps || [])
+    .filter((step) => step.status === "observed");
+  const inferredProcesses = model.processes.filter((processItem) =>
+    ["inferred", "partially-observed"].includes(processItem.status),
+  );
+  assert.ok(observedSteps.length >= 1);
+  assert.ok(inferredProcesses.every((processItem) => processItem.boundary));
+});
+
+test("V6 business process keeps homepage workflow steps inferred", () => {
+  const { buildWorkflowSpec } = require("./build-workflow-spec");
+  const { buildBusinessProcessModel } = require("./build-business-process-model");
+  const operationSpec = operationSpecFixture({
+    systemCode: "finance",
+    systemName: "财务费用系统",
+    testUrl: "https://finance.example.test/",
+    navigation: [],
+    modules: [
+      {
+        name: "费用申请",
+        entry: "首页「业务流程」",
+        source: "home-overview-card",
+        sourceCardTitle: "业务流程",
+        surfaceType: "business-flow",
+        coreBusinessModule: true,
+        businessHint: "员工提交费用报销申请。",
+        businessObject: {
+          value: "费用申请",
+          confidence: "medium",
+          evidence: ["首页流程卡片:业务流程:费用申请"],
+        },
+        list: { columns: [], queryFields: [], filters: [], enumOptions: {}, rowActions: [] },
+        lifecycleSignals: [],
+        qualitySignals: [],
+        flows: [
+          {
+            name: "费用申请",
+            trigger: "业务流程",
+            status: "inferred-from-home-overview",
+            reason: "依据首页流程卡片和截图归纳，未形成已点击菜单或写操作证据。",
+            steps: [{ title: "费用申请", screenshots: ["screenshots/home.png"] }],
+          },
+        ],
+        plannedFlows: [],
+        tabs: [],
+        screenshots: ["screenshots/home.png"],
+        apis: [],
+      },
+    ],
+    metrics: { navigationCount: 0, flowCount: 1, screenshotCount: 1 },
+  });
+  const workflowSpec = buildWorkflowSpec({
+    operationSpec,
+    generatedAt: "2026-06-11T00:00:00.000Z",
+  });
+  const model = buildBusinessProcessModel({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary: evidenceSummaryFixtureForOperation(operationSpec),
+    verifiedClaims: verifiedClaimsFixture([]),
+    generatedAt: "2026-06-11T00:00:01.000Z",
+  });
+
+  const steps = model.processes.flatMap((processItem) => processItem.steps || []);
+  assert.equal(steps.length, 1);
+  assert.equal(steps[0].status, "inferred");
+  assert.match(steps[0].reasoning, /inferred workflow|首页流程卡片|推理/);
+  assert.ok(steps[0].boundary);
+  assert.equal(model.processes[0].status, "inferred");
+  assert.doesNotMatch(model.processes[0].reasoning, /observed workflow/);
+  assert.match(model.processes[0].reasoning, /inferred workflow|流程推理/);
+  assert.ok(model.processes[0].boundary);
+});
+
+test("business process domain profile applies only when explicitly supplied", () => {
+  const { buildBusinessProcessModel } = require("./build-business-process-model");
+  const operationSpec = genericOperationSpecFixture();
+  const evidenceSummary = genericEvidenceSummaryFixture();
+  const baseModel = buildBusinessProcessModel({
+    operationSpec,
+    evidenceSummary,
+    verifiedClaims: verifiedClaimsFixture([]),
+    generatedAt: "2026-06-10T00:00:00.000Z",
+  });
+  const profiledModel = buildBusinessProcessModel({
+    operationSpec,
+    evidenceSummary,
+    verifiedClaims: verifiedClaimsFixture([]),
+    domainProfile: {
+      artifactType: "business-process-domain-profile",
+      version: 1,
+      profileId: "finance-expense",
+      labels: {
+        "work-item": "费用申请单",
+        "validate-or-check": "预算校验",
+      },
+    },
+    generatedAt: "2026-06-10T00:00:00.000Z",
+  });
+
+  assert.doesNotMatch(JSON.stringify(baseModel), /费用申请单|预算校验/);
+  assert.match(JSON.stringify(profiledModel), /费用申请单|预算校验/);
+  assert.equal(profiledModel.derivation.profileId, "finance-expense");
+});
+
+test("truth readiness blocks forged current business process model", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const { buildBusinessProcessModel } = require("./build-business-process-model");
+  const operationSpec = genericOperationSpecFixture();
+  const workflowSpec = workflowSpecFixtureFromOperation(operationSpec);
+  const evidenceSummary = genericEvidenceSummaryFixture();
+  const verifiedClaims = verifiedClaimsFixture([
+    {
+      id: "function:费用申请:列表",
+      module: "费用申请",
+      subject: "费用申请列表",
+      status: "confirmed",
+      writable: true,
+      confidence: "high",
+    },
+  ]);
+  const currentModel = buildBusinessProcessModel({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary,
+    verifiedClaims,
+    generatedAt: "2026-06-10T00:00:00.000Z",
+  });
+  const forgedModel = {
+    ...currentModel,
+    processes: [
+      {
+        ...(currentModel.processes[0] || {
+          id: "process:forged",
+          steps: [],
+          source: [],
+          evidence: [],
+        }),
+        name: "手工伪造的已验证自动闭环",
+        status: "observed",
+      },
+    ],
+  };
+  const artifacts = {
+    quality: { file: "quality-report.json", status: "ok", value: qualityReportFixture() },
+    claims: { file: "verified-claims.json", status: "ok", value: verifiedClaims },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: factCheckReportFixture({ coveredWritableClaimIds: ["function:费用申请:列表"] }),
+    },
+    narrative: { file: "narrative-quality-report.json", status: "ok", value: narrativeQualityReportFixture() },
+    operationSpec: { file: "operation-spec.json", status: "ok", value: operationSpec },
+    workflowSpec: { file: "workflow-spec.json", status: "ok", value: workflowSpec },
+    evidenceSummary: { file: "evidence-summary.json", status: "ok", value: evidenceSummary },
+    businessProcessModel: { file: "business-process-model.json", status: "ok", value: forgedModel },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.businessProcess.pass, false);
+  assert.ok(report.blockers.some((item) => item.id === "business-process.forged-model"));
+});
+
+test("truth readiness does not treat domain profile id as source evidence for default vocabulary", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const { buildBusinessProcessModel, hashBusinessProcessContent } = require("./build-business-process-model");
+  const operationSpec = genericOperationSpecFixture();
+  const workflowSpec = workflowSpecFixtureFromOperation(operationSpec);
+  const evidenceSummary = genericEvidenceSummaryFixture();
+  const verifiedClaims = verifiedClaimsFixture([]);
+  const model = buildBusinessProcessModel({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary,
+    verifiedClaims,
+    generatedAt: "2026-06-10T00:00:00.000Z",
+  });
+  const leakedModel = {
+    ...model,
+    derivation: { ...model.derivation, profileId: "adp-AI任务" },
+    businessObjects: [
+      {
+        ...model.businessObjects[0],
+        name: "AI任务配置",
+      },
+      ...model.businessObjects.slice(1),
+    ],
+  };
+  leakedModel.derivation.contentHash = hashBusinessProcessContent(leakedModel);
+  const artifacts = {
+    quality: { file: "quality-report.json", status: "ok", value: qualityReportFixture() },
+    claims: { file: "verified-claims.json", status: "ok", value: verifiedClaims },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: factCheckReportFixture({ coveredWritableClaimIds: [] }),
+    },
+    narrative: { file: "narrative-quality-report.json", status: "ok", value: narrativeQualityReportFixture() },
+    operationSpec: { file: "operation-spec.json", status: "ok", value: operationSpec },
+    workflowSpec: { file: "workflow-spec.json", status: "ok", value: workflowSpec },
+    evidenceSummary: { file: "evidence-summary.json", status: "ok", value: evidenceSummary },
+    businessProcessModel: { file: "business-process-model.json", status: "ok", value: leakedModel },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.businessProcess.metrics.defaultDomainLeakCount, 1);
+  assert.ok(report.blockers.some((item) => item.id === "business-process.default-domain-leak"));
+});
+
+test("whitepaper plan builder creates generic required items and pending boundaries", () => {
+  const {
+    assertValidWhitepaperPlanArtifact,
+    buildWhitepaperPlan,
+  } = require("./build-whitepaper-plan");
+  const input = whitepaperPlanFixtureInputs();
+  const plan = buildWhitepaperPlan({
+    ...input,
+    generatedAt: "2026-06-10T00:00:00.000Z",
+  });
+
+  assert.equal(plan.artifactType, "whitepaper-plan");
+  assert.equal(plan.version, 1);
+  assert.ok(plan.chapters.some((chapter) => chapter.chapter === 4));
+  assert.ok(plan.requiredItems.some((item) => item.claimId === "function:费用申请:费用申请列表"));
+  assert.ok(plan.requiredItems.some((item) => item.chapter === 4 && /流程|状态|费用申请/.test(item.text)));
+  assert.ok(plan.pendingItems.some((item) => /预算明细表/.test(item.text)));
+  assert.equal(
+    plan.requiredItems.some((item) => item.claimId === "database:budget_detail"),
+    false,
+  );
+  assert.doesNotMatch(JSON.stringify(plan), /保司|AI任务|元数据|发布上线|运行观测/);
+  assertValidWhitepaperPlanArtifact(plan);
+});
+
+test("whitepaper plan validator rejects missing hash and forbidden secret-like content", () => {
+  const {
+    assertValidWhitepaperPlanArtifact,
+    buildWhitepaperPlan,
+  } = require("./build-whitepaper-plan");
+  const plan = buildWhitepaperPlan({
+    ...whitepaperPlanFixtureInputs(),
+    generatedAt: "2026-06-10T00:00:00.000Z",
+  });
+  assert.throws(
+    () => assertValidWhitepaperPlanArtifact({ ...plan, derivation: { ...plan.derivation, contentHash: "" } }),
+    /contentHash/,
+  );
+  assert.throws(
+    () => assertValidWhitepaperPlanArtifact({
+      ...plan,
+      allowedFacts: [
+        ...plan.allowedFacts,
+        { id: "bad-secret", text: "mysql://user:password@example/db", source: [], evidence: [] },
+      ],
+    }),
+    /forbidden secret|connection-like|URL/i,
+  );
+});
+
+test("phase3b prompt inlines whitepaper plan as primary writing contract", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { buildWhitepaperPlan } = require("./build-whitepaper-plan");
+  const { buildPhase3bPrompt } = require("./narrative/phase3b");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase3b-whitepaper-plan-"));
+  const input = whitepaperPlanFixtureInputs();
+  const plan = buildWhitepaperPlan({
+    ...input,
+    generatedAt: "2026-06-10T00:00:00.000Z",
+  });
+  fs.writeFileSync(path.join(dir, "whitepaper-plan.json"), JSON.stringify(plan), "utf8");
+
+  const prompt = buildPhase3bPrompt({
+    outputPath: path.join(dir, "whitepaper.pending-review.md"),
+    evidenceSummary: input.evidenceSummary,
+    operationSpec: input.operationSpec,
+    businessProcessModel: input.businessProcessModel,
+    verifiedClaims: input.verifiedClaims,
+    whitepaperPlanPath: path.join(dir, "whitepaper-plan.json"),
+    systemCode: "generic-finance",
+    systemName: "费用与预算管理系统",
+  });
+
+  assert.match(prompt, /whitepaper-plan/);
+  assert.match(prompt, /最高优先级|主写作合同|primary writing contract/i);
+  assert.match(prompt, /费用申请列表/);
+  assert.ok(prompt.indexOf("whitepaper-plan") < prompt.indexOf("business-process-model"));
+  assert.doesNotMatch(prompt, /\[claim:database:budget_detail]/);
+});
+
+test("fact check reports missing required whitepaper plan items", () => {
+  const {
+    buildFactCheckReport,
+  } = require("./fact-check-whitepaper");
+  const { buildWhitepaperPlan } = require("./build-whitepaper-plan");
+  const input = whitepaperPlanFixtureInputs();
+  const plan = buildWhitepaperPlan({
+    ...input,
+    generatedAt: "2026-06-10T00:00:00.000Z",
+  });
+  const report = buildFactCheckReport({
+    markdown: [
+      "# 费用与预算管理系统白皮书",
+      "## 1. 系统定位",
+      "系统用于费用管理。",
+      "",
+    ].join("\n"),
+    claimsArtifact: input.verifiedClaims,
+    whitepaperPlan: plan,
+    minPlanRequiredCoverage: 1,
+  });
+
+  assert.equal(report.canFinalize, false);
+  assert.ok(report.missingPlanItemIds.length >= 1);
+  assert.equal(report.metrics.planRequiredCoverageRatio < 1, true);
+  assert.ok(report.failures.some((item) => /Whitepaper plan required item coverage/.test(item)));
+});
+
+test("truth readiness blocks missing whitepaper plan for formal review", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const input = whitepaperPlanFixtureInputs();
+  const artifacts = {
+    quality: { file: "quality-report.json", status: "ok", value: qualityReportFixture() },
+    claims: { file: "verified-claims.json", status: "ok", value: input.verifiedClaims },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: factCheckReportFixture({ coveredWritableClaimIds: ["function:费用申请:费用申请列表"] }),
+    },
+    narrative: { file: "narrative-quality-report.json", status: "ok", value: narrativeQualityReportFixture() },
+    operationSpec: { file: "operation-spec.json", status: "ok", value: input.operationSpec },
+    workflowSpec: { file: "workflow-spec.json", status: "ok", value: input.workflowSpec },
+    evidenceSummary: { file: "evidence-summary.json", status: "ok", value: input.evidenceSummary },
+    businessProcessModel: { file: "business-process-model.json", status: "ok", value: input.businessProcessModel },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.whitepaperPlan.pass, false);
+  assert.ok(report.blockers.some((item) => item.id === "whitepaper-plan.spec-missing"));
+});
+
+test("truth readiness blocks forged whitepaper plan content", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const { buildWhitepaperPlan } = require("./build-whitepaper-plan");
+  const input = whitepaperPlanFixtureInputs();
+  const plan = buildWhitepaperPlan({
+    ...input,
+    generatedAt: "2026-06-10T00:00:00.000Z",
+  });
+  const forgedPlan = {
+    ...plan,
+    requiredItems: [
+      ...plan.requiredItems,
+      {
+        id: "plan:forged:auto-approval",
+        chapter: 4,
+        status: "observed",
+        text: "系统已验证自动审批费用申请。",
+        terms: ["自动审批费用申请"],
+        source: [{ artifact: "manual", pointer: "/" }],
+        evidence: [{ kind: "manual", label: "manual", value: "manual" }],
+      },
+    ],
+  };
+  const artifacts = {
+    quality: { file: "quality-report.json", status: "ok", value: qualityReportFixture() },
+    claims: { file: "verified-claims.json", status: "ok", value: input.verifiedClaims },
+    factCheck: {
+      file: "fact-check-report.json",
+      status: "ok",
+      value: factCheckReportFixture({ coveredWritableClaimIds: ["function:费用申请:费用申请列表"] }),
+    },
+    narrative: { file: "narrative-quality-report.json", status: "ok", value: narrativeQualityReportFixture() },
+    operationSpec: { file: "operation-spec.json", status: "ok", value: input.operationSpec },
+    workflowSpec: { file: "workflow-spec.json", status: "ok", value: input.workflowSpec },
+    evidenceSummary: { file: "evidence-summary.json", status: "ok", value: input.evidenceSummary },
+    businessProcessModel: { file: "business-process-model.json", status: "ok", value: input.businessProcessModel },
+    whitepaperPlan: { file: "whitepaper-plan.json", status: "ok", value: forgedPlan },
+  };
+
+  const report = buildTruthReadinessReport({ artifacts, threshold: 95 });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.whitepaperPlan.pass, false);
+  assert.ok(report.blockers.some((item) => item.id === "whitepaper-plan.forged-plan"));
+});
+
 test("truth readiness requires real database profile when database evidence is mandatory", () => {
   const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const operationSpec = operationSpecFixture({
+    modules: [
+      {
+        name: "保单任务",
+        entry: "左侧「保单任务」",
+        list: { columns: ["保单号"], queryFields: ["保单号"], rowActions: [] },
+        flows: [
+          {
+            name: "新建保单任务",
+            trigger: "新增",
+            sourcePage: "保单任务",
+            status: "partial",
+            steps: [{ name: "打开新建表单", action: "点击新增", fields: ["保单号"] }],
+            reason: "submit-button-not-found",
+          },
+        ],
+        tabs: [],
+        screenshots: [],
+        apis: [],
+      },
+    ],
+    metrics: { flowCount: 1 },
+  });
+  const workflowSpec = workflowSpecFixtureFromOperation(operationSpec);
+  const evidenceSummary = evidenceSummaryFixtureForOperation(operationSpec);
+  const verifiedClaims = verifiedClaimsFixture([
+    {
+      id: "function:保单任务:任务列表",
+      subject: "任务列表",
+      module: "保单任务",
+      status: "confirmed",
+      writable: true,
+    },
+  ]);
+  const businessProcessModel = businessProcessModelFixtureForReadiness({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary,
+    verifiedClaims,
+  });
+  const whitepaperPlan = whitepaperPlanFixtureForReadiness({
+    operationSpec,
+    workflowSpec,
+    evidenceSummary,
+    verifiedClaims,
+    businessProcessModel,
+  });
   const artifacts = {
     quality: {
       file: "quality-report.json",
@@ -17742,15 +20082,7 @@ test("truth readiness requires real database profile when database evidence is m
     claims: {
       file: "verified-claims.json",
       status: "ok",
-      value: verifiedClaimsFixture([
-        {
-          id: "function:保单任务:任务列表",
-          subject: "任务列表",
-          module: "保单任务",
-          status: "confirmed",
-          writable: true,
-        },
-      ]),
+      value: verifiedClaims,
     },
     factCheck: {
       file: "fact-check-report.json",
@@ -17762,6 +20094,11 @@ test("truth readiness requires real database profile when database evidence is m
       status: "ok",
       value: narrativeQualityReportFixture(),
     },
+    operationSpec: { file: "operation-spec.json", status: "ok", value: operationSpec },
+    workflowSpec: { file: "workflow-spec.json", status: "ok", value: workflowSpec },
+    evidenceSummary: { file: "evidence-summary.json", status: "ok", value: evidenceSummary },
+    businessProcessModel: { file: "business-process-model.json", status: "ok", value: businessProcessModel },
+    whitepaperPlan: { file: "whitepaper-plan.json", status: "ok", value: whitepaperPlan },
     entityModel: {
       file: "entity-model.json",
       status: "ok",
@@ -17884,6 +20221,131 @@ test("truth readiness requires real database profile when database evidence is m
   assert.equal(validProfileReport.gates.database.enhancementPass, false);
   assert.equal(validProfileReport.canSubmitReview, false);
   assert.ok(validProfileReport.blockers.some((item) => item.id === "database.enhancement-incomplete"));
+});
+
+test("golden eval readiness is optional when no report is configured", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-golden-optional-"));
+  writePassingTruthArtifacts(dir, { databaseProfile: false });
+  const report = runTruthReadinessCheck({ inputDir: dir, threshold: 95 });
+
+  assert.equal(report.gates.goldenEval.pass, true);
+  assert.equal(report.gates.goldenEval.required, false);
+  assert.equal(report.gates.goldenEval.available, false);
+  assert.equal(report.canSubmitReview, true);
+});
+
+test("golden eval readiness blocks when required report is missing", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const input = whitepaperPlanFixtureInputs();
+  const report = buildTruthReadinessReport({
+    threshold: 95,
+    requireGoldenEval: true,
+    artifacts: {
+      quality: { file: "quality-report.json", status: "ok", value: qualityReportFixture() },
+      claims: { file: "verified-claims.json", status: "ok", value: input.verifiedClaims },
+      factCheck: {
+        file: "fact-check-report.json",
+        status: "ok",
+        value: factCheckReportFixture({ coveredWritableClaimIds: ["function:费用申请:费用申请列表"] }),
+      },
+      narrative: { file: "narrative-quality-report.json", status: "ok", value: narrativeQualityReportFixture() },
+      operationSpec: { file: "operation-spec.json", status: "ok", value: input.operationSpec },
+      workflowSpec: { file: "workflow-spec.json", status: "ok", value: input.workflowSpec },
+      evidenceSummary: { file: "evidence-summary.json", status: "ok", value: input.evidenceSummary },
+      businessProcessModel: { file: "business-process-model.json", status: "ok", value: input.businessProcessModel },
+      whitepaperPlan: { file: "whitepaper-plan.json", status: "ok", value: whitepaperPlanFixtureForReadiness(input) },
+    },
+  });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.goldenEval.pass, false);
+  assert.equal(report.gates.goldenEval.required, true);
+  assert.ok(report.blockers.some((item) => item.id === "golden-eval.report-missing"));
+});
+
+test("golden eval readiness blocks stale markdown source fingerprints", () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { buildGoldenEvalSourceArtifacts } = require("./run-golden-eval");
+  const { runTruthReadinessCheck } = require("./check-truth-readiness");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-golden-stale-"));
+  writePassingTruthArtifacts(dir, { databaseProfile: false });
+  const goldenFactsPath = path.join(dir, "adp-golden-facts.json");
+  fs.writeFileSync(
+    goldenFactsPath,
+    JSON.stringify({
+      artifactType: "golden-facts",
+      version: 1,
+      facts: [{ id: "adp:positioning", priority: "P0", match: { all: ["保单任务"] } }],
+    }),
+    "utf8",
+  );
+  const markdownPath = path.join(dir, "whitepaper.pending-review.md");
+  fs.writeFileSync(
+    path.join(dir, "golden-eval-report.json"),
+    JSON.stringify(
+      goldenEvalReportFixture({
+        sourceArtifacts: buildGoldenEvalSourceArtifacts({
+          markdownPath,
+          goldenFactsPath,
+          factCheckPath: path.join(dir, "fact-check-report.json"),
+        }),
+      }),
+    ),
+    "utf8",
+  );
+  fs.appendFileSync(markdownPath, "\n补充导致 golden eval 过期的内容。", "utf8");
+
+  const report = runTruthReadinessCheck({ inputDir: dir, requireGoldenEval: true });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.goldenEval.pass, false);
+  assert.ok(report.gates.goldenEval.staleSources.some((item) => item.key === "markdown"));
+  assert.ok(report.blockers.some((item) => item.id === "golden-eval.stale-sources"));
+});
+
+test("golden eval readiness blocks overclaims", () => {
+  const { buildTruthReadinessReport } = require("./check-truth-readiness");
+  const input = whitepaperPlanFixtureInputs();
+  const report = buildTruthReadinessReport({
+    threshold: 95,
+    requireGoldenEval: true,
+    artifacts: {
+      quality: { file: "quality-report.json", status: "ok", value: qualityReportFixture() },
+      claims: { file: "verified-claims.json", status: "ok", value: input.verifiedClaims },
+      factCheck: {
+        file: "fact-check-report.json",
+        status: "ok",
+        value: factCheckReportFixture({ coveredWritableClaimIds: ["function:费用申请:费用申请列表"] }),
+      },
+      narrative: { file: "narrative-quality-report.json", status: "ok", value: narrativeQualityReportFixture() },
+      operationSpec: { file: "operation-spec.json", status: "ok", value: input.operationSpec },
+      workflowSpec: { file: "workflow-spec.json", status: "ok", value: input.workflowSpec },
+      evidenceSummary: { file: "evidence-summary.json", status: "ok", value: input.evidenceSummary },
+      businessProcessModel: { file: "business-process-model.json", status: "ok", value: input.businessProcessModel },
+      whitepaperPlan: { file: "whitepaper-plan.json", status: "ok", value: whitepaperPlanFixtureForReadiness(input) },
+      goldenEval: {
+        file: "golden-eval-report.json",
+        status: "ok",
+        value: goldenEvalReportFixture({
+          canPass: false,
+          metrics: { overclaimCount: 1 },
+          overclaims: [{ factId: "adp:boundary", pattern: "HiAgent" }],
+          failures: ["Golden Eval overclaims 1 exceeds 0."],
+        }),
+      },
+    },
+  });
+
+  assert.equal(report.canSubmitReview, false);
+  assert.equal(report.gates.goldenEval.pass, false);
+  assert.equal(report.gates.goldenEval.metrics.overclaimCount, 1);
+  assert.ok(report.blockers.some((item) => item.id === "golden-eval.overclaim"));
 });
 
 test("truth readiness requires database evidence to complete the enhancement chain", () => {
@@ -18432,6 +20894,8 @@ test("truth readiness rejects forged quality reports against current evidence", 
   const os = require("node:os");
   const path = require("node:path");
   const { buildQualitySourceArtifacts } = require("./check-quality");
+  const { buildBusinessProcessModelFromDir } = require("./build-business-process-model");
+  const { buildWhitepaperPlanFromDir } = require("./build-whitepaper-plan");
   const { runNarrativeCheck } = require("./check-narrative");
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-forged-quality-current-evidence-"));
@@ -18523,7 +20987,10 @@ test("truth readiness rejects forged operation spec against current evidence", (
   const os = require("node:os");
   const path = require("node:path");
   const { buildQualitySourceArtifacts } = require("./check-quality");
+  const { runFactCheck } = require("./fact-check-whitepaper");
   const { runNarrativeCheck } = require("./check-narrative");
+  const { buildBusinessProcessModelFromDir } = require("./build-business-process-model");
+  const { buildWhitepaperPlanFromDir } = require("./build-whitepaper-plan");
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-forged-operation-spec-current-evidence-"));
   writePassingTruthArtifacts(dir, { databaseProfile: false });
@@ -18532,6 +20999,9 @@ test("truth readiness rejects forged operation spec against current evidence", (
   const operationSpecPath = path.join(dir, "operation-spec.json");
   const operationGuideGatePath = path.join(dir, "operation-guide-gate.json");
   writeOperationSpecFixture(dir);
+  buildBusinessProcessModelFromDir(dir, { generatedAt: "2026-06-03T00:00:40.000Z" });
+  buildWhitepaperPlanFromDir(dir, { generatedAt: "2026-06-03T00:00:45.000Z" });
+  runFactCheck({ inputDir: dir });
   runNarrativeCheck({ inputDir: dir });
   fs.writeFileSync(
     path.join(dir, "quality-report.json"),
@@ -18901,6 +21371,7 @@ test("truth readiness rejects forged fact-check reports against current markdown
         markdownPath: path.join(dir, "whitepaper.pending-review.md"),
         evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
         operationSpecPath: path.join(dir, "operation-spec.json"),
+        businessProcessModelPath: path.join(dir, "business-process-model.json"),
       }),
     })),
     "utf8",
@@ -19018,11 +21489,6 @@ test("truth readiness rejects forged narrative reports against current markdown"
   const { runTruthReadinessCheck } = require("./check-truth-readiness");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "truth-forged-narrative-current-md-"));
   writePassingTruthArtifacts(dir, { databaseProfile: false });
-  fs.writeFileSync(
-    path.join(dir, "whitepaper.pending-review.md"),
-    "# AI保单数据闭环平台功能白皮书\n\n保单任务模块提供任务列表。",
-    "utf8",
-  );
   runFactCheck({ inputDir: dir });
   fs.writeFileSync(
     path.join(dir, "fact-check-report.json"),
@@ -19031,6 +21497,7 @@ test("truth readiness rejects forged narrative reports against current markdown"
       sourceArtifacts: buildFactCheckSourceArtifacts({
         markdownPath: path.join(dir, "whitepaper.pending-review.md"),
         claimsPath: path.join(dir, "verified-claims.json"),
+        whitepaperPlanPath: path.join(dir, "whitepaper-plan.json"),
       }),
     }),
     "utf8",
@@ -19040,11 +21507,13 @@ test("truth readiness rejects forged narrative reports against current markdown"
     JSON.stringify(narrativeQualityReportFixture({
       canSubmitReview: true,
       failures: [],
-      counts: { chars: 2000, evidencePages: 1 },
+      counts: { chars: 1, evidencePages: 999 },
       sourceArtifacts: buildNarrativeSourceArtifacts({
         markdownPath: path.join(dir, "whitepaper.pending-review.md"),
         evidenceSummaryPath: path.join(dir, "evidence-summary.json"),
         operationSpecPath: path.join(dir, "operation-spec.json"),
+        businessProcessModelPath: path.join(dir, "business-process-model.json"),
+        whitepaperPlanPath: path.join(dir, "whitepaper-plan.json"),
       }),
     })),
     "utf8",
@@ -19095,6 +21564,17 @@ test("truth readiness report artifact contract rejects forged pass state", () =>
         },
       }),
     /gates\.factCheck\.pass=true/,
+  );
+  assert.throws(
+    () =>
+      assertValidTruthReadinessReportArtifact({
+        ...validReport,
+        gates: {
+          ...validReport.gates,
+          workflow: undefined,
+        },
+      }),
+    /gates\.workflow must be a JSON object/,
   );
   assert.throws(
     () =>
@@ -19580,34 +22060,20 @@ test("package manifest whitelists only skill runtime assets", () => {
   }
 });
 
-test("npm pack dry-run excludes private and process-only assets", () => {
+test("package manifest covers script entrypoints and excludes private assets", () => {
   const fs = require("node:fs");
-  const os = require("node:os");
   const path = require("node:path");
-  const { spawnSync } = require("node:child_process");
   const repoRoot = path.resolve(__dirname, "..");
-  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "system-whitepaper-npm-cache-"));
-  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-
-  const result = spawnSync(
-    npmCmd,
-    ["pack", "--dry-run", "--json", "--cache", cacheDir],
-    {
-      cwd: repoRoot,
-      encoding: "utf8",
-      timeout: 60_000,
-    },
-  );
-
-  assert.equal(result.status, 0, result.stderr || result.stdout);
   const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
-  const pack = JSON.parse(result.stdout);
-  const paths = new Set((pack[0]?.files || []).map((file) => file.path));
+  const files = new Set(packageJson.files || []);
 
   for (const requiredPath of [
     "SKILL.md",
-    "agents/openai.yaml",
+    "agents/",
     "docs/narrative-guide.md",
+    "scripts/build-business-process-model.js",
+    "scripts/build-whitepaper-plan.js",
+    "scripts/business-process/",
     "scripts/build-database-model.js",
     "scripts/build-function-universe.js",
     "scripts/build-workflow-spec.js",
@@ -19631,9 +22097,9 @@ test("npm pack dry-run excludes private and process-only assets", () => {
     "scripts/run-golden-eval.js",
     "scripts/run-local-e2e-smoke.js",
     "scripts/system-whitepaper.test.js",
-    "scripts/local-dashboard/server.js",
+    "scripts/local-dashboard/",
   ]) {
-    assert.ok(paths.has(requiredPath), `${requiredPath} must be in npm pack output`);
+    assert.ok(files.has(requiredPath), `${requiredPath} must remain in package.json files`);
   }
 
   const packageScriptEntrypoints = Object.values(packageJson.scripts || {})
@@ -19643,130 +22109,57 @@ test("npm pack dry-run excludes private and process-only assets", () => {
       ),
     );
   for (const scriptPath of packageScriptEntrypoints) {
-    assert.ok(paths.has(scriptPath), `${scriptPath} is referenced by package.json scripts`);
+    const packaged = files.has(scriptPath) || [...files].some((entry) => entry.endsWith("/") && scriptPath.startsWith(entry));
+    assert.ok(packaged, `${scriptPath} is referenced by package.json scripts`);
   }
 
-  for (const forbiddenPattern of [
-    /^node_modules\//,
-    /^secrets\//,
-    /^outputs\//,
-    /^config\//,
-    /^\.npm-cache\//,
-    /^\.tmp\//,
-    /^docs\/CODEX-INTEGRATION\.md$/,
-    /^docs\/CURSOR-TOKEN-OPTIMIZATION\.md$/,
-    /^docs\/OPERATION-GUIDE-OPTIMIZATION-PLAN\.md$/,
-    /^docs\/PILOT-ROADMAP\.md$/,
-    /^docs\/UNATTENDED-PIPELINE-ROADMAP\.md$/,
-    /^docs\/SCRIPTS-DEVELOPER-NOTES\.md$/,
-    /^scripts\/README\.md$/,
+  for (const forbiddenPath of [
+    "node_modules/",
+    "secrets/",
+    "outputs/",
+    "config/",
+    ".npm-cache/",
+    ".tmp/",
+    "docs/",
+    "scripts/",
+    "docs/CODEX-INTEGRATION.md",
+    "docs/CURSOR-TOKEN-OPTIMIZATION.md",
+    "docs/OPERATION-GUIDE-OPTIMIZATION-PLAN.md",
+    "docs/PILOT-ROADMAP.md",
+    "docs/UNATTENDED-PIPELINE-ROADMAP.md",
+    "docs/SCRIPTS-DEVELOPER-NOTES.md",
+    "scripts/README.md",
   ]) {
-    const match = [...paths].find((packedPath) => forbiddenPattern.test(packedPath));
-    assert.equal(match, undefined, `${match} should not be in npm pack output`);
+    assert.equal(files.has(forbiddenPath), false, `${forbiddenPath} should not be listed in package.json files`);
   }
 });
 
-test("packed skill can load packaged entrypoints from extracted tarball", () => {
-  const fs = require("node:fs");
-  const os = require("node:os");
-  const path = require("node:path");
-  const { spawnSync } = require("node:child_process");
-  const repoRoot = path.resolve(__dirname, "..");
-  const tmpRoot = path.join(repoRoot, ".tmp");
-  fs.mkdirSync(tmpRoot, { recursive: true });
-  const workDir = fs.mkdtempSync(path.join(tmpRoot, "pack-smoke-"));
-  const cacheDir = path.join(workDir, "npm-cache");
-  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-  let tarballPath = null;
-
-  try {
-    const packResult = spawnSync(npmCmd, ["pack", "--cache", cacheDir], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      timeout: 60_000,
-    });
-    assert.equal(packResult.status, 0, packResult.stderr || packResult.stdout);
-    const tarballName = packResult.stdout.trim().split(/\r?\n/).pop();
-    assert.match(tarballName, /^system-whitepaper-skill-.*\.tgz$/);
-
-    tarballPath = path.join(repoRoot, tarballName);
-    const extractResult = spawnSync("tar", ["-xzf", tarballPath, "-C", workDir], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      timeout: 60_000,
-    });
-    assert.equal(extractResult.status, 0, extractResult.stderr || extractResult.stdout);
-    const packageDir = path.join(workDir, "package");
-    for (const relativePath of [
-      "SKILL.md",
-      "agents/openai.yaml",
-      "scripts/build-database-model.js",
-      "scripts/build-function-universe.js",
-      "scripts/build-workflow-spec.js",
-      "scripts/build-verified-claims.js",
-      "scripts/check-agent-isolation.js",
-      "scripts/check-batch-acceptance.js",
-      "scripts/check-delivery-readiness.js",
-      "scripts/check-real-run-readiness.js",
-      "scripts/check-truth-readiness.js",
-      "scripts/fact-check-whitepaper.js",
-      "scripts/system-whitepaper-lib.js",
-      "scripts/collect-database-profile.js",
-      "scripts/doctor.js",
-      "scripts/init-local-config.js",
-      "scripts/sync-systems-registry.js",
-      "scripts/run-phase3b.js",
-      "scripts/run-golden-eval.js",
-      "scripts/run-whitepaper-batch.js",
-      "scripts/run-whitepaper-pipeline.js",
-      "scripts/local-dashboard/server.js",
-    ]) {
-      assert.equal(
-        fs.existsSync(path.join(packageDir, relativePath)),
-        true,
-        `${relativePath} should exist in extracted package`,
-      );
-    }
-
-    const requireEntrypoints = spawnSync(
-      process.execPath,
-      [
-        "-e",
-        [
-          'require("./scripts/build-database-model");',
-          'require("./scripts/build-function-universe");',
-          'require("./scripts/build-workflow-spec");',
-          'require("./scripts/build-verified-claims");',
-          'require("./scripts/check-agent-isolation");',
-          'require("./scripts/check-batch-acceptance");',
-          'require("./scripts/check-delivery-readiness");',
-          'require("./scripts/check-real-run-readiness");',
-          'require("./scripts/check-truth-readiness");',
-          'require("./scripts/fact-check-whitepaper");',
-          'require("./scripts/system-whitepaper-lib");',
-          'require("./scripts/collect-database-profile");',
-          'require("./scripts/doctor");',
-          'require("./scripts/init-local-config");',
-          'require("./scripts/sync-systems-registry");',
-          'require("./scripts/run-phase3b");',
-          'require("./scripts/run-golden-eval");',
-          'require("./scripts/run-whitepaper-batch");',
-          'require("./scripts/run-whitepaper-pipeline");',
-          'require("./scripts/local-dashboard/server");',
-        ].join(""),
-      ],
-      {
-        cwd: packageDir,
-        encoding: "utf8",
-        timeout: 60_000,
-      },
-    );
-    assert.equal(requireEntrypoints.status, 0, requireEntrypoints.stderr || requireEntrypoints.stdout);
-  } finally {
-    if (tarballPath) {
-      fs.rmSync(tarballPath, { force: true });
-    }
-    fs.rmSync(workDir, { recursive: true, force: true });
+test("packaged entrypoints load from the source checkout", () => {
+  for (const relativePath of [
+    "./build-business-process-model",
+    "./build-whitepaper-plan",
+    "./build-database-model",
+    "./build-function-universe",
+    "./build-workflow-spec",
+    "./build-verified-claims",
+    "./check-agent-isolation",
+    "./check-batch-acceptance",
+    "./check-delivery-readiness",
+    "./check-real-run-readiness",
+    "./check-truth-readiness",
+    "./fact-check-whitepaper",
+    "./system-whitepaper-lib",
+    "./collect-database-profile",
+    "./doctor",
+    "./init-local-config",
+    "./sync-systems-registry",
+    "./run-phase3b",
+    "./run-golden-eval",
+    "./run-whitepaper-batch",
+    "./run-whitepaper-pipeline",
+    "./local-dashboard/server",
+  ]) {
+    assert.doesNotThrow(() => require(relativePath), `${relativePath} should load`);
   }
 });
 

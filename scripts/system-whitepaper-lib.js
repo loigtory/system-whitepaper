@@ -1699,6 +1699,7 @@ function mergeFrameSnapshots(snapshots) {
       buttons: [],
       forms: [],
       tables: [],
+      overviewCards: [],
       landmarks: [],
     };
   }
@@ -1739,6 +1740,7 @@ function mergeFrameSnapshots(snapshots) {
   }
 
   const first = items[0];
+  const overviewCards = normalizeOverviewCards(items.flatMap((item) => item.overviewCards || []));
   return {
     title: items.map((item) => item.title).find(Boolean) || first.title || "",
     url: items.map((item) => item.url).find(Boolean) || first.url || "",
@@ -1754,6 +1756,7 @@ function mergeFrameSnapshots(snapshots) {
       .filter((table) => table.columns.length > 1 || table.rowCount)
       .filter((table) => table.columns.join("|") !== "操作")
       .slice(0, 40),
+    overviewCards,
     landmarks: Array.from(new Set(items.flatMap((item) => item.landmarks || []))).slice(0, 80),
   };
 }
@@ -1783,6 +1786,32 @@ function pruneResolvedFailedPages(evidence) {
   return { removed, remaining: kept.length };
 }
 
+function normalizeOverviewCardItem(item = {}) {
+  const title = normalizeUiText(item.title || item.name || item.label || item.text || "");
+  const description = normalizeUiText(item.description || item.summary || item.note || "");
+  if (!title && !description) return null;
+  return { title, description };
+}
+
+function normalizeOverviewCards(cards = []) {
+  const result = [];
+  for (const card of Array.isArray(cards) ? cards : []) {
+    const title = normalizeUiText(card.title || card.name || card.heading || "");
+    const items = (Array.isArray(card.items) ? card.items : [])
+      .map(normalizeOverviewCardItem)
+      .filter(Boolean)
+      .slice(0, 12);
+    if (!title || !items.length) continue;
+    result.push({
+      title,
+      items,
+      source: card.source || "home-overview-card",
+    });
+    if (result.length >= 12) break;
+  }
+  return result;
+}
+
 function selectMenusForEvidenceRefresh(menuMap, limit, evidence) {
   const menus = menuMap || [];
   return menus
@@ -1810,6 +1839,7 @@ function mergePageSnapshotIntoEvidence(evidence, snapshot) {
       title: snapshot.title || "",
       url: snapshot.url || "",
       mainAreas: snapshot.landmarks || [],
+      overviewCards: normalizeOverviewCards(snapshot.overviewCards),
       screenshot: snapshot.screenshot ? snapshot.screenshot.file : "",
       evidenceRefs: snapshot.screenshot ? [snapshot.screenshot.id] : [],
     });
@@ -1818,6 +1848,8 @@ function mergePageSnapshotIntoEvidence(evidence, snapshot) {
     pageRecord.url = snapshot.url || pageRecord.url;
     pageRecord.menuPath = snapshot.menuPath || pageRecord.menuPath;
     pageRecord.mainAreas = snapshot.landmarks || pageRecord.mainAreas;
+    const overviewCards = normalizeOverviewCards(snapshot.overviewCards);
+    if (overviewCards.length) pageRecord.overviewCards = overviewCards;
     if (snapshot.screenshot?.file) {
       pageRecord.screenshot = snapshot.screenshot.file;
       pageRecord.evidenceRefs = snapshot.screenshot.id
@@ -2612,6 +2644,15 @@ function buildEvidenceSummary(evidence) {
         fields: fields.slice(0, 20),
       };
     });
+  const homePages = (evidence.pageInventory || []).filter((page) => page.type === "home");
+  const homeOverviewCards = homePages.flatMap((page) =>
+    normalizeOverviewCards(page.overviewCards).map((card) => ({
+      ...card,
+      pageId: page.id || "",
+      pageTitle: page.title || "",
+      screenshot: page.screenshot || "",
+    })),
+  );
 
   return {
     schemaVersion: 1,
@@ -2632,6 +2673,9 @@ function buildEvidenceSummary(evidence) {
     })),
     functions,
     containers,
+    homeOverview: {
+      cards: homeOverviewCards,
+    },
     pendingItems: evidence.pendingItems || [],
     failedPages: evidence.failedPages || [],
     screenshots: (evidence.screenshotIndex || []).map((shot) => ({

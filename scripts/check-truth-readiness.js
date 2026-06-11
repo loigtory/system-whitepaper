@@ -31,6 +31,18 @@ const {
   assertValidOperationSpecArtifact,
   buildOperationSpec,
 } = require("./operation-spec/lib");
+const { assertValidWorkflowSpecArtifact } = require("./build-workflow-spec");
+const {
+  assertValidBusinessProcessModelArtifact,
+  buildBusinessProcessModel,
+  hashBusinessProcessContent,
+} = require("./build-business-process-model");
+const {
+  assertValidWhitepaperPlanArtifact,
+  buildWhitepaperPlan,
+  hashWhitepaperPlanContent,
+} = require("./build-whitepaper-plan");
+const { assertValidGoldenEvalReportArtifact } = require("./run-golden-eval");
 
 const DEFAULT_THRESHOLD = 0.95;
 const REDACTED_VALUE = "[redacted]";
@@ -53,8 +65,11 @@ const OPTIONAL_ARTIFACTS = {
   evidence: "evidence.json",
   evidenceSummary: "evidence-summary.json",
   operationSpec: "operation-spec.json",
+  workflowSpec: "workflow-spec.json",
   operationGuideGate: "operation-guide-gate.json",
   businessProcessModel: "business-process-model.json",
+  whitepaperPlan: "whitepaper-plan.json",
+  goldenEval: "golden-eval-report.json",
   dataDictionary: "data-dictionary.json",
   entityModel: "entity-model.json",
   functionUniverse: "function-universe.json",
@@ -80,6 +95,17 @@ function normalizeThreshold(value) {
 
 function percent(value) {
   return Math.round(clamp01(value) * 1000) / 10;
+}
+
+function withGoldenEvalNode(nodes = []) {
+  const result = [];
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    if (node === "quality" && result.includes("fact-check") && !result.includes("golden-eval")) {
+      result.push("golden-eval");
+    }
+    if (!result.includes(node)) result.push(node);
+  }
+  return result;
 }
 
 function assertJsonObject(value, message) {
@@ -215,8 +241,25 @@ function assertValidTruthReadinessReportArtifact(report = {}) {
     report.requirements.databaseEvidenceRequired,
     "truth-readiness-report.json requirements.databaseEvidenceRequired must be a boolean.",
   );
+  if (report.requirements.goldenEvalRequired !== undefined) {
+    assertBoolean(
+      report.requirements.goldenEvalRequired,
+      "truth-readiness-report.json requirements.goldenEvalRequired must be a boolean.",
+    );
+  }
   assertJsonObject(report.gates, "truth-readiness-report.json gates must be a JSON object.");
-  for (const gateId of ["evidence", "claims", "factCheck", "narrative", "database", "lineage"]) {
+  const requiredGateIds = [
+    "evidence",
+    "claims",
+    "factCheck",
+    "narrative",
+    "workflow",
+    "businessProcess",
+    "whitepaperPlan",
+    "database",
+    "lineage",
+  ];
+  for (const gateId of requiredGateIds) {
     assertJsonObject(report.gates[gateId], `truth-readiness-report.json gates.${gateId} must be a JSON object.`);
     assertBoolean(
       report.gates[gateId].pass,
@@ -233,9 +276,15 @@ function assertValidTruthReadinessReportArtifact(report = {}) {
     throw new Error("truth-readiness-report.json canSubmitReview=true requires score >= threshold.");
   }
   if (report.canSubmitReview) {
-    for (const gateId of ["evidence", "claims", "factCheck", "narrative", "database", "lineage"]) {
+    for (const gateId of requiredGateIds) {
       if (report.gates[gateId].pass !== true) {
         throw new Error(`truth-readiness-report.json canSubmitReview=true requires gates.${gateId}.pass=true.`);
+      }
+    }
+    if (report.requirements.goldenEvalRequired === true) {
+      assertJsonObject(report.gates.goldenEval, "truth-readiness-report.json gates.goldenEval must be a JSON object when Golden Eval is required.");
+      if (report.gates.goldenEval.pass !== true) {
+        throw new Error("truth-readiness-report.json canSubmitReview=true requires gates.goldenEval.pass=true when Golden Eval is required.");
       }
     }
   }
@@ -524,6 +573,16 @@ function buildLineageGate(artifacts = {}) {
     ["operationSpec", artifacts.quality, artifacts.operationSpec, "quality-report.json"],
     ["operationGuideGate", artifacts.quality, artifacts.operationGuideGate, "quality-report.json"],
     ["operationSpec", artifacts.operationGuideGate, artifacts.operationSpec, "operation-guide-gate.json"],
+    ["operationSpec", artifacts.workflowSpec, artifacts.operationSpec, "workflow-spec.json"],
+    ["operationSpec", artifacts.businessProcessModel, artifacts.operationSpec, "business-process-model.json"],
+    ["workflowSpec", artifacts.businessProcessModel, artifacts.workflowSpec, "business-process-model.json"],
+    ["evidenceSummary", artifacts.businessProcessModel, artifacts.evidenceSummary, "business-process-model.json"],
+    ["verifiedClaims", artifacts.businessProcessModel, artifacts.claims, "business-process-model.json"],
+    ["verifiedClaims", artifacts.whitepaperPlan, artifacts.claims, "whitepaper-plan.json"],
+    ["businessProcessModel", artifacts.whitepaperPlan, artifacts.businessProcessModel, "whitepaper-plan.json"],
+    ["workflowSpec", artifacts.whitepaperPlan, artifacts.workflowSpec, "whitepaper-plan.json"],
+    ["operationSpec", artifacts.whitepaperPlan, artifacts.operationSpec, "whitepaper-plan.json"],
+    ["evidenceSummary", artifacts.whitepaperPlan, artifacts.evidenceSummary, "whitepaper-plan.json"],
     ["databaseProfile", artifacts.dataDictionary, artifacts.databaseProfile, "data-dictionary.json"],
     ["databaseProfile", artifacts.entityModel, artifacts.databaseProfile, "entity-model.json"],
     ["dataDictionary", artifacts.entityModel, artifacts.dataDictionary, "entity-model.json"],
@@ -610,6 +669,7 @@ function findStaleFactCheckSources(artifacts = {}) {
   const required = {
     pendingReview: artifacts.pendingReview,
     claims: artifacts.claims,
+    whitepaperPlan: artifacts.whitepaperPlan,
   };
   const presentRequired = Object.entries(required).filter(([, artifact]) => artifact?.fingerprint?.exists);
   if (!presentRequired.length) return [];
@@ -662,6 +722,7 @@ function findStaleNarrativeSources(artifacts = {}) {
     evidenceSummary: artifacts.evidenceSummary,
     operationSpec: artifacts.operationSpec,
     businessProcessModel: artifacts.businessProcessModel,
+    whitepaperPlan: artifacts.whitepaperPlan,
   };
   const presentRequired = Object.entries(required).filter(([, artifact]) => artifact?.fingerprint?.exists);
   if (!presentRequired.length) return [];
@@ -880,6 +941,590 @@ function buildEvidenceGate(artifact, artifacts = {}) {
     metrics,
     counts: value.counts || {},
     failures,
+  };
+}
+
+function observedWorkflowStepCount(workflowSpec = {}) {
+  return Array.isArray(workflowSpec.workflows)
+    ? workflowSpec.workflows
+        .filter((workflow) => workflow && workflow.evidenceStatus === "observed")
+        .reduce((sum, workflow) => sum + (Array.isArray(workflow.steps) ? workflow.steps.length : 0), 0)
+    : 0;
+}
+
+function inferredWorkflowStepCount(workflowSpec = {}) {
+  return Array.isArray(workflowSpec.workflows)
+    ? workflowSpec.workflows
+        .filter((workflow) => workflow && workflow.evidenceStatus === "inferred")
+        .reduce((sum, workflow) => sum + (Array.isArray(workflow.steps) ? workflow.steps.length : 0), 0)
+    : 0;
+}
+
+function buildWorkflowGate(artifacts = {}) {
+  const operationSpec = artifacts.operationSpec || {};
+  const workflowSpec = artifacts.workflowSpec || {};
+  const workflowSpecMissing = workflowSpec.status === "missing" || (!workflowSpec.status && !workflowSpec.value);
+  const failures = [];
+  const contractFailures = [];
+  const operationMetrics = operationSpec.value?.metrics || {};
+  const workflowMetrics = workflowSpec.value?.metrics || {};
+  const operationFlowCount = Number(operationMetrics.flowCount || 0);
+  const observedWorkflowCount = Number(workflowMetrics.observedWorkflowCount || 0);
+  const inferredWorkflowCount = Number(workflowMetrics.inferredWorkflowCount || 0);
+  const homeOverviewWorkflowCount = Number(workflowMetrics.homeOverviewWorkflowCount || 0);
+  const narratableWorkflowCount = Number(
+    workflowMetrics.narratableWorkflowCount || observedWorkflowCount + inferredWorkflowCount,
+  );
+  const candidateWorkflowCount = Number(workflowMetrics.candidateWorkflowCount || 0);
+  const stepCount = Number(workflowMetrics.stepCount || 0);
+  const computedObservedStepCount =
+    workflowSpec.status === "ok" ? observedWorkflowStepCount(workflowSpec.value || {}) : 0;
+  const computedInferredStepCount =
+    workflowSpec.status === "ok" ? inferredWorkflowStepCount(workflowSpec.value || {}) : 0;
+
+  if (operationSpec.status !== "ok") {
+    failures.push(`${operationSpec.file || "operation-spec.json"} is ${operationSpec.status || "missing"}.`);
+  } else {
+    try {
+      assertValidOperationSpecArtifact(operationSpec.value);
+    } catch (error) {
+      contractFailures.push(error.message);
+    }
+  }
+
+  let workflowLineageFailure = "";
+  if (workflowSpecMissing) {
+    failures.push("workflow-spec.json is missing.");
+  } else if (workflowSpec.status !== "ok") {
+    failures.push(`${workflowSpec.file || "workflow-spec.json"} is ${workflowSpec.status}.`);
+  } else {
+    const shouldCheckWorkflowLineage =
+      normalizeSourceFingerprint(workflowSpec.value?.sourceArtifacts?.operationSpec || {}).exists ||
+      Boolean(operationSpec.fingerprint?.exists);
+    try {
+      if (shouldCheckWorkflowLineage) {
+        assertValidWorkflowSpecArtifact(workflowSpec.value, operationSpec.value || null);
+      } else {
+        assertJsonObject(workflowSpec.value, "workflow-spec.json must be an object.");
+        if (workflowSpec.value.artifactType !== "workflow-spec") {
+          throw new Error("workflow-spec.json artifactType must be workflow-spec.");
+        }
+        assertJsonObject(workflowSpec.value.metrics, "workflow-spec.json metrics must be an object.");
+        assertArray(workflowSpec.value.workflows, "workflow-spec.json workflows must be an array.");
+      }
+    } catch (error) {
+      contractFailures.push(error.message);
+    }
+    workflowLineageFailure = shouldCheckWorkflowLineage
+      ? lineageMismatch("operationSpec", workflowSpec, operationSpec, "workflow-spec.json")
+      : "";
+    if (workflowLineageFailure) failures.push(workflowLineageFailure);
+  }
+
+  if (operationFlowCount <= 0) {
+    failures.push("operation-spec.json has no operation flows.");
+  }
+  if (narratableWorkflowCount <= 0 || (computedObservedStepCount + computedInferredStepCount) <= 0) {
+    failures.push("workflow-spec.json has no observed or inferred narratable workflow steps.");
+  }
+
+  const artifactContractValid = contractFailures.length === 0;
+  const pass = artifactContractValid && failures.length === 0;
+  return {
+    id: "workflow",
+    label: "Workflow evidence",
+    pass,
+    artifactStatus: workflowSpec.status || "missing",
+    artifactContractValid,
+    contractFailures,
+    score: pass ? 1 : 0,
+    scorePercent: pass ? 100 : 0,
+    metrics: {
+      operationFlowCount,
+      workflowCount: Number(workflowMetrics.workflowCount || 0),
+      observedWorkflowCount,
+      inferredWorkflowCount,
+      homeOverviewWorkflowCount,
+      narratableWorkflowCount,
+      candidateWorkflowCount,
+      observedWorkflowStepCount: computedObservedStepCount,
+      inferredWorkflowStepCount: computedInferredStepCount,
+      stepCount,
+      missingWorkflowSpec: workflowSpecMissing,
+      sourceFresh: workflowSpec.status === "ok" && !workflowLineageFailure,
+    },
+    failures: [...contractFailures, ...failures],
+  };
+}
+
+function businessProcessSourceMismatches(artifacts = {}) {
+  const model = artifacts.businessProcessModel || {};
+  if (model.status !== "ok" || !model.fingerprint?.exists) return [];
+  const checks = [
+    ["operationSpec", artifacts.operationSpec],
+    ["workflowSpec", artifacts.workflowSpec],
+    ["evidenceSummary", artifacts.evidenceSummary],
+    ["verifiedClaims", artifacts.claims],
+  ];
+  const failures = [];
+  for (const [key, current] of checks) {
+    const recorded = model.value?.sourceArtifacts?.[key];
+    const recordedSourceExists = normalizeSourceFingerprint(recorded || {}).exists;
+    if (!recorded && !current?.fingerprint?.exists) continue;
+    if (!recordedSourceExists && !current?.fingerprint?.exists) continue;
+    const failure = lineageMismatch(key, model, current, "business-process-model.json");
+    if (failure) failures.push({ key, message: failure });
+  }
+  return failures;
+}
+
+function businessProcessAllowedEvidenceText(model = {}, artifacts = {}) {
+  return stableJson({
+    operationSpec: artifacts.operationSpec?.value || {},
+    workflowSpec: artifacts.workflowSpec?.value || {},
+    evidenceSummary: artifacts.evidenceSummary?.value || {},
+    verifiedClaims: artifacts.claims?.value || {},
+  });
+}
+
+function businessProcessDefaultDomainLeaks(model = {}, artifacts = {}) {
+  const allowed = businessProcessAllowedEvidenceText(model, artifacts);
+  const leaks = [];
+  for (const [section, items] of [
+    ["businessObjects", model.businessObjects],
+    ["states", model.states],
+    ["moduleResponsibilities", model.moduleResponsibilities],
+    ["processes", model.processes],
+    ["feedbackLoops", model.feedbackLoops],
+  ]) {
+    for (const [index, item] of (Array.isArray(items) ? items : []).entries()) {
+      const text = stableJson(item);
+      if (/保司|AI任务|元数据|发布上线|运行观测/.test(text) && !/保司|AI任务|元数据|发布上线|运行观测/.test(allowed)) {
+        leaks.push({ section, index });
+      }
+    }
+  }
+  return leaks;
+}
+
+function countBusinessProcessStepsMissingEvidence(model = {}) {
+  let count = 0;
+  for (const processItem of Array.isArray(model.processes) ? model.processes : []) {
+    for (const step of Array.isArray(processItem.steps) ? processItem.steps : []) {
+      if (!Array.isArray(step.source) || !step.source.length || !Array.isArray(step.evidence) || !step.evidence.length) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+function recomputeBusinessProcessModelForGate(artifacts = {}) {
+  if (artifacts.operationSpec?.status !== "ok" || artifacts.evidenceSummary?.status !== "ok" || artifacts.claims?.status !== "ok") {
+    return null;
+  }
+  return buildBusinessProcessModel({
+    operationSpec: artifacts.operationSpec.value || {},
+    workflowSpec: artifacts.workflowSpec?.status === "ok" ? artifacts.workflowSpec.value : {},
+    evidenceSummary: artifacts.evidenceSummary.value || {},
+    verifiedClaims: artifacts.claims.value || {},
+    generatedAt: "truth-readiness-recompute",
+    sourceArtifacts: artifacts.businessProcessModel?.value?.sourceArtifacts || {},
+  });
+}
+
+function buildBusinessProcessGate(artifacts = {}) {
+  const modelArtifact = artifacts.businessProcessModel || {};
+  const model = modelArtifact.value || {};
+  const failures = [];
+  const contractFailures = [];
+  const modelMissing = modelArtifact.status === "missing" || (!modelArtifact.status && !modelArtifact.value);
+
+  if (modelMissing) {
+    failures.push("business-process-model.json is missing.");
+  } else if (modelArtifact.status !== "ok") {
+    failures.push(`${modelArtifact.file || "business-process-model.json"} is ${modelArtifact.status}.`);
+  } else {
+    try {
+      assertValidBusinessProcessModelArtifact(model, { validateContentHash: false });
+    } catch (error) {
+      contractFailures.push(error.message);
+    }
+  }
+
+  const staleSources = contractFailures.length ? [] : businessProcessSourceMismatches(artifacts);
+  failures.push(...staleSources.map((item) => item.message));
+
+  const stepEvidenceMissingCount = modelArtifact.status === "ok" ? countBusinessProcessStepsMissingEvidence(model) : 0;
+  if (stepEvidenceMissingCount > 0) {
+    failures.push("business-process-model.json contains process steps without source/evidence.");
+  }
+
+  const domainLeaks = modelArtifact.status === "ok" ? businessProcessDefaultDomainLeaks(model, artifacts) : [];
+  if (domainLeaks.length) {
+    failures.push("business-process-model.json contains default domain-specific vocabulary unsupported by source evidence.");
+  }
+
+  let recomputedContentHash = "";
+  let actualContentHash = "";
+  let forged = false;
+  if (modelArtifact.status === "ok" && !contractFailures.length && !staleSources.length) {
+    actualContentHash = hashBusinessProcessContent(model);
+    if (actualContentHash !== model.derivation?.contentHash) {
+      forged = true;
+      failures.push("business-process-model.json content hash does not match its derivation.contentHash.");
+    }
+    const recomputed = recomputeBusinessProcessModelForGate(artifacts);
+    if (recomputed) {
+      recomputedContentHash = hashBusinessProcessContent(recomputed);
+      if (recomputedContentHash !== model.derivation?.contentHash) {
+        forged = true;
+        failures.push("business-process-model.json content does not match deterministic recomputation from current sources.");
+      }
+    }
+  }
+
+  const processCount = Array.isArray(model.processes) ? model.processes.length : 0;
+  const businessObjectCount = Array.isArray(model.businessObjects) ? model.businessObjects.length : 0;
+  const processStepCount = Array.isArray(model.processes)
+    ? model.processes.reduce((sum, processItem) => sum + (Array.isArray(processItem.steps) ? processItem.steps.length : 0), 0)
+    : 0;
+  const hasSupportedModel = businessObjectCount > 0 || (Array.isArray(model.moduleResponsibilities) && model.moduleResponsibilities.length > 0);
+  if (modelArtifact.status === "ok" && !hasSupportedModel) {
+    failures.push("business-process-model.json has no supported business object or module responsibility.");
+  }
+
+  const artifactContractValid = contractFailures.length === 0;
+  const pass = !modelMissing && modelArtifact.status === "ok" && artifactContractValid && failures.length === 0;
+  return {
+    id: "businessProcess",
+    label: "Business process model",
+    pass,
+    artifactStatus: modelArtifact.status || "missing",
+    artifactContractValid,
+    contractFailures,
+    score: pass ? 1 : 0,
+    scorePercent: pass ? 100 : 0,
+    metrics: {
+      modelPresent: !modelMissing,
+      processCount,
+      processStepCount,
+      businessObjectCount,
+      staleSourceCount: staleSources.length,
+      forged,
+      defaultDomainLeakCount: domainLeaks.length,
+      stepEvidenceMissingCount,
+    },
+    staleSources,
+    recomputedContentHash,
+    actualContentHash,
+    failures: [...contractFailures, ...failures],
+  };
+}
+
+function whitepaperPlanSourceMismatches(artifacts = {}) {
+  const plan = artifacts.whitepaperPlan || {};
+  if (plan.status !== "ok" || !plan.fingerprint?.exists) return [];
+  const checks = [
+    ["verifiedClaims", artifacts.claims],
+    ["businessProcessModel", artifacts.businessProcessModel],
+    ["workflowSpec", artifacts.workflowSpec],
+    ["operationSpec", artifacts.operationSpec],
+    ["evidenceSummary", artifacts.evidenceSummary],
+  ];
+  const failures = [];
+  for (const [key, current] of checks) {
+    const recorded = plan.value?.sourceArtifacts?.[key];
+    const recordedSourceExists = normalizeSourceFingerprint(recorded || {}).exists;
+    if (!recorded && !current?.fingerprint?.exists) continue;
+    if (!recordedSourceExists && !current?.fingerprint?.exists) continue;
+    const failure = lineageMismatch(key, plan, current, "whitepaper-plan.json");
+    if (failure) failures.push({ key, message: failure });
+  }
+  return failures;
+}
+
+function recomputeWhitepaperPlanForGate(artifacts = {}) {
+  if (
+    artifacts.claims?.status !== "ok" ||
+    artifacts.businessProcessModel?.status !== "ok"
+  ) {
+    return null;
+  }
+  return buildWhitepaperPlan({
+    verifiedClaims: artifacts.claims.value || {},
+    businessProcessModel: artifacts.businessProcessModel.value || {},
+    workflowSpec: artifacts.workflowSpec?.status === "ok" ? artifacts.workflowSpec.value : {},
+    operationSpec: artifacts.operationSpec?.status === "ok" ? artifacts.operationSpec.value : {},
+    evidenceSummary: artifacts.evidenceSummary?.status === "ok" ? artifacts.evidenceSummary.value : {},
+    sourceArtifacts: artifacts.whitepaperPlan?.value?.sourceArtifacts || {},
+    generatedAt: "truth-readiness-recompute",
+  });
+}
+
+function buildWhitepaperPlanGate(artifacts = {}) {
+  const planArtifact = artifacts.whitepaperPlan || {};
+  const plan = planArtifact.value || {};
+  const failures = [];
+  const contractFailures = [];
+  const planMissing = planArtifact.status === "missing" || (!planArtifact.status && !planArtifact.value);
+  if (planMissing) {
+    failures.push("whitepaper-plan.json is missing.");
+  } else if (planArtifact.status !== "ok") {
+    failures.push(`${planArtifact.file || "whitepaper-plan.json"} is ${planArtifact.status}.`);
+  } else {
+    try {
+      assertValidWhitepaperPlanArtifact(plan, { validateContentHash: false });
+    } catch (error) {
+      contractFailures.push(error.message);
+    }
+  }
+
+  const staleSources = contractFailures.length ? [] : whitepaperPlanSourceMismatches(artifacts);
+  failures.push(...staleSources.map((item) => item.message));
+
+  let recomputedContentHash = "";
+  let actualContentHash = "";
+  let forged = false;
+  if (planArtifact.status === "ok" && !contractFailures.length && !staleSources.length) {
+    actualContentHash = hashWhitepaperPlanContent(plan);
+    if (actualContentHash !== plan.derivation?.contentHash) {
+      forged = true;
+      failures.push("whitepaper-plan.json content hash does not match its derivation.contentHash.");
+    }
+    const recomputed = recomputeWhitepaperPlanForGate(artifacts);
+    if (recomputed) {
+      recomputedContentHash = hashWhitepaperPlanContent(recomputed);
+      if (recomputedContentHash !== plan.derivation?.contentHash) {
+        forged = true;
+        failures.push("whitepaper-plan.json content does not match deterministic recomputation from current sources.");
+      }
+    }
+  }
+
+  const metrics = plan.metrics || {};
+  const factCheckMetrics = artifacts.factCheck?.value?.metrics || {};
+  const narrativePlanCoverage = artifacts.narrative?.value?.planCoverage || {};
+  const planRequiredCoverageRatio = Number(
+    factCheckMetrics.planRequiredCoverageRatio ??
+      narrativePlanCoverage.planRequiredCoverageRatio ??
+      (Number(metrics.requiredItemCount || 0) ? 0 : 1),
+  );
+  const minPlanRequiredCoverage = Number(factCheckMetrics.minPlanRequiredCoverage || 0.95);
+  if (!planMissing && planRequiredCoverageRatio < minPlanRequiredCoverage) {
+    failures.push("whitepaper-plan.json required items are not sufficiently covered by the pending-review narrative.");
+  }
+
+  const artifactContractValid = contractFailures.length === 0;
+  const pass = !planMissing && planArtifact.status === "ok" && artifactContractValid && failures.length === 0;
+  return {
+    id: "whitepaperPlan",
+    label: "Whitepaper writing plan",
+    pass,
+    artifactStatus: planArtifact.status || "missing",
+    artifactContractValid,
+    contractFailures,
+    score: pass ? 1 : 0,
+    scorePercent: pass ? 100 : 0,
+    metrics: {
+      planPresent: !planMissing,
+      requiredItemCount: Number(metrics.requiredItemCount || 0),
+      allowedFactCount: Number(metrics.allowedFactCount || 0),
+      pendingItemCount: Number(metrics.pendingItemCount || 0),
+      staleSourceCount: staleSources.length,
+      forged,
+      planRequiredCoverageRatio,
+      minPlanRequiredCoverage,
+    },
+    staleSources,
+    recomputedContentHash,
+    actualContentHash,
+    failures: [...contractFailures, ...failures],
+  };
+}
+
+function resolveGoldenEvalSourcePath(goldenEvalArtifact = {}, recorded = {}, configuredPath = "") {
+  if (configuredPath) return path.resolve(String(configuredPath));
+  const recordedFile = String(recorded?.file || "").trim();
+  if (!recordedFile) return "";
+  if (path.isAbsolute(recordedFile)) return recordedFile;
+  const reportPath = String(goldenEvalArtifact.path || "").trim();
+  if (!reportPath) return "";
+  return path.join(path.dirname(reportPath), recordedFile);
+}
+
+function buildExternalSourceArtifact(filePath) {
+  const resolved = path.resolve(String(filePath || ""));
+  return {
+    file: path.basename(resolved),
+    fingerprint: fingerprintFile(resolved),
+  };
+}
+
+function findStaleGoldenEvalSources(artifacts = {}, options = {}) {
+  const goldenEval = artifacts.goldenEval || {};
+  if (goldenEval.status !== "ok" || (!goldenEval?.fingerprint?.exists && !goldenEval.value)) return [];
+  const report = goldenEval.value || {};
+  const recorded = report.sourceArtifacts;
+  const stale = [];
+  if (!recorded || typeof recorded !== "object" || Array.isArray(recorded)) {
+    return [
+      {
+        key: "sourceArtifacts",
+        file: goldenEval.file || OPTIONAL_ARTIFACTS.goldenEval,
+        reason: "missing golden eval source fingerprints",
+      },
+    ];
+  }
+
+  const requiredSources = {
+    markdown: artifacts.pendingReview,
+    factCheck: artifacts.factCheck,
+  };
+  const goldenFactsPath = resolveGoldenEvalSourcePath(
+    goldenEval,
+    recorded.goldenFacts,
+    options.goldenFactsPath || options.goldenFacts,
+  );
+  if (goldenFactsPath || recorded.goldenFacts) {
+    requiredSources.goldenFacts = goldenFactsPath ? buildExternalSourceArtifact(goldenFactsPath) : null;
+  }
+
+  for (const [key, current] of Object.entries(requiredSources)) {
+    const expected = recorded[key];
+    const expectedExists = Boolean(expected);
+    const currentExists = Boolean(current?.fingerprint?.exists);
+    if (!expectedExists && !currentExists) continue;
+    if (!expectedExists) {
+      stale.push({ key, file: current?.file || "", reason: "not recorded in golden eval report" });
+      continue;
+    }
+    if (!current) {
+      stale.push({ key, file: expected.file || "", reason: "source file no longer exists" });
+      continue;
+    }
+    if (String(expected.file || "") !== String(current.file || "")) {
+      stale.push({ key, file: current.file || expected.file || "", reason: "file mapping changed" });
+      continue;
+    }
+    if (!normalizeSourceFingerprint(expected).sha256 && currentExists) {
+      stale.push({ key, file: current.file || expected.file || "", reason: "missing recorded sha256" });
+      continue;
+    }
+    if (!sourceFingerprintMatches(expected, current)) {
+      stale.push({ key, file: current.file || expected.file || "", reason: "content fingerprint changed" });
+    }
+  }
+  return stale;
+}
+
+function buildGoldenEvalGate(artifacts = {}, options = {}) {
+  const artifact = artifacts.goldenEval || {};
+  const report = artifact.value || {};
+  const available = artifact.status === "ok" && (artifact?.fingerprint?.exists || Boolean(artifact.value));
+  const required = normalizeBoolean(options.requireGoldenEval) || available;
+  const missing = artifact.status === "missing" || (!artifact.status && !artifact.value);
+  const metrics = report.metrics || {};
+  const thresholds = report.thresholds || {};
+  const minCoverageRatio = Number(thresholds.minCoverageRatio ?? 0.95);
+  const minCriticalCoverageRatio = Number(thresholds.minCriticalCoverageRatio ?? 0.8);
+  const maxOverclaims = Number(thresholds.maxOverclaims ?? 0);
+  const coverageRatio = clamp01(metrics.coverageRatio ?? (missing ? 1 : 0));
+  const criticalCoverageRatio = clamp01(metrics.criticalCoverageRatio ?? (missing ? 1 : 0));
+  const overclaimCount = Number(metrics.overclaimCount || 0);
+  const failures = [];
+  const contractFailures = [];
+
+  if (missing && !required) {
+    return {
+      id: "goldenEval",
+      label: "Golden Eval",
+      pass: true,
+      required: false,
+      available: false,
+      artifactStatus: "missing",
+      artifactContractValid: true,
+      contractFailures,
+      score: 1,
+      scorePercent: 100,
+      metrics: {
+        factCount: 0,
+        coverageRatio: 1,
+        criticalCoverageRatio: 1,
+        overclaimCount: 0,
+        minCoverageRatio,
+        minCriticalCoverageRatio,
+        maxOverclaims,
+      },
+      staleSources: [],
+      failures,
+      warnings: ["No golden eval report is configured; gate is optional."],
+    };
+  }
+
+  if (missing) {
+    failures.push(`${OPTIONAL_ARTIFACTS.goldenEval} is missing.`);
+  } else if (artifact.status !== "ok") {
+    failures.push(`${artifact.file || OPTIONAL_ARTIFACTS.goldenEval} is ${artifact.status}.`);
+  } else {
+    try {
+      assertValidGoldenEvalReportArtifact(report);
+    } catch (error) {
+      contractFailures.push(error.message);
+    }
+  }
+
+  const staleSources = contractFailures.length ? [] : findStaleGoldenEvalSources(artifacts, options);
+  failures.push(...staleSources.map((item) => `${item.key}: ${item.reason}`));
+  if (!missing && artifact.status === "ok" && !contractFailures.length) {
+    if (coverageRatio < minCoverageRatio) {
+      failures.push(`Golden Eval coverage ${percent(coverageRatio)}% is below ${percent(minCoverageRatio)}%.`);
+    }
+    if (criticalCoverageRatio < minCriticalCoverageRatio) {
+      failures.push(
+        `Golden Eval critical coverage ${percent(criticalCoverageRatio)}% is below ${percent(minCriticalCoverageRatio)}%.`,
+      );
+    }
+    if (overclaimCount > maxOverclaims) {
+      failures.push(`Golden Eval overclaims ${overclaimCount} exceeds ${maxOverclaims}.`);
+    }
+    if (report.canPass !== true) {
+      failures.push("golden-eval-report.json canPass is false.");
+    }
+  }
+
+  const artifactContractValid = contractFailures.length === 0;
+  const pass = available && artifactContractValid && failures.length === 0;
+  const score = pass ? Math.min(coverageRatio, criticalCoverageRatio) : 0;
+  return {
+    id: "goldenEval",
+    label: "Golden Eval",
+    pass,
+    required,
+    available,
+    artifactStatus: artifact.status || "missing",
+    artifactContractValid,
+    contractFailures,
+    score,
+    scorePercent: percent(score),
+    metrics: {
+      factCount: Number(metrics.factCount || 0),
+      coveredCount: Number(metrics.coveredCount || 0),
+      partialCount: Number(metrics.partialCount || 0),
+      missingCount: Number(metrics.missingCount || 0),
+      coverageRatio,
+      criticalFactCount: Number(metrics.criticalFactCount || 0),
+      criticalCoveredCount: Number(metrics.criticalCoveredCount || 0),
+      criticalCoverageRatio,
+      overclaimCount,
+      minCoverageRatio,
+      minCriticalCoverageRatio,
+      maxOverclaims,
+    },
+    staleSources,
+    overclaims: Array.isArray(report.overclaims) ? report.overclaims : [],
+    failures: [...contractFailures, ...failures],
+    warnings: Array.isArray(report.warnings) ? report.warnings : [],
   };
 }
 
@@ -1504,7 +2149,9 @@ function validateFactCheckAgainstCurrentMarkdown(value = {}, artifacts = {}) {
     recomputed = buildFactCheckReport({
       markdown: fs.readFileSync(pendingReview.path, "utf8"),
       claimsArtifact: claimsArtifact.value,
+      whitepaperPlan: artifacts.whitepaperPlan?.status === "ok" ? artifacts.whitepaperPlan.value : {},
       minWritableClaimCoverage: metrics.minWritableClaimCoverage,
+      minPlanRequiredCoverage: metrics.minPlanRequiredCoverage,
     });
   } catch (error) {
     failures.push(
@@ -1530,6 +2177,10 @@ function validateFactCheckAgainstCurrentMarkdown(value = {}, artifacts = {}) {
     "coveredWritableClaimCount",
     "missingWritableClaimCount",
     "writableClaimCoverageRatio",
+    "requiredPlanItemCount",
+    "coveredPlanItemCount",
+    "missingPlanItemCount",
+    "planRequiredCoverageRatio",
   ]) {
     if (!numbersMatch(metrics[key], recomputedMetrics[key])) {
       failures.push(
@@ -1564,6 +2215,8 @@ function buildFactCheckGate(artifact, artifacts = {}) {
     metrics.writableClaimCoverageRatio ?? (value.canFinalize ? 0 : 0),
   );
   const minWritableClaimCoverage = clamp01(metrics.minWritableClaimCoverage ?? 0.8);
+  const planRequiredCoverageRatio = clamp01(metrics.planRequiredCoverageRatio ?? 1);
+  const minPlanRequiredCoverage = clamp01(metrics.minPlanRequiredCoverage ?? 0.95);
   const failures = [];
   if (artifact.status !== "ok") failures.push(`${artifact.file} is ${artifact.status}.`);
   failures.push(...contractFailures);
@@ -1574,13 +2227,17 @@ function buildFactCheckGate(artifact, artifacts = {}) {
   if (writableClaimCoverageRatio < minWritableClaimCoverage) {
     failures.push("Writable claim coverage is below threshold.");
   }
+  if (planRequiredCoverageRatio < minPlanRequiredCoverage) {
+    failures.push("Whitepaper plan required item coverage is below threshold.");
+  }
   const warnings = Array.isArray(value.warnings) ? value.warnings.map(String) : [];
   const pass =
     artifactContractValid &&
     value.canFinalize === true &&
     failures.length === 0 &&
-    writableClaimCoverageRatio >= minWritableClaimCoverage;
-  const score = artifactContractValid ? Math.min(supportedRatio, writableClaimCoverageRatio) : 0;
+    writableClaimCoverageRatio >= minWritableClaimCoverage &&
+    planRequiredCoverageRatio >= minPlanRequiredCoverage;
+  const score = artifactContractValid ? Math.min(supportedRatio, writableClaimCoverageRatio, planRequiredCoverageRatio) : 0;
   return {
     id: "fact-check",
     label: "Fact-check against writable claims",
@@ -1600,6 +2257,11 @@ function buildFactCheckGate(artifact, artifacts = {}) {
       missingWritableClaimCount: Number(metrics.missingWritableClaimCount || 0),
       writableClaimCoverageRatio,
       minWritableClaimCoverage,
+      requiredPlanItemCount: Number(metrics.requiredPlanItemCount || 0),
+      coveredPlanItemCount: Number(metrics.coveredPlanItemCount || 0),
+      missingPlanItemCount: Number(metrics.missingPlanItemCount || 0),
+      planRequiredCoverageRatio,
+      minPlanRequiredCoverage,
     },
     missingWritableClaimIds: Array.isArray(value.missingWritableClaimIds) ? value.missingWritableClaimIds : [],
     failures,
@@ -1637,6 +2299,9 @@ function validateNarrativeAgainstCurrentMarkdown(value = {}, artifacts = {}) {
       businessProcessModel:
         artifacts.businessProcessModel?.status === "ok" ? artifacts.businessProcessModel.value : null,
       businessProcessModelPresent: artifacts.businessProcessModel?.fingerprint?.exists === true,
+      whitepaperPlan:
+        artifacts.whitepaperPlan?.status === "ok" ? artifacts.whitepaperPlan.value : null,
+      whitepaperPlanPresent: artifacts.whitepaperPlan?.fingerprint?.exists === true,
     });
   } catch (error) {
     failures.push(
@@ -2137,7 +2802,7 @@ function collectBlockers(gates) {
         invalidArtifact
           ? "verified-claims.json is not a valid verified claims artifact, so the narrative cannot assert business conclusions safely."
           : "Verified writable claims are missing, so the narrative cannot assert business conclusions safely.",
-        ["summary", "db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+        withGoldenEvalNode(["summary", "db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"]),
       ),
     );
   }
@@ -2151,7 +2816,7 @@ function collectBlockers(gates) {
           "fact-check.invalid-artifact",
           "P0",
           "fact-check-report.json is not a valid fact-check artifact.",
-          ["fact-check", "quality", "truth-readiness"],
+          withGoldenEvalNode(["fact-check", "quality", "truth-readiness"]),
         ),
       );
     } else if (hasStaleSources(gates.factCheck)) {
@@ -2160,7 +2825,7 @@ function collectBlockers(gates) {
           "fact-check.stale-sources",
           "P0",
           "fact-check-report.json is stale; refresh fact-check and downstream gates before rewriting narrative.",
-          ["fact-check", "quality", "truth-readiness"],
+          withGoldenEvalNode(["fact-check", "quality", "truth-readiness"]),
           { staleSources: gates.factCheck.staleSources, quotaImpact: "low" },
         ),
       );
@@ -2170,7 +2835,7 @@ function collectBlockers(gates) {
           "fact-check.writable-coverage",
           "P0",
           "Pending-review whitepaper omits verified writable claims that should be covered before review.",
-          ["narrative", "fact-check", "quality", "truth-readiness"],
+          withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
           {
             rewriteScope: "function-sections",
             narrativePart: "function-sections",
@@ -2184,7 +2849,7 @@ function collectBlockers(gates) {
           "fact-check.unsupported-assertions",
           "P0",
           "Pending-review whitepaper contains unsupported, weak, or unknown assertions.",
-          ["narrative", "fact-check", "quality", "truth-readiness"],
+          withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
         ),
       );
     }
@@ -2218,12 +2883,315 @@ function collectBlockers(gates) {
           "narrative.quality",
           "P1",
           "Narrative quality gate did not pass for business readability or required sections.",
-          ["narrative", "fact-check", "quality", "truth-readiness"],
+          withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
         ),
       );
     }
   }
   return blockers;
+}
+
+function collectWorkflowBlockers(gates) {
+  const gate = gates.workflow || {};
+  if (gate.pass) return [];
+  const failures = gate.failures || [];
+  const rerunNodes = withGoldenEvalNode(["build-spec", "workflow-spec", "business-process", "narrative", "fact-check", "quality", "truth-readiness"]);
+  if (gate.metrics?.operationFlowCount <= 0) {
+    return [
+      blocker(
+        "workflow.operation-flow-missing",
+        "P0",
+        "No operation flows are available; formal whitepaper review cannot proceed from page inventory alone.",
+        ["collect", "inspect", ...rerunNodes],
+        { failures },
+      ),
+    ];
+  }
+  if (gate.metrics?.missingWorkflowSpec) {
+    return [
+      blocker(
+        "workflow.spec-missing",
+        "P0",
+        "workflow-spec.json is missing; generate workflow evidence before formal review.",
+        ["workflow-spec", ...rerunNodes.slice(2)],
+        { failures },
+      ),
+    ];
+  }
+  if (gate.artifactContractValid === false) {
+    return [
+      blocker(
+        "workflow.spec-invalid",
+        "P0",
+        "workflow-spec.json is not a valid workflow artifact.",
+        ["workflow-spec", ...rerunNodes.slice(2)],
+        { failures },
+      ),
+    ];
+  }
+  if (failures.some((failure) => /fingerprint is stale|source operationSpec/.test(String(failure)))) {
+    return [
+      blocker(
+        "workflow.lineage-stale",
+        "P0",
+        "workflow-spec.json is stale against the current operation-spec.json.",
+        rerunNodes,
+        { failures },
+      ),
+    ];
+  }
+  return [
+    blocker(
+      "workflow.steps-missing",
+      "P0",
+      "No observed or inferred workflow steps are available; formal whitepaper review cannot proceed from candidate or empty workflows.",
+      ["collect", "inspect", ...rerunNodes],
+      { failures },
+    ),
+  ];
+}
+
+function collectBusinessProcessBlockers(gates) {
+  const gate = gates.businessProcess || {};
+  if (gate.pass) return [];
+  const failures = gate.failures || [];
+  const rerunNodes = withGoldenEvalNode(["build-spec", "workflow-spec", "business-process", "narrative", "fact-check", "quality", "truth-readiness"]);
+  if (gate.metrics?.modelPresent === false) {
+    return [
+      blocker(
+        "business-process.spec-missing",
+        "P0",
+        "business-process-model.json is missing; generate the evidence-backed business process model before formal review.",
+        withGoldenEvalNode(["business-process", "narrative", "fact-check", "quality", "truth-readiness"]),
+        { failures },
+      ),
+    ];
+  }
+  if (gate.artifactContractValid === false) {
+    return [
+      blocker(
+        "business-process.spec-invalid",
+        "P0",
+        "business-process-model.json is not a valid v2 business process artifact.",
+        withGoldenEvalNode(["business-process", "narrative", "fact-check", "quality", "truth-readiness"]),
+        { failures },
+      ),
+    ];
+  }
+  if (gate.metrics?.staleSourceCount > 0) {
+    return [
+      blocker(
+        "business-process.lineage-stale",
+        "P0",
+        "business-process-model.json is stale against current evidence, workflow, or claim artifacts.",
+        rerunNodes,
+        { failures, staleSources: gate.staleSources || [] },
+      ),
+    ];
+  }
+  const blockers = [];
+  if (gate.metrics?.forged) {
+    blockers.push(
+      blocker(
+        "business-process.forged-model",
+        "P0",
+        "business-process-model.json does not match deterministic recomputation from current sources.",
+        rerunNodes,
+        { failures, recomputedContentHash: gate.recomputedContentHash || "" },
+      ),
+    );
+  }
+  if (gate.metrics?.stepEvidenceMissingCount > 0) {
+    blockers.push(
+      blocker(
+        "business-process.steps-missing-evidence",
+        "P0",
+        "business-process-model.json contains process steps without source/evidence references.",
+        withGoldenEvalNode(["business-process", "narrative", "fact-check", "quality", "truth-readiness"]),
+        { failures },
+      ),
+    );
+  }
+  if (gate.metrics?.defaultDomainLeakCount > 0) {
+    blockers.push(
+      blocker(
+        "business-process.default-domain-leak",
+        "P0",
+        "business-process-model.json contains unsupported domain-specific vocabulary in the default model path.",
+        withGoldenEvalNode(["business-process", "narrative", "fact-check", "quality", "truth-readiness"]),
+        { failures },
+      ),
+    );
+  }
+  if (blockers.length) {
+    return blockers;
+  }
+  return [
+    blocker(
+      "business-process.spec-invalid",
+      "P0",
+      "business-process-model.json did not pass the business process gate.",
+      withGoldenEvalNode(["business-process", "narrative", "fact-check", "quality", "truth-readiness"]),
+      { failures },
+    ),
+  ];
+}
+
+function collectWhitepaperPlanBlockers(gates) {
+  const gate = gates.whitepaperPlan || {};
+  if (gate.pass) return [];
+  const failures = gate.failures || [];
+  const rerunNodes = withGoldenEvalNode(["whitepaper-plan", "narrative", "fact-check", "quality", "truth-readiness"]);
+  if (gate.metrics?.planPresent === false) {
+    return [
+      blocker(
+        "whitepaper-plan.spec-missing",
+        "P0",
+        "whitepaper-plan.json is missing; generate the evidence-backed writing plan before formal review.",
+        rerunNodes,
+        { failures },
+      ),
+    ];
+  }
+  if (gate.artifactContractValid === false) {
+    return [
+      blocker(
+        "whitepaper-plan.spec-invalid",
+        "P0",
+        "whitepaper-plan.json is not a valid writing plan artifact.",
+        rerunNodes,
+        { failures },
+      ),
+    ];
+  }
+  if (gate.metrics?.staleSourceCount > 0) {
+    return [
+      blocker(
+        "whitepaper-plan.lineage-stale",
+        "P0",
+        "whitepaper-plan.json is stale against current claim, process, workflow, operation, or evidence artifacts.",
+        rerunNodes,
+        { failures, staleSources: gate.staleSources || [] },
+      ),
+    ];
+  }
+  if (gate.metrics?.forged) {
+    return [
+      blocker(
+        "whitepaper-plan.forged-plan",
+        "P0",
+        "whitepaper-plan.json does not match deterministic recomputation from current sources.",
+        rerunNodes,
+        { failures, recomputedContentHash: gate.recomputedContentHash || "" },
+      ),
+    ];
+  }
+  if (gate.metrics?.planRequiredCoverageRatio < gate.metrics?.minPlanRequiredCoverage) {
+    return [
+      blocker(
+        "whitepaper-plan.required-coverage",
+        "P0",
+        "Pending-review whitepaper omits required whitepaper-plan items.",
+        withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
+        { failures, quotaImpact: "agent-writing" },
+      ),
+    ];
+  }
+  return [
+    blocker(
+      "whitepaper-plan.spec-invalid",
+      "P0",
+      "whitepaper-plan.json did not pass the writing plan gate.",
+      rerunNodes,
+      { failures },
+    ),
+  ];
+}
+
+function collectGoldenEvalBlockers(gates) {
+  const gate = gates.goldenEval || {};
+  if (gate.pass) return [];
+  const failures = gate.failures || [];
+  const rerunNodes = ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"];
+  if (gate.available === false && gate.required) {
+    return [
+      blocker(
+        "golden-eval.report-missing",
+        "P0",
+        "golden-eval-report.json is required but missing.",
+        ["golden-eval", "quality", "truth-readiness"],
+        { failures },
+      ),
+    ];
+  }
+  if (gate.artifactContractValid === false) {
+    return [
+      blocker(
+        "golden-eval.invalid-artifact",
+        "P0",
+        "golden-eval-report.json is not a valid Golden Eval artifact.",
+        ["golden-eval", "quality", "truth-readiness"],
+        { failures },
+      ),
+    ];
+  }
+  if (gate.staleSources?.length) {
+    return [
+      blocker(
+        "golden-eval.stale-sources",
+        "P0",
+        "golden-eval-report.json is stale against the current whitepaper, fact-check, or golden facts input.",
+        ["golden-eval", "quality", "truth-readiness"],
+        { failures, staleSources: gate.staleSources || [], quotaImpact: "low" },
+      ),
+    ];
+  }
+  const hasOverclaim =
+    gate.metrics?.overclaimCount > gate.metrics?.maxOverclaims ||
+    (Array.isArray(gate.overclaims) && gate.overclaims.length > 0) ||
+    String((gate.failures || []).join("\n")).toLowerCase().includes("overclaim");
+  if (hasOverclaim) {
+    return [
+      blocker(
+        "golden-eval.overclaim",
+        "P0",
+        "Golden Eval detected overclaims against configured golden facts.",
+        rerunNodes,
+        { failures },
+      ),
+    ];
+  }
+  if (gate.metrics?.criticalCoverageRatio < gate.metrics?.minCriticalCoverageRatio) {
+    return [
+      blocker(
+        "golden-eval.critical-coverage",
+        "P0",
+        "Golden Eval P0 fact coverage is below threshold.",
+        rerunNodes,
+        { failures },
+      ),
+    ];
+  }
+  if (gate.metrics?.coverageRatio < gate.metrics?.minCoverageRatio) {
+    return [
+      blocker(
+        "golden-eval.coverage",
+        "P0",
+        "Golden Eval fact coverage is below threshold.",
+        rerunNodes,
+        { failures },
+      ),
+    ];
+  }
+  return [
+    blocker(
+      "golden-eval.failed",
+      "P0",
+      "Golden Eval did not pass.",
+      rerunNodes,
+      { failures },
+    ),
+  ];
 }
 
 function normalizeBoolean(value) {
@@ -2303,7 +3271,7 @@ function collectDatabaseRequirementBlockers(gates, options = {}) {
         "database.enhancement-incomplete",
         "P0",
         "databaseProfile.enabled=true but database evidence has not completed the db-profile -> db-model -> truth-universe -> truth-claims enhancement chain.",
-        ["db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+        withGoldenEvalNode(["db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"]),
         { failures: gates.database.enhancementFailures || [], quotaImpact: "low" },
       ),
     ];
@@ -2325,12 +3293,48 @@ function collectDatabaseRequirementBlockers(gates, options = {}) {
 
 function buildImprovementActions(gates, blockers) {
   const actions = blockers.map((item) => action(item.id, item.message, item.rerunNodes));
+  if (gates.workflow && !gates.workflow.pass) {
+    actions.push(
+      action(
+        "workflow.refresh",
+        "Refresh operation and workflow evidence before formal narrative or review.",
+        withGoldenEvalNode(["build-spec", "workflow-spec", "business-process", "narrative", "fact-check", "quality", "truth-readiness"]),
+      ),
+    );
+  }
+  if (gates.businessProcess && !gates.businessProcess.pass) {
+    actions.push(
+      action(
+        "business-process.refresh",
+        "Regenerate business-process-model.json from current operation, workflow, evidence, and claim artifacts before narrative or review.",
+        withGoldenEvalNode(["business-process", "narrative", "fact-check", "quality", "truth-readiness"]),
+      ),
+    );
+  }
+  if (gates.whitepaperPlan && !gates.whitepaperPlan.pass) {
+    actions.push(
+      action(
+        "whitepaper-plan.refresh",
+        "Regenerate whitepaper-plan.json from current claims, business process, workflow, operation, and evidence artifacts before narrative or review.",
+        withGoldenEvalNode(["whitepaper-plan", "narrative", "fact-check", "quality", "truth-readiness"]),
+      ),
+    );
+  }
+  if (gates.goldenEval && !gates.goldenEval.pass && (gates.goldenEval.required || gates.goldenEval.available)) {
+    actions.push(
+      action(
+        "golden-eval.refresh",
+        "Refresh Golden Eval from the current pending-review whitepaper, fact-check report, and configured golden facts before review.",
+        ["golden-eval", "quality", "truth-readiness"],
+      ),
+    );
+  }
   if (gates.factCheck.missingWritableClaimIds?.length) {
     actions.push(
       action(
         "narrative.cover-missing-writable-claims",
         "Rerun the function-section narrative with the missing writable claim list from fact-check-report.json.",
-        ["narrative", "fact-check", "quality", "truth-readiness"],
+        withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
         {
           rewriteScope: "function-sections",
           narrativePart: "function-sections",
@@ -2344,7 +3348,7 @@ function buildImprovementActions(gates, blockers) {
       action(
         "database.optional-profile",
         "Add redacted test-database metadata when available to strengthen entity and status-field reasoning.",
-        ["db-profile", "db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+        withGoldenEvalNode(["db-profile", "db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"]),
       ),
     );
   }
@@ -2367,6 +3371,7 @@ function buildTruthReadinessReport(input = {}) {
   const lineageGate = buildLineageGate(artifacts);
   const gates = {
     evidence: buildEvidenceGate(artifacts.quality || { status: "missing", file: REQUIRED_ARTIFACTS.quality }, artifacts),
+    workflow: buildWorkflowGate(artifacts),
     claims: buildClaimsGate(artifacts.claims || { status: "missing", file: REQUIRED_ARTIFACTS.claims }, artifacts),
     factCheck: buildFactCheckFreshnessGate(
       buildFactCheckGate(
@@ -2382,16 +3387,25 @@ function buildTruthReadinessReport(input = {}) {
       ),
       artifacts,
     ),
+    businessProcess: buildBusinessProcessGate(artifacts),
+    whitepaperPlan: buildWhitepaperPlanGate(artifacts),
+    goldenEval: buildGoldenEvalGate(artifacts, input),
     database: databaseGate,
     lineage: lineageGate,
   };
-  const score =
+  const baseScore =
     gates.evidence.score * 0.35 +
     gates.claims.score * 0.25 +
     gates.factCheck.score * 0.25 +
     gates.narrative.score * 0.15;
+  const goldenEvalActive = gates.goldenEval.required || gates.goldenEval.available;
+  const score = goldenEvalActive ? Math.min(baseScore, gates.goldenEval.score) : baseScore;
   const blockers = [
     ...collectBlockers(gates),
+    ...collectWorkflowBlockers(gates),
+    ...collectBusinessProcessBlockers(gates),
+    ...collectWhitepaperPlanBlockers(gates),
+    ...collectGoldenEvalBlockers(gates),
     ...collectDatabaseRequirementBlockers(gates, input),
   ];
   if (!gates.lineage.pass) {
@@ -2400,7 +3414,7 @@ function buildTruthReadinessReport(input = {}) {
         "truth.lineage-stale",
         "P0",
         "Truth Pipeline artifacts were not generated from the current upstream evidence/database inputs.",
-        ["build-spec", "compose-guide", "db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+        withGoldenEvalNode(["build-spec", "compose-guide", "db-model", "truth-universe", "truth-claims", "narrative", "fact-check", "quality", "truth-readiness"]),
       ),
     );
   }
@@ -2410,7 +3424,7 @@ function buildTruthReadinessReport(input = {}) {
         "truth.score-below-threshold",
         "P0",
         `Truth readiness score ${percent(score)}% is below ${percent(threshold)}%.`,
-        ["truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+        withGoldenEvalNode(["truth-claims", "narrative", "fact-check", "quality", "truth-readiness"]),
       ),
     );
   }
@@ -2423,6 +3437,7 @@ function buildTruthReadinessReport(input = {}) {
     threshold,
     requirements: {
       databaseEvidenceRequired: gates.database.required,
+      goldenEvalRequired: gates.goldenEval.required,
     },
     score: clamp01(score),
     scorePercent: percent(score),
@@ -2470,10 +3485,23 @@ function resolveTruthReadinessOptions(options = {}) {
   if (!configSystem) return options;
   const { system } = configSystem;
   const databaseProfile = system.databaseProfile || {};
+  const goldenEval = system.goldenEval || system.golden || {};
   const requireDatabaseEvidence =
     options.requireDatabaseEvidence !== undefined
       ? options.requireDatabaseEvidence
       : Boolean(databaseProfile.enabled);
+  const requireGoldenEval =
+    options.requireGoldenEval !== undefined
+      ? options.requireGoldenEval
+      : Boolean(system.goldenFactsPath || goldenEval.factsPath || goldenEval.goldenFactsPath);
+  const goldenFactsPath =
+    options.goldenFactsPath ||
+    (system.goldenFactsPath || goldenEval.factsPath || goldenEval.goldenFactsPath
+      ? resolveConfigRelativePath(
+          configSystem.configDir,
+          system.goldenFactsPath || goldenEval.factsPath || goldenEval.goldenFactsPath,
+        )
+      : "");
   return {
     ...options,
     inputDir:
@@ -2484,6 +3512,8 @@ function resolveTruthReadinessOptions(options = {}) {
         system.outputDir || path.join(configSystem.config.runtime?.outputDir || "outputs", system.code),
       ),
     requireDatabaseEvidence,
+    requireGoldenEval,
+    goldenFactsPath,
     systemCode: options.systemCode || options.system || system.code,
     systemName: options.systemName || system.name,
   };
@@ -2501,6 +3531,8 @@ function runTruthReadinessCheck(options = {}) {
     artifacts,
     threshold: resolvedOptions.threshold,
     requireDatabaseEvidence: resolvedOptions.requireDatabaseEvidence,
+    requireGoldenEval: resolvedOptions.requireGoldenEval,
+    goldenFactsPath: resolvedOptions.goldenFactsPath,
     expectedSystem,
   });
   const outputPath = resolvedOptions.outputPath || path.join(inputDir, "truth-readiness-report.json");
@@ -2518,6 +3550,8 @@ function main() {
     outputPath: args.output,
     threshold: args.threshold,
     requireDatabaseEvidence: args["require-database-evidence"],
+    requireGoldenEval: args["require-golden-eval"],
+    goldenFactsPath: args.golden || args["golden-facts"],
     systemCode: args["system-code"] || args.system,
     systemName: args["system-name"],
     configPath: args.config,
@@ -2539,10 +3573,14 @@ module.exports = {
   assertValidEntityModelArtifact,
   assertValidFunctionUniverseArtifact,
   assertValidTruthReadinessReportArtifact,
+  buildBusinessProcessGate,
+  buildGoldenEvalGate,
+  buildWhitepaperPlanGate,
   buildReadinessSourceArtifacts,
   buildLineageGate,
   buildTruthReadinessReport,
   findStaleFactCheckSources,
+  findStaleGoldenEvalSources,
   findStaleNarrativeSources,
   findStaleReadinessSources,
   isValidDatabaseProfile,

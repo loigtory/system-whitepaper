@@ -15,6 +15,7 @@ const GENERIC_HEADING_PATTERN =
   /^(\u7cfb\u7edf\u6982\u89c8|\u7cfb\u7edf\u5b9a\u4f4d|\u529f\u80fd\u6a21\u5757\u6982\u89c8|\u6838\u5fc3\u529f\u80fd\u8bf4\u660e|\u5178\u578b\u4e1a\u52a1\u6d41\u7a0b|\u89d2\u8272\u4e0e\u6743\u9650|\u5f85\u786e\u8ba4\u4e8b\u9879|\u9644\u5f55|\u8bc1\u636e\u7d22\u5f15|\u7ed3\u8bba|\u6982\u8ff0)$/;
 const DEFAULT_MIN_SUPPORTED_RATIO = 0.95;
 const DEFAULT_MIN_WRITABLE_CLAIM_COVERAGE = 0.8;
+const DEFAULT_MIN_PLAN_REQUIRED_COVERAGE = 0.95;
 
 function compactString(value) {
   return String(value || "").trim();
@@ -29,7 +30,12 @@ function stripMarkdownSyntax(line) {
     .replace(/!\[[^\]]*]\([^)]*\)/g, "")
     .replace(/\[[^\]]+]\([^)]*\)/g, "")
     .replace(/[`*_>#|]/g, "")
+    .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeSearchText(value) {
+  return stripMarkdownSyntax(normalizeTerm(value));
 }
 
 function extractHeadingCandidate(line) {
@@ -135,7 +141,47 @@ function buildTermIndex(claims = []) {
 }
 
 function lineContainsTerm(line, term) {
-  return stripMarkdownSyntax(line).includes(term);
+  const value = normalizeSearchText(term);
+  return Boolean(value) && normalizeSearchText(line).includes(value);
+}
+
+function markdownContainsTerm(markdown, term) {
+  const value = normalizeSearchText(term);
+  return Boolean(value) && normalizeSearchText(markdown).includes(value);
+}
+
+function assessWhitepaperPlanCoverage(markdown = "", whitepaperPlan = {}, options = {}) {
+  const requiredItems = Array.isArray(whitepaperPlan?.requiredItems) ? whitepaperPlan.requiredItems : [];
+  const minCoverage = Number(options.minPlanRequiredCoverage ?? DEFAULT_MIN_PLAN_REQUIRED_COVERAGE);
+  const coveredPlanItemIds = [];
+  const missingPlanItemIds = [];
+  const matches = [];
+  for (const item of requiredItems) {
+    const id = compactString(item.id);
+    if (!id) continue;
+    const claimId = compactString(item.claimId);
+    const terms = uniqueTerms(item.terms || []);
+    const explicitClaimCovered = claimId && String(markdown || "").includes(`[claim:${claimId}]`);
+    const matchedTerms = terms.filter((term) => markdownContainsTerm(markdown, term));
+    const requiredTermCount = Math.min(2, Math.max(1, Math.ceil(terms.length / 3)));
+    const covered = explicitClaimCovered || matchedTerms.length >= requiredTermCount;
+    if (covered) {
+      coveredPlanItemIds.push(id);
+      matches.push({ id, claimId, matchedTerms, explicitClaimCovered });
+    } else {
+      missingPlanItemIds.push(id);
+    }
+  }
+  const planRequiredCoverageRatio = requiredItems.length ? coveredPlanItemIds.length / requiredItems.length : 1;
+  return {
+    requiredPlanItemCount: requiredItems.length,
+    coveredPlanItemIds: coveredPlanItemIds.sort(),
+    missingPlanItemIds: missingPlanItemIds.sort(),
+    planRequiredCoverageRatio,
+    minPlanRequiredCoverage: minCoverage,
+    matches,
+    pass: planRequiredCoverageRatio >= minCoverage,
+  };
 }
 
 function extractClaimReferences(markdown) {
@@ -171,9 +217,25 @@ function sourceArtifact(filePath, status) {
 function buildFactCheckSourceArtifacts(options = {}) {
   const markdownPath = path.resolve(String(options.markdownPath || "whitepaper.pending-review.md"));
   const claimsPath = path.resolve(String(options.claimsPath || "verified-claims.json"));
-  return {
+  const whitepaperPlanPath = options.whitepaperPlanPath
+    ? path.resolve(String(options.whitepaperPlanPath))
+    : "";
+  const artifacts = {
     pendingReview: sourceArtifact(markdownPath, fs.existsSync(markdownPath) ? "ok" : "missing"),
     claims: sourceArtifact(claimsPath, fs.existsSync(claimsPath) ? "ok" : "missing"),
+  };
+  if (whitepaperPlanPath) {
+    artifacts.whitepaperPlan = sourceArtifact(
+      whitepaperPlanPath,
+      fs.existsSync(whitepaperPlanPath) ? "ok" : "missing",
+    );
+  }
+  return artifacts;
+}
+
+function buildDefaultFactCheckSourceArtifacts(markdownPath, claimsPath, whitepaperPlanPath) {
+  return {
+    ...buildFactCheckSourceArtifacts({ markdownPath, claimsPath, whitepaperPlanPath }),
   };
 }
 
@@ -498,6 +560,12 @@ function buildFactCheckReport(input = {}) {
   if (writableClaimCoverageRatio < minWritableClaimCoverage) {
     failures.push("Writable claim coverage is below the required threshold.");
   }
+  const planCoverage = assessWhitepaperPlanCoverage(markdown, input.whitepaperPlan || {}, {
+    minPlanRequiredCoverage: input.minPlanRequiredCoverage,
+  });
+  if (!planCoverage.pass) {
+    failures.push("Whitepaper plan required item coverage is below the required threshold.");
+  }
 
   const checkedAssertions = supported.length + nonWritableAssertions.length + unsupportedHeadings.length;
   const supportedRatio = checkedAssertions ? supported.length / checkedAssertions : 1;
@@ -524,6 +592,9 @@ function buildFactCheckReport(input = {}) {
     nonWritableClaimRefs,
     coveredWritableClaimIds,
     missingWritableClaimIds,
+    coveredPlanItemIds: planCoverage.coveredPlanItemIds,
+    missingPlanItemIds: planCoverage.missingPlanItemIds,
+    planCoverage,
     writableCoverageMatches,
     metrics: {
       claimCount: claims.length,
@@ -535,6 +606,11 @@ function buildFactCheckReport(input = {}) {
       missingWritableClaimCount: missingWritableClaimIds.length,
       writableClaimCoverageRatio,
       minWritableClaimCoverage,
+      requiredPlanItemCount: planCoverage.requiredPlanItemCount,
+      coveredPlanItemCount: planCoverage.coveredPlanItemIds.length,
+      missingPlanItemCount: planCoverage.missingPlanItemIds.length,
+      planRequiredCoverageRatio: planCoverage.planRequiredCoverageRatio,
+      minPlanRequiredCoverage: planCoverage.minPlanRequiredCoverage,
     },
   };
 }
@@ -544,6 +620,7 @@ function runFactCheck(options = {}) {
   const markdownPath =
     options.markdownPath || path.join(inputDir, "whitepaper.pending-review.md");
   const claimsPath = options.claimsPath || path.join(inputDir, "verified-claims.json");
+  const whitepaperPlanPath = options.whitepaperPlanPath || path.join(inputDir, "whitepaper-plan.json");
   const outputPath = options.outputPath || path.join(inputDir, "fact-check-report.json");
 
   if (!fs.existsSync(markdownPath)) {
@@ -566,7 +643,7 @@ function runFactCheck(options = {}) {
         writableClaimCoverageRatio: 0,
         minWritableClaimCoverage: DEFAULT_MIN_WRITABLE_CLAIM_COVERAGE,
       },
-      sourceArtifacts: buildFactCheckSourceArtifacts({ markdownPath, claimsPath }),
+      sourceArtifacts: buildDefaultFactCheckSourceArtifacts(markdownPath, claimsPath, whitepaperPlanPath),
     };
     writeJson(outputPath, report);
     return report;
@@ -576,6 +653,9 @@ function runFactCheck(options = {}) {
   const claimsArtifact = readRequiredJsonObject(claimsPath, {
     label: "Verified claims",
   });
+  const whitepaperPlan = fs.existsSync(whitepaperPlanPath)
+    ? readRequiredJsonObject(whitepaperPlanPath, { label: "Whitepaper plan" })
+    : {};
   const report = {
     artifactType: "fact-check-report",
     version: 1,
@@ -583,10 +663,12 @@ function runFactCheck(options = {}) {
     ...buildFactCheckReport({
       markdown,
       claimsArtifact,
+      whitepaperPlan,
       minSupportedRatio: options.minSupportedRatio,
       minWritableClaimCoverage: options.minWritableClaimCoverage,
+      minPlanRequiredCoverage: options.minPlanRequiredCoverage,
     }),
-    sourceArtifacts: buildFactCheckSourceArtifacts({ markdownPath, claimsPath }),
+    sourceArtifacts: buildDefaultFactCheckSourceArtifacts(markdownPath, claimsPath, whitepaperPlanPath),
   };
   writeJson(outputPath, report);
   return report;
@@ -604,6 +686,7 @@ function main() {
     outputPath: args.output,
     minSupportedRatio: args["min-supported-ratio"],
     minWritableClaimCoverage: args["min-writable-claim-coverage"],
+    minPlanRequiredCoverage: args["min-plan-required-coverage"],
   });
   const outputPath = args.output || path.join(path.resolve(args.input), "fact-check-report.json");
   console.log(`Fact-check report written: ${outputPath}`);
@@ -623,6 +706,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  assessWhitepaperPlanCoverage,
   assertValidFactCheckReportArtifact,
   assertValidVerifiedClaimsArtifact,
   buildFactCheckSourceArtifacts,

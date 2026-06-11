@@ -79,6 +79,63 @@ function getCollectOptions() {
   return activeCollectOptions;
 }
 
+function normalizeOverviewTextLine(value = "") {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/([\u4e00-\u9fff])\s+([\u4e00-\u9fff])/g, "$1$2")
+    .trim();
+}
+
+function extractHomeOverviewCardsFromText(text = "") {
+  const normalized = normalizeOverviewTextLine(text);
+  if (!normalized) return [];
+  const headingPattern = /(业务流程|任务流程|业务能力|核心能力|功能流程)/g;
+  const matches = [...normalized.matchAll(headingPattern)];
+  const cards = [];
+  const stopWords = new Set([
+    "首页",
+    "退出",
+    "欢迎使用",
+  ]);
+  for (let index = 0; index < matches.length; index += 1) {
+    const title = matches[index][1];
+    const start = matches[index].index + title.length;
+    const end = index + 1 < matches.length ? matches[index + 1].index : normalized.length;
+    const segment = normalized.slice(start, end).trim();
+    if (!segment) continue;
+    const chunks = segment
+      .split(/\s{2,}|(?=需求输出|需求验证|需求验收|数据监控|需求分析\s*Skill|数据同步\s*Skill|数据验收\s*Skill|数据监控\s*Skill|费用申请|预算校验|财务复核|付款归档|待办处理|异常退回)/)
+      .map(normalizeOverviewTextLine)
+      .filter(Boolean)
+      .filter((chunk) => !stopWords.has(chunk))
+      .slice(0, 24);
+    const items = [];
+    for (const chunk of chunks) {
+      const compact = chunk.replace(/\s+/g, " ").trim();
+      const titleMatch = compact.match(
+        /^(需求输出|需求验证|需求验收|数据监控|需求分析\s*Skill|数据同步\s*Skill|数据验收\s*Skill|数据监控\s*Skill|费用申请|预算校验|财务复核|付款归档|待办处理|异常退回)(.*)$/,
+      );
+      const itemTitle = normalizeOverviewTextLine(titleMatch ? titleMatch[1] : compact.split(" ").slice(0, 2).join(" "));
+      const description = normalizeOverviewTextLine(titleMatch ? titleMatch[2] : compact.replace(itemTitle, ""));
+      if (!itemTitle || itemTitle === title || stopWords.has(itemTitle)) continue;
+      items.push({
+        title: itemTitle,
+        description: description.slice(0, 120),
+      });
+      if (items.length >= 12) break;
+    }
+    if (items.length) {
+      cards.push({
+        title,
+        items,
+        source: "home-overview-card",
+      });
+    }
+    if (cards.length >= 8) break;
+  }
+  return cards;
+}
+
 function readJsonObjectStrict(filePath, label, recoveryHint) {
   let value;
   try {
@@ -3026,6 +3083,89 @@ async function collectFrameSnapshot(frame) {
       .filter((table) => table.columns.length > 1 || table.rowCount)
       .filter((table) => table.columns.join("|") !== "操作")
       .slice(0, 20);
+    const extractOverviewCards = () => {
+      const normalizeLine = (value) =>
+        String(value || "")
+          .replace(/\s+/g, " ")
+          .replace(/([\u4e00-\u9fff])\s+([\u4e00-\u9fff])/g, "$1$2")
+          .trim();
+      const extractCardsFromText = (text) => {
+        const normalized = normalizeLine(text);
+        const headingPattern = /(业务流程|任务流程|业务能力|核心能力|功能流程)/g;
+        const matches = Array.from(normalized.matchAll(headingPattern));
+        const cards = [];
+        const itemPattern =
+          /^(需求输出|需求验证|需求验收|数据监控|需求分析\s*Skill|数据同步\s*Skill|数据验收\s*Skill|数据监控\s*Skill|费用申请|预算校验|财务复核|付款归档|待办处理|异常退回)(.*)$/;
+        for (let index = 0; index < matches.length; index += 1) {
+          const title = matches[index][1];
+          const start = matches[index].index + title.length;
+          const end = index + 1 < matches.length ? matches[index + 1].index : normalized.length;
+          const segment = normalized.slice(start, end).trim();
+          const chunks = segment
+            .split(/\s{2,}|(?=需求输出|需求验证|需求验收|数据监控|需求分析\s*Skill|数据同步\s*Skill|数据验收\s*Skill|数据监控\s*Skill|费用申请|预算校验|财务复核|付款归档|待办处理|异常退回)/)
+            .map(normalizeLine)
+            .filter(Boolean)
+            .filter((chunk) => !/^(首页|退出|欢迎使用)$/.test(chunk))
+            .slice(0, 24);
+          const items = [];
+          for (const chunk of chunks) {
+            const match = chunk.match(itemPattern);
+            const itemTitle = normalizeLine(match ? match[1] : chunk.split(" ").slice(0, 2).join(" "));
+            const description = normalizeLine(match ? match[2] : chunk.replace(itemTitle, ""));
+            if (!itemTitle || itemTitle === title) continue;
+            items.push({ title: itemTitle, description: description.slice(0, 120) });
+            if (items.length >= 12) break;
+          }
+          if (items.length) cards.push({ title, items, source: "home-overview-card" });
+          if (cards.length >= 8) break;
+        }
+        return cards;
+      };
+      const headings = Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,[class*='title'],[class*='Title']"))
+        .filter(isVisible)
+        .map((element) => ({
+          element,
+          text: textOf(element).replace(/\s+/g, " ").trim(),
+        }))
+        .filter((item) => /业务流程|任务流程|流程|能力|功能|步骤/.test(item.text))
+        .slice(0, 12);
+      const cards = [];
+      const itemText = (value) => value.replace(/\s+/g, " ").trim();
+      for (const heading of headings) {
+        let container = heading.element.parentElement;
+        for (let depth = 0; container && depth < 4; depth += 1) {
+          const text = itemText(container.innerText || container.textContent || "");
+          if (text.length > heading.text.length + 20) break;
+          container = container.parentElement;
+        }
+        if (!container) continue;
+        const rawLines = itemText(container.innerText || container.textContent || "")
+          .split(/\s{2,}|\n|(?<=。)/)
+          .map((line) => itemText(line))
+          .filter(Boolean)
+          .filter((line) => line !== heading.text)
+          .filter((line) => !/^(首页|退出)$/.test(line))
+          .slice(0, 40);
+        const items = [];
+        for (let index = 0; index < rawLines.length; index += 1) {
+          const title = rawLines[index];
+          if (!title || title.length > 30) continue;
+          const next = rawLines[index + 1] || "";
+          const description = next && next.length <= 80 && !/流程$/.test(next) ? next : "";
+          items.push({ title, description });
+          if (description) index += 1;
+          if (items.length >= 12) break;
+        }
+        if (items.length) {
+          cards.push({
+            title: heading.text,
+            items,
+            source: "home-overview-card",
+          });
+        }
+      }
+      return cards.length ? cards.slice(0, 8) : extractCardsFromText(document.body.innerText || "");
+    };
     const landmarks = unique(
       Array.from(document.querySelectorAll("main,nav,header,aside,section,[role]")).map(
         (element) =>
@@ -3041,6 +3181,7 @@ async function collectFrameSnapshot(frame) {
       buttons,
       forms,
       tables,
+      overviewCards: extractOverviewCards(),
       landmarks,
     };
   });
@@ -3905,6 +4046,7 @@ if (require.main === module) {
     buildInspectionSurfaceSnapshot,
     collectBrowserEvidence,
     executeWriteValidationBrowser,
+    extractHomeOverviewCardsFromText,
     loadEvidenceForCollection,
     loadWriteValidationInputs,
     preferApiMenusOverDom,

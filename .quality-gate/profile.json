@@ -1,0 +1,136 @@
+{
+  "systemName": "system-whitepaper-skill",
+  "repositoryType": "node-codex-skill",
+  "testDataPrefix": "AI_AUTO_TEST_",
+  "configSource": {
+    "type": "local-file",
+    "primaryPath": "config/systems.local.yaml",
+    "examplePath": "examples/systems.example.yaml",
+    "notes": "config/systems.local.yaml is ignored and may reference private target systems. Do not commit secrets, cookies, tokens, production URLs, or database credentials."
+  },
+  "environments": {
+    "localStatic": {
+      "description": "Default source-checkout gate. No external systems, no secrets, no browser session required.",
+      "allowsRealExternalCalls": false,
+      "allowsBusinessDataWrites": false
+    },
+    "localRealRun": {
+      "description": "Manual/SIT-style gate using private config, browser auth, and generated evidence under ignored output directories.",
+      "configPath": "config/systems.local.yaml",
+      "allowsRealExternalCalls": true,
+      "allowsBusinessDataWrites": false,
+      "writePolicy": "Only AI_AUTO_TEST_ records created and registered by the current automation run may be mutated."
+    },
+    "ci": {
+      "description": "CI should run static/package/unit gates by default. Real browser/system checks require explicitly provisioned private config and auth.",
+      "allowsRealExternalCalls": false,
+      "allowsBusinessDataWrites": false
+    }
+  },
+  "criticalFlows": [
+    "system-registry-sync",
+    "browser-menu-capture",
+    "evidence-collection",
+    "safe-write-validation",
+    "database-profile",
+    "database-model",
+    "function-universe",
+    "verified-claims",
+    "operation-spec",
+    "operation-guide",
+    "whitepaper-generation",
+    "narrative-check",
+    "fact-check",
+    "quality-report",
+    "truth-readiness",
+    "batch-acceptance",
+    "delivery-readiness",
+    "real-run-readiness",
+    "multi-agent-isolation",
+    "package-distribution"
+  ],
+  "commands": {
+    "quick": "npm run test:gate:quick",
+    "core": "npm run test:gate:core",
+    "full": "npm run test:gate:full",
+    "unit": "npm test",
+    "packCheck": "npm run pack:check",
+    "agentIsolation": "npm run agent:isolation",
+    "agentIsolationStrict": "npm run agent:isolation:strict",
+    "truthReadiness": "npm run truth:readiness",
+    "batchAcceptance": "npm run batch:acceptance",
+    "deliveryCheck": "npm run delivery:check",
+    "realRunReadiness": "npm run real:check",
+    "localDashboard": "npm run dashboard"
+  },
+  "gateLevels": {
+    "quick": {
+      "requiredFor": [
+        "docs-only changes",
+        "unit-test changes",
+        "low-risk script edits"
+      ],
+      "commands": [
+        "npm test",
+        "npm run pack:check"
+      ]
+    },
+    "core": {
+      "requiredFor": [
+        "feature work",
+        "bug fixes",
+        "shared library changes",
+        "package metadata changes",
+        "multi-agent plan changes"
+      ],
+      "commands": [
+        "npm run test:gate:quick",
+        "npm run agent:isolation"
+      ]
+    },
+    "full": {
+      "requiredFor": [
+        "release readiness",
+        "browser automation changes",
+        "real-run pipeline changes",
+        "auth/session handling",
+        "database profiling/modeling",
+        "quality/readiness/finalization gates"
+      ],
+      "commands": [
+        "npm run test:gate:core",
+        "npm run truth:readiness",
+        "npm run batch:acceptance",
+        "npm run delivery:check",
+        "npm run real:check"
+      ],
+      "requiresPrivateConfig": true,
+      "blockedIfMissing": [
+        "config/systems.local.yaml",
+        "required browser authentication state",
+        "required private database metadata or secrets"
+      ]
+    }
+  },
+  "browserAutomation": {
+    "framework": "playwright",
+    "authProvider": "system-whitepaper",
+    "authMode": "user-provided-local-session-or-cookie",
+    "persistentProfileGlob": ".playwright-*",
+    "evidenceDir": "outputs/",
+    "notes": "Treat login redirects, expired cookies, 401/403 responses, or empty user identity as auth/session blockers rather than business-function failures."
+  },
+  "dataPolicy": {
+    "allowedWritePrefix": "AI_AUTO_TEST_",
+    "ledgerFile": "test-data-ledger.json",
+    "rulesDocument": "safety-rules.md",
+    "qualityChecklist": "quality-checklist.md",
+    "forbidden": [
+      "mutating existing business data",
+      "submitting or approving real records",
+      "deleting unregistered data",
+      "publishing, enabling, archiving, or external-syncing non-test records",
+      "hardcoding secrets or private credentials"
+    ]
+  }
+}

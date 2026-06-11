@@ -4,8 +4,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { parseArgs, readRequiredJsonObject, writeJson } = require("./system-whitepaper-lib");
+const { assessWhitepaperPlanCoverage } = require("./fact-check-whitepaper");
 
 const BUSINESS_PROCESS_MODEL_FILE = "business-process-model.json";
+const WHITEPAPER_PLAN_FILE = "whitepaper-plan.json";
 
 function hasAny(markdown, patterns) {
   return patterns.some((pattern) => pattern.test(markdown));
@@ -222,6 +224,75 @@ function assessBusinessProcessModelCoverage(model, chapterText) {
   };
 }
 
+function collectInferredBusinessProcessBoundaries(model = {}) {
+  const boundaryStatuses = new Set(["inferred", "partially-observed", "candidate", "pending"]);
+  return collectBusinessProcessModelArrays(model)
+    .map((process, index) => {
+      const steps = Array.isArray(process.steps) ? process.steps : [];
+      const processStatus = String(process.status || process.evidenceStatus || "").trim();
+      const inferredSteps = steps.filter((step) =>
+        boundaryStatuses.has(String(step?.status || step?.evidenceStatus || "").trim()),
+      );
+      const hasBoundaryStatus =
+        boundaryStatuses.has(processStatus) ||
+        inferredSteps.length > 0 ||
+        Boolean(process.boundary || process.evidenceBoundary || process.reason);
+      if (!hasBoundaryStatus) return null;
+      return {
+        name: processName(process) || `流程${index + 1}`,
+        status: processStatus,
+        boundary: String(process.boundary || process.evidenceBoundary || process.reason || "").trim(),
+        stepBoundaries: inferredSteps
+          .map((step) => String(step.boundary || step.evidenceBoundary || step.reason || "").trim())
+          .filter(Boolean),
+      };
+    })
+    .filter(Boolean);
+}
+
+function isGenericBusinessProcessName(name = "") {
+  return /^(业务处理链路|端到端业务流程|业务流程|流程\d+)$/.test(String(name || "").trim());
+}
+
+function assessInferredBusinessProcessBoundaryCoverage(model, chapterText) {
+  const boundaries = collectInferredBusinessProcessBoundaries(model);
+  if (!boundaries.length) return { boundaryCount: 0, coveredCount: 0, failures: [] };
+  const compactChapter = normalizeCompactText(chapterText);
+  const boundaryCueCovered = /推断|合理推理|部分观测|待确认|未观察|未覆盖|证据边界|边界|不能确认|需补采/.test(chapterText);
+  const uncovered = boundaries.filter((item) => {
+    const genericName = isGenericBusinessProcessName(item.name);
+    const nameCovered =
+      genericName ||
+      compactChapter.includes(normalizeCompactText(item.name));
+    const boundaryText = [item.boundary, ...item.stepBoundaries].join(" ");
+    const boundaryTokens = uniqueStrings(
+      boundaryText
+        .split(/[，,、；;。.\s/\\()[\]{}]+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 3 && token.length <= 24),
+    );
+    const boundaryTokenCovered =
+      genericName ||
+      boundaryTokens.length === 0 ||
+      boundaryTokens.some((token) => compactChapter.includes(normalizeCompactText(token)));
+    return !(nameCovered && boundaryCueCovered && boundaryTokenCovered);
+  });
+  const failures = [];
+  if (uncovered.length) {
+    failures.push(
+      `business-process-model.json 存在推断/部分观测流程，但第 4 章未同步写明证据边界：${uncovered
+        .map((item) => item.name)
+        .slice(0, 6)
+        .join("、")}。请在对应流程中标注“合理推理/部分观测/待确认/未观察到”的边界，避免把推断流程写成已验证事实。`,
+    );
+  }
+  return {
+    boundaryCount: boundaries.length,
+    coveredCount: boundaries.length - uncovered.length,
+    failures,
+  };
+}
+
 function buildChapter4SemanticFindings(input = {}) {
   const chapter = extractChapter(input.markdown || "", 4);
   const failures = [];
@@ -295,6 +366,7 @@ function buildNarrativeQualityReport(input = {}) {
   const evidenceSummary = input.evidenceSummary || {};
   const operationSpec = input.operationSpec || {};
   const businessProcessModel = input.businessProcessModel || null;
+  const whitepaperPlan = input.whitepaperPlan || null;
   const specModuleNames = operationSpecModuleNames(operationSpec);
   const failures = [];
   const warnings = [];
@@ -321,9 +393,29 @@ function buildNarrativeQualityReport(input = {}) {
       semantic.chapter?.content || "",
     );
     failures.push(...coverage.failures);
+    const boundaryCoverage = assessInferredBusinessProcessBoundaryCoverage(
+      businessProcessModel,
+      semantic.chapter?.content || "",
+    );
+    failures.push(...boundaryCoverage.failures);
   } else if (input.businessProcessModelPresent === false) {
     warnings.push(
       `${BUSINESS_PROCESS_MODEL_FILE} 不存在；已仅按第 4 章文本语义做门禁。建议后续生成只读业务流程模型，用于校验流程覆盖。`,
+    );
+  }
+
+  if (input.whitepaperPlanPresent === true) {
+    const planCoverage = assessWhitepaperPlanCoverage(markdown, whitepaperPlan || {}, {
+      minPlanRequiredCoverage: input.minPlanRequiredCoverage ?? 0.95,
+    });
+    if (!planCoverage.pass) {
+      failures.push(
+        `whitepaper-plan.json requiredItems 覆盖不足：已覆盖 ${planCoverage.coveredPlanItemIds.length}/${planCoverage.requiredPlanItemCount}，至少需要 ${Math.ceil(planCoverage.requiredPlanItemCount * planCoverage.minPlanRequiredCoverage)}。`,
+      );
+    }
+  } else if (input.whitepaperPlanPresent === false) {
+    warnings.push(
+      `${WHITEPAPER_PLAN_FILE} 不存在；standalone narrative check 仅按现有业务流程和语义规则校验，正式 review 会由 truth-readiness 阻断。`,
     );
   }
 
@@ -471,6 +563,12 @@ function buildNarrativeSourceArtifacts(input = {}) {
       fingerprint: fingerprintFile(input.businessProcessModelPath),
     };
   }
+  if (input.whitepaperPlanPath) {
+    result.whitepaperPlan = {
+      file: path.basename(input.whitepaperPlanPath),
+      fingerprint: fingerprintFile(input.whitepaperPlanPath),
+    };
+  }
   return result;
 }
 
@@ -482,6 +580,8 @@ function runNarrativeCheck(options = {}) {
   const operationSpecPath = options.operationSpecPath || path.join(inputDir, "operation-spec.json");
   const businessProcessModelPath =
     options.businessProcessModelPath || path.join(inputDir, BUSINESS_PROCESS_MODEL_FILE);
+  const whitepaperPlanPath =
+    options.whitepaperPlanPath || path.join(inputDir, WHITEPAPER_PLAN_FILE);
   const outputPath = options.outputPath || path.join(inputDir, "narrative-quality-report.json");
 
   if (!fs.existsSync(markdownPath)) {
@@ -497,6 +597,7 @@ function runNarrativeCheck(options = {}) {
         evidenceSummaryPath: summaryPath,
         operationSpecPath,
         businessProcessModelPath,
+        whitepaperPlanPath,
       }),
     };
     writeJson(outputPath, report);
@@ -514,6 +615,10 @@ function runNarrativeCheck(options = {}) {
   const businessProcessModel = businessProcessModelPresent
     ? readRequiredJsonObject(businessProcessModelPath, { label: "Business process model" })
     : null;
+  const whitepaperPlanPresent = fs.existsSync(whitepaperPlanPath);
+  const whitepaperPlan = whitepaperPlanPresent
+    ? readRequiredJsonObject(whitepaperPlanPath, { label: "Whitepaper plan" })
+    : null;
   const report = {
     ...buildNarrativeQualityReport({
       markdown,
@@ -521,12 +626,15 @@ function runNarrativeCheck(options = {}) {
       operationSpec,
       businessProcessModel,
       businessProcessModelPresent,
+      whitepaperPlan,
+      whitepaperPlanPresent,
     }),
     sourceArtifacts: buildNarrativeSourceArtifacts({
       markdownPath,
       evidenceSummaryPath: summaryPath,
       operationSpecPath,
       businessProcessModelPath,
+      whitepaperPlanPath,
     }),
   };
   writeJson(outputPath, report);
@@ -557,11 +665,13 @@ if (require.main === module) {
 
 module.exports = {
   BUSINESS_PROCESS_MODEL_FILE,
+  WHITEPAPER_PLAN_FILE,
   assessBusinessProcessModelCoverage,
   assertValidNarrativeQualityReportArtifact,
   buildNarrativeQualityReport,
   buildNarrativeSourceArtifacts,
   extractChapter,
   fingerprintFile,
+  main,
   runNarrativeCheck,
 };

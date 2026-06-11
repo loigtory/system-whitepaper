@@ -55,6 +55,19 @@ function unique(items) {
   return [...new Set((items || []).filter(Boolean))];
 }
 
+function withGoldenEvalNode(nodes = []) {
+  const source = Array.isArray(nodes) ? nodes : [];
+  const shouldInsert = source.includes("fact-check") && source.includes("quality");
+  const result = [];
+  for (const node of source) {
+    if (node === "quality" && shouldInsert && !result.includes("golden-eval")) {
+      result.push("golden-eval");
+    }
+    if (!result.includes(node)) result.push(node);
+  }
+  return result;
+}
+
 function blocker(id, message, extra = {}) {
   return {
     id,
@@ -547,7 +560,7 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
     blockers.push(
       blocker("delivery.smoke-whitepaper", "Pending-review whitepaper contains local smoke wording.", {
         systemCode: code,
-        rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+        rerunNodes: withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
       }),
     );
   }
@@ -555,7 +568,7 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
     blockers.push(
       blocker("delivery.smoke-whitepaper", "Final whitepaper contains local smoke wording.", {
         systemCode: code,
-        rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+        rerunNodes: withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
       }),
     );
   }
@@ -563,7 +576,7 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
     blockers.push(
       blocker("delivery.whitepaper-missing", "No pending-review or final whitepaper Markdown exists.", {
         systemCode: code,
-        rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+        rerunNodes: withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
       }),
     );
   }
@@ -571,7 +584,7 @@ function buildSystemDeliveryReadiness(systemReport = {}, context = {}, options =
     blockers.push(
       blocker("delivery.pending-review-missing", "Pending-review whitepaper Markdown is required for final approval traceability.", {
         systemCode: code,
-        rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+        rerunNodes: withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
       }),
     );
   }

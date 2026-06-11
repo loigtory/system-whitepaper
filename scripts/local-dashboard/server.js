@@ -255,6 +255,53 @@ function buildOperationGuideGateSnapshot(systemOutput) {
   };
 }
 
+function metricSnapshot(metrics = {}, keys = []) {
+  const source = metrics && typeof metrics === "object" && !Array.isArray(metrics) ? metrics : {};
+  return keys.reduce((result, key) => {
+    if (source[key] !== undefined) result[key] = Number(source[key] || 0);
+    return result;
+  }, {});
+}
+
+function buildTruthGateSummary(gates = {}) {
+  const safeGates = gates && typeof gates === "object" && !Array.isArray(gates) ? gates : {};
+  const gateSummary = (gateId, metricKeys) => {
+    const gate = safeGates[gateId];
+    if (!gate || typeof gate !== "object" || Array.isArray(gate)) return null;
+    return {
+      pass: gate.pass === true,
+      scorePercent: Number(gate.scorePercent || 0),
+      failureCount: Array.isArray(gate.failures) ? gate.failures.length : 0,
+      failures: Array.isArray(gate.failures) ? gate.failures.slice(0, 4).map(String) : [],
+      metrics: metricSnapshot(gate.metrics, metricKeys),
+    };
+  };
+  return {
+    workflow: gateSummary("workflow", [
+      "operationFlowCount",
+      "observedWorkflowCount",
+      "observedWorkflowStepCount",
+    ]),
+    businessProcess: gateSummary("businessProcess", [
+      "processCount",
+      "staleSourceCount",
+      "stepEvidenceMissingCount",
+      "defaultDomainLeakCount",
+    ]),
+    whitepaperPlan: gateSummary("whitepaperPlan", [
+      "requiredItemCount",
+      "coveredRequiredItemCount",
+      "planRequiredCoverageRatio",
+      "missingRequiredItemCount",
+    ]),
+    goldenEval: gateSummary("goldenEval", [
+      "coverageRatio",
+      "criticalCoverageRatio",
+      "overclaimCount",
+    ]),
+  };
+}
+
 function buildTruthReadinessSnapshot(systemOutput) {
   const report = readOptionalJsonObject(path.join(systemOutput, "truth-readiness-report.json"));
   if (!report) return null;
@@ -262,6 +309,7 @@ function buildTruthReadinessSnapshot(systemOutput) {
   const stale = staleSources.length > 0;
   const gates = report.gates && typeof report.gates === "object" && !Array.isArray(report.gates) ? report.gates : {};
   const factCheck = gates.factCheck || {};
+  const goldenEval = gates.goldenEval || {};
   return {
     scorePercent: Number(report.scorePercent || 0),
     threshold: Number(report.threshold || 0),
@@ -273,6 +321,7 @@ function buildTruthReadinessSnapshot(systemOutput) {
     blockers: Array.isArray(report.blockers) ? report.blockers : [],
     improvementActions: Array.isArray(report.improvementActions) ? report.improvementActions : [],
     gates,
+    gateSummary: buildTruthGateSummary(gates),
     writableClaimCoverage: {
       ratio: Number(factCheck.metrics?.writableClaimCoverageRatio || 0),
       minRatio: Number(factCheck.metrics?.minWritableClaimCoverage || 0),
@@ -282,6 +331,15 @@ function buildTruthReadinessSnapshot(systemOutput) {
       missingWritableClaimIds: Array.isArray(factCheck.missingWritableClaimIds)
         ? factCheck.missingWritableClaimIds.slice(0, 20)
         : [],
+    },
+    goldenEval: {
+      required: Boolean(goldenEval.required),
+      available: Boolean(goldenEval.available),
+      pass: goldenEval.pass === true,
+      coverageRatio: Number(goldenEval.metrics?.coverageRatio || 0),
+      criticalCoverageRatio: Number(goldenEval.metrics?.criticalCoverageRatio || 0),
+      overclaimCount: Number(goldenEval.metrics?.overclaimCount || 0),
+      scorePercent: Number(goldenEval.scorePercent || 0),
     },
     generatedAt: report.generatedAt || "",
   };

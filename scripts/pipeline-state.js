@@ -18,13 +18,16 @@ const NODES = [
   { id: "db-profile", phase: "truth", label: "库表画像" },
   { id: "truth-universe", phase: "truth", label: "功能宇宙" },
   { id: "truth-claims", phase: "truth", label: "可信断言" },
-  { id: "business-process", phase: "truth", label: "业务流程" },
   { id: "build-spec", phase: "compose", label: "整理规格" },
+  { id: "workflow-spec", phase: "compose", label: "流程规格" },
+  { id: "business-process", phase: "compose", label: "业务流程" },
+  { id: "whitepaper-plan", phase: "compose", label: "写作计划" },
   { id: "compose-guide", phase: "compose", label: "操作指引" },
   { id: "draft", phase: "compose", label: "底稿" },
   { id: "summary", phase: "compose", label: "摘要" },
   { id: "narrative", phase: "compose", label: "写稿" },
   { id: "fact-check", phase: "compose", label: "事实核验" },
+  { id: "golden-eval", phase: "compose", label: "金标评测" },
   { id: "quality", phase: "compose", label: "质检" },
   { id: "truth-readiness", phase: "compose", label: "真实度门禁" },
   { id: "review", phase: "approve", label: "审阅" },
@@ -84,7 +87,10 @@ function createPipelineState(system = {}) {
       functionUniverse: "function-universe.json",
       verifiedClaims: "verified-claims.json",
       businessProcessModel: "business-process-model.json",
+      workflowSpec: "workflow-spec.json",
+      whitepaperPlan: "whitepaper-plan.json",
       factCheck: "fact-check-report.json",
+      goldenEval: "golden-eval-report.json",
       truthReadiness: "truth-readiness-report.json",
       pendingReview: "whitepaper.pending-review.md",
       final: "whitepaper.final.md",
@@ -371,9 +377,19 @@ function factCheckComplete(systemOutput) {
   return Boolean(report?.canFinalize);
 }
 
+function goldenEvalComplete(systemOutput) {
+  const report = readJsonObjectSafe(path.join(systemOutput, "golden-eval-report.json"));
+  return Boolean(report?.canPass);
+}
+
 function truthReadinessComplete(systemOutput) {
   const report = readJsonObjectSafe(path.join(systemOutput, "truth-readiness-report.json"));
   return Boolean(report?.canSubmitReview);
+}
+
+function truthReadinessDoesNotRequireGoldenEval(systemOutput) {
+  const report = readJsonObjectSafe(path.join(systemOutput, "truth-readiness-report.json"));
+  return Boolean(report?.canSubmitReview) && report?.requirements?.goldenEvalRequired !== true;
 }
 
 function reconcilePipelineStateFromArtifacts(state, systemOutput) {
@@ -425,6 +441,32 @@ function reconcilePipelineStateFromArtifacts(state, systemOutput) {
   }
 
   if (
+    next.nodes?.["golden-eval"]?.status === "running" &&
+    goldenEvalComplete(systemOutput)
+  ) {
+    next = updateNodeStatus(next, "golden-eval", "success");
+    changed = true;
+  }
+
+  if (
+    ["success", "skipped"].includes(next.nodes?.["fact-check"]?.status) &&
+    next.nodes?.["golden-eval"]?.status === "pending" &&
+    goldenEvalComplete(systemOutput)
+  ) {
+    next = updateNodeStatus(next, "golden-eval", "success");
+    changed = true;
+  }
+
+  if (
+    ["success", "skipped"].includes(next.nodes?.["fact-check"]?.status) &&
+    next.nodes?.["golden-eval"]?.status === "pending" &&
+    truthReadinessDoesNotRequireGoldenEval(systemOutput)
+  ) {
+    next = updateNodeStatus(next, "golden-eval", "skipped");
+    changed = true;
+  }
+
+  if (
     next.nodes?.["truth-readiness"]?.status === "running" &&
     truthReadinessComplete(systemOutput)
   ) {
@@ -434,6 +476,7 @@ function reconcilePipelineStateFromArtifacts(state, systemOutput) {
 
   if (
     ["success", "skipped"].includes(next.nodes?.quality?.status) &&
+    ["success", "skipped"].includes(next.nodes?.["golden-eval"]?.status) &&
     next.nodes?.["truth-readiness"]?.status === "pending" &&
     truthReadinessComplete(systemOutput)
   ) {

@@ -147,6 +147,20 @@ function normalizeSignals(signals = [], moduleIndex, key) {
   })).filter((signal) => signal.field);
 }
 
+function workflowSourceType(module = {}, flow = {}) {
+  return compactString(module.source || flow.source || flow.validation?.source);
+}
+
+function inferWorkflowEvidenceStatus(module = {}, flow = {}, workflowType = "flows") {
+  if (workflowType === "plannedFlows") return "candidate";
+  const source = workflowSourceType(module, flow);
+  const status = compactString(flow.status);
+  if (source === "home-overview-card" || status === "inferred-from-home-overview") {
+    return "inferred";
+  }
+  return "observed";
+}
+
 function workflowBoundaries(flow = {}, evidenceStatus) {
   const status = compactString(flow.status || (evidenceStatus === "candidate" ? "planned" : ""));
   const reason = compactString(flow.reason);
@@ -155,6 +169,12 @@ function workflowBoundaries(flow = {}, evidenceStatus) {
     boundaries.push({
       severity: "P1",
       reason: reason || "该流程仅来自 plannedFlows，未形成可写入 observed workflow 的页面操作证据。",
+    });
+  }
+  if (evidenceStatus === "inferred") {
+    boundaries.push({
+      severity: "P1",
+      reason: reason || "依据首页流程卡片和截图归纳，未形成已点击菜单、表单执行或写操作验证证据。",
     });
   }
   if (evidenceStatus === "observed" && (/^(partial|failed)$/i.test(status) || reason)) {
@@ -169,6 +189,7 @@ function workflowBoundaries(flow = {}, evidenceStatus) {
 function workflowConfidence(input = {}) {
   const { evidenceStatus, executionStatus, steps = [], lifecycleSignals = [], qualitySignals = [] } = input;
   if (evidenceStatus === "candidate") return "low";
+  if (evidenceStatus === "inferred") return "medium";
   if (/^failed$/i.test(executionStatus)) return "low";
   if (!steps.length) return "low";
   const signalConfidenceValues = [
@@ -190,9 +211,10 @@ function normalizeWorkflow(input = {}) {
     evidenceStatus,
   } = input;
   const name = compactString(flow.name || flow.trigger || "业务流程");
-  const steps = evidenceStatus === "observed"
+  const steps = ["observed", "inferred"].includes(evidenceStatus)
     ? asArray(flow.steps).map((step, index) => normalizeStep(step, index, moduleIndex, workflowType, flowIndex))
     : [];
+  const sourceType = workflowSourceType(module, flow);
   const lifecycleSignals = normalizeSignals(module.lifecycleSignals, moduleIndex, "lifecycleSignals");
   const qualitySignals = normalizeSignals(module.qualitySignals, moduleIndex, "qualitySignals");
   const executionStatus = compactString(flow.status || (evidenceStatus === "candidate" ? "planned" : ""));
@@ -207,6 +229,7 @@ function normalizeWorkflow(input = {}) {
     name,
     trigger: compactString(flow.trigger || name),
     evidenceStatus,
+    sourceType,
     executionStatus,
     confidence: workflowConfidence({
       evidenceStatus,
@@ -216,6 +239,7 @@ function normalizeWorkflow(input = {}) {
       qualitySignals,
     }),
     canNarrateAsObserved: evidenceStatus === "observed",
+    canNarrateAsInferred: evidenceStatus === "inferred",
     businessObject: normalizeBusinessObject(module, moduleIndex),
     steps,
     lifecycleSignals,
@@ -262,12 +286,20 @@ function buildPending(workflows = []) {
 
 function buildMetrics(workflows = [], pending = [], operationSpec = {}) {
   const observed = workflows.filter((workflow) => workflow.evidenceStatus === "observed");
+  const inferred = workflows.filter((workflow) => workflow.evidenceStatus === "inferred");
   const candidates = workflows.filter((workflow) => workflow.evidenceStatus === "candidate");
   return {
     workflowCount: workflows.length,
     observedWorkflowCount: observed.length,
+    inferredWorkflowCount: inferred.length,
+    homeOverviewWorkflowCount: inferred.filter((workflow) => workflow.sourceType === "home-overview-card").length,
     candidateWorkflowCount: candidates.length,
+    narratableWorkflowCount: workflows.filter(
+      (workflow) => workflow.canNarrateAsObserved === true || workflow.canNarrateAsInferred === true,
+    ).length,
     stepCount: workflows.reduce((sum, workflow) => sum + workflow.steps.length, 0),
+    observedStepCount: observed.reduce((sum, workflow) => sum + workflow.steps.length, 0),
+    inferredStepCount: inferred.reduce((sum, workflow) => sum + workflow.steps.length, 0),
     pendingCount: pending.length,
     sourceModuleCount: asArray(operationSpec.modules).length,
     boundaryCount: workflows.reduce((sum, workflow) => sum + workflow.boundaries.length, 0),
@@ -296,7 +328,7 @@ function buildWorkflowSpec(input = {}) {
         flow,
         flowIndex,
         workflowType: "flows",
-        evidenceStatus: "observed",
+        evidenceStatus: inferWorkflowEvidenceStatus(module, flow, "flows"),
       }));
     }
     for (const [flowIndex, flow] of asArray(module.plannedFlows).entries()) {
@@ -306,7 +338,7 @@ function buildWorkflowSpec(input = {}) {
         flow,
         flowIndex,
         workflowType: "plannedFlows",
-        evidenceStatus: "candidate",
+        evidenceStatus: inferWorkflowEvidenceStatus(module, flow, "plannedFlows"),
       }));
     }
   }
@@ -325,6 +357,7 @@ function buildWorkflowSpec(input = {}) {
     rules: {
       confirmedStepsRequireModuleFlow: true,
       plannedFlowsAreCandidatesOnly: true,
+      homepageOverviewFlowsAreInferred: true,
       signalsDoNotCreateTransitions: true,
       crossModuleOrderRequiresObservedFlowEvidence: true,
       partialOrFailedFlowsRequireBoundary: true,
@@ -380,14 +413,15 @@ function assertValidWorkflowSpecArtifact(artifact = {}) {
   assertJsonObject(artifact.rules, "workflow-spec.json rules must be an object.");
 
   const observed = artifact.workflows.filter((workflow) => workflow.evidenceStatus === "observed");
+  const inferred = artifact.workflows.filter((workflow) => workflow.evidenceStatus === "inferred");
   const candidates = artifact.workflows.filter((workflow) => workflow.evidenceStatus === "candidate");
   const stepCount = artifact.workflows.reduce((sum, workflow) => {
     assertJsonObject(workflow, "workflow-spec.json workflows[] must be an object.");
     if (!compactString(workflow.id)) throw new Error("workflow-spec.json workflows[].id is required.");
     if (!compactString(workflow.module)) throw new Error("workflow-spec.json workflows[].module is required.");
     if (!compactString(workflow.name)) throw new Error("workflow-spec.json workflows[].name is required.");
-    if (!["observed", "candidate"].includes(workflow.evidenceStatus)) {
-      throw new Error("workflow-spec.json workflows[].evidenceStatus must be observed or candidate.");
+    if (!["observed", "inferred", "candidate"].includes(workflow.evidenceStatus)) {
+      throw new Error("workflow-spec.json workflows[].evidenceStatus must be observed, inferred, or candidate.");
     }
     assertArray(workflow.steps, "workflow-spec.json workflows[].steps must be an array.");
     assertArray(workflow.boundaries, "workflow-spec.json workflows[].boundaries must be an array.");
@@ -398,6 +432,15 @@ function assertValidWorkflowSpecArtifact(artifact = {}) {
     if (workflow.evidenceStatus === "candidate" && workflow.steps.length) {
       throw new Error("workflow-spec.json candidate workflows must not contain observed steps.");
     }
+    if (workflow.evidenceStatus === "inferred" && workflow.canNarrateAsObserved !== false) {
+      throw new Error("workflow-spec.json inferred workflows must not be narratable as observed.");
+    }
+    if (workflow.evidenceStatus === "inferred" && workflow.canNarrateAsInferred !== true) {
+      throw new Error("workflow-spec.json inferred workflows must be narratable only as inferred.");
+    }
+    if (workflow.evidenceStatus === "inferred" && !workflow.boundaries.length) {
+      throw new Error("workflow-spec.json inferred workflows must carry inference boundaries.");
+    }
     if (/^(partial|failed)$/i.test(workflow.executionStatus || "") && !workflow.boundaries.length) {
       throw new Error("workflow-spec.json partial or failed workflows must carry boundaries.");
     }
@@ -406,8 +449,31 @@ function assertValidWorkflowSpecArtifact(artifact = {}) {
 
   assertMetricEquals(artifact.metrics, "workflowCount", artifact.workflows.length);
   assertMetricEquals(artifact.metrics, "observedWorkflowCount", observed.length);
+  assertMetricEquals(artifact.metrics, "inferredWorkflowCount", inferred.length);
+  assertMetricEquals(
+    artifact.metrics,
+    "homeOverviewWorkflowCount",
+    inferred.filter((workflow) => workflow.sourceType === "home-overview-card").length,
+  );
   assertMetricEquals(artifact.metrics, "candidateWorkflowCount", candidates.length);
+  assertMetricEquals(
+    artifact.metrics,
+    "narratableWorkflowCount",
+    artifact.workflows.filter(
+      (workflow) => workflow.canNarrateAsObserved === true || workflow.canNarrateAsInferred === true,
+    ).length,
+  );
   assertMetricEquals(artifact.metrics, "stepCount", stepCount);
+  assertMetricEquals(
+    artifact.metrics,
+    "observedStepCount",
+    observed.reduce((sum, workflow) => sum + workflow.steps.length, 0),
+  );
+  assertMetricEquals(
+    artifact.metrics,
+    "inferredStepCount",
+    inferred.reduce((sum, workflow) => sum + workflow.steps.length, 0),
+  );
   assertMetricEquals(artifact.metrics, "pendingCount", artifact.pending.length);
   return true;
 }
@@ -459,4 +525,5 @@ module.exports = {
   buildWorkflowSpec,
   buildWorkflowSpecFromDir,
   fingerprintFile,
+  main,
 };

@@ -49,6 +49,19 @@ function unique(items) {
   return [...new Set((items || []).filter(Boolean))];
 }
 
+function withGoldenEvalNode(nodes = []) {
+  const source = Array.isArray(nodes) ? nodes : [];
+  const shouldInsert = source.includes("fact-check") && source.includes("quality");
+  const result = [];
+  for (const node of source) {
+    if (node === "quality" && shouldInsert && !result.includes("golden-eval")) {
+      result.push("golden-eval");
+    }
+    if (!result.includes(node)) result.push(node);
+  }
+  return result;
+}
+
 function percentFromReport(report = {}) {
   if (Number.isFinite(Number(report.scorePercent))) return Number(report.scorePercent);
   if (Number.isFinite(Number(report.score))) return Math.round(Number(report.score) * 1000) / 10;
@@ -792,7 +805,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
           `Truth readiness score ${scorePercent}% is below ${targetTruthScorePercent}%.`,
           {
             systemCode: code,
-            rerunNodes: ["truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+            rerunNodes: withGoldenEvalNode(["truth-claims", "narrative", "fact-check", "quality", "truth-readiness"]),
           },
         ),
       );
@@ -838,7 +851,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
       blockers.push(
         blocker("fact-check.writable-coverage", "Writable claim coverage is below threshold.", {
           systemCode: code,
-          rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+          rerunNodes: withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
         }),
       );
     }
@@ -846,7 +859,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
       blockers.push(
         blocker("fact-check.missing-writable-claims", `${missingWritableClaimCount} writable claim(s) remain uncovered.`, {
           systemCode: code,
-          rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+          rerunNodes: withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
         }),
       );
     }
@@ -859,7 +872,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
     blockers.push(
       blocker("whitepaper.missing", "No pending-review or final whitepaper Markdown exists.", {
         systemCode: code,
-        rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+        rerunNodes: withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
       }),
     );
   }
@@ -867,7 +880,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
     blockers.push(
       blocker("whitepaper.smoke-artifact", "Whitepaper Markdown contains local smoke wording.", {
         systemCode: code,
-        rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+        rerunNodes: withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
       }),
     );
   }

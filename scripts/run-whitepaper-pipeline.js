@@ -55,6 +55,7 @@ function runNodeScript(args, options = {}) {
     );
   }
   return {
+    status: result.status,
     stdout: result.stdout,
     stderr: result.stderr,
   };
@@ -140,15 +141,18 @@ function selectedNodes(args) {
       "validate-write",
       "summary",
       "build-spec",
+      "workflow-spec",
       "compose-guide",
       "db-profile",
       "db-model",
       "truth-universe",
       "truth-claims",
       "business-process",
+      "whitepaper-plan",
       "draft",
       "narrative",
       "fact-check",
+      "golden-eval",
       "quality",
       "truth-readiness",
     ];
@@ -160,6 +164,7 @@ function selectedNodes(args) {
     "inspect",
     "validate-write",
     "build-spec",
+    "workflow-spec",
     "compose-guide",
     "quality",
   ];
@@ -174,6 +179,22 @@ function resolvePipelineCollectProfile(context) {
 
 function databaseProfileEnabled(system = {}) {
   return Boolean(system.databaseProfile?.enabled);
+}
+
+function resolveGoldenFactsPath(context = {}) {
+  const args = context.args || {};
+  const system = context.system || {};
+  const goldenEval = system.goldenEval || system.golden || {};
+  const raw =
+    args.golden ||
+    args["golden-facts"] ||
+    system.goldenFactsPath ||
+    goldenEval.factsPath ||
+    goldenEval.goldenFactsPath;
+  if (!raw) return "";
+  const configPath = context.configPath ? path.resolve(String(context.configPath)) : "";
+  const baseDir = configPath ? path.dirname(configPath) : process.cwd();
+  return path.isAbsolute(String(raw)) ? String(raw) : resolveConfigRelativePath(baseDir, String(raw));
 }
 
 function evidenceSummaryNeedsRefresh(systemOutput) {
@@ -317,7 +338,7 @@ function buildCoverageRepairPlan(input = {}) {
       factCheck: "fact-check-report.json",
       verifiedClaims: "verified-claims.json",
     },
-    rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+    rerunNodes: ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
     executedNodes: [],
     narrativePart,
     targetModules,
@@ -383,9 +404,39 @@ function ensureState(systemOutput, system, forceNew) {
   };
 }
 
+function inferLocalBatchRunStatus(status = "") {
+  if (["failed", "paused"].includes(status)) return "failed";
+  if (["success", "review-pending", "finalized", "skipped"].includes(status)) return "completed";
+  if (status === "running") return "running";
+  return "queued";
+}
+
+function buildLocalBatchSummary(system = {}) {
+  const runStatus = inferLocalBatchRunStatus(system.status);
+  return {
+    total: 1,
+    queued: runStatus === "queued" ? 1 : 0,
+    running: runStatus === "running" ? 1 : 0,
+    completed: runStatus === "completed" ? 1 : 0,
+    failed: runStatus === "failed" ? 1 : 0,
+    pending: system.status === "pending" ? 1 : 0,
+    reviewPending: system.status === "review-pending" ? 1 : 0,
+    finalized: system.status === "finalized" ? 1 : 0,
+    paused: system.status === "paused" ? 1 : 0,
+    success: system.status === "success" ? 1 : 0,
+  };
+}
+
 function writeBatchState(outputRoot, state, options = {}) {
   if (options.disabled) return;
   const batchPath = path.join(outputRoot, "_batch", "run-state.json");
+  const system = {
+    code: state.code,
+    status: state.overallStatus,
+    runStatus: inferLocalBatchRunStatus(state.overallStatus),
+    currentNode: state.currentNode,
+    currentPhase: state.currentPhase,
+  };
   fs.mkdirSync(path.dirname(batchPath), { recursive: true });
   fs.writeFileSync(
     batchPath,
@@ -394,14 +445,9 @@ function writeBatchState(outputRoot, state, options = {}) {
         batchId: "local",
         status: state.overallStatus,
         currentSystemCode: state.code,
-        systems: [
-          {
-            code: state.code,
-            status: state.overallStatus,
-            currentNode: state.currentNode,
-            currentPhase: state.currentPhase,
-          },
-        ],
+        total: 1,
+        summary: buildLocalBatchSummary(system),
+        systems: [system],
         updatedAt: new Date().toISOString(),
       },
       null,
@@ -539,6 +585,16 @@ async function runPipelineNode(nodeId, context) {
       { cwd: projectRoot },
     );
   }
+  if (nodeId === "whitepaper-plan") {
+    return runNodeScript(
+      [
+        "scripts/build-whitepaper-plan.js",
+        "--input",
+        systemOutput,
+      ],
+      { cwd: projectRoot },
+    );
+  }
   if (nodeId === "build-spec") {
     const buildArgs = [
       "scripts/build-operation-spec.js",
@@ -549,6 +605,16 @@ async function runPipelineNode(nodeId, context) {
     ];
     if (args["allow-draft"]) buildArgs.push("--allow-draft");
     return runNodeScript(buildArgs, { cwd: projectRoot });
+  }
+  if (nodeId === "workflow-spec") {
+    return runNodeScript(
+      [
+        "scripts/build-workflow-spec.js",
+        "--input",
+        systemOutput,
+      ],
+      { cwd: projectRoot },
+    );
   }
   if (nodeId === "compose-guide") {
     const composeArgs = [
@@ -588,6 +654,7 @@ async function runPipelineNode(nodeId, context) {
       verifiedClaimsPath: path.join(systemOutput, "verified-claims.json"),
       operationSpecPath: path.join(systemOutput, "operation-spec.json"),
       businessProcessModelPath: path.join(systemOutput, "business-process-model.json"),
+      whitepaperPlanPath: path.join(systemOutput, "whitepaper-plan.json"),
       promptOutputPath: path.join(systemOutput, "phase3b-prompt.md"),
       briefPath: path.join(systemOutput, "narrative-brief.md"),
       fragmentsPath: path.join(systemOutput, "narrative-fragments.md"),
@@ -622,6 +689,28 @@ async function runPipelineNode(nodeId, context) {
       { cwd: projectRoot },
     );
   }
+  if (nodeId === "golden-eval") {
+    const goldenFactsPath = resolveGoldenFactsPath(context);
+    if (!goldenFactsPath) {
+      return { skipped: true, reason: "golden facts path is not configured for this system." };
+    }
+    return runNodeScript(
+      [
+        "scripts/run-golden-eval.js",
+        "--input",
+        systemOutput,
+        "--golden",
+        goldenFactsPath,
+        "--fact-check",
+        path.join(systemOutput, "fact-check-report.json"),
+        "--system-code",
+        system.code,
+        "--system-name",
+        system.name || "",
+      ],
+      { cwd: projectRoot },
+    );
+  }
   if (nodeId === "quality") {
     const evidenceQuality = runNodeScript(["scripts/check-quality.js", "--input", systemOutput]);
     const narrativeQuality = runNodeScript(["scripts/check-narrative.js", "--input", systemOutput]);
@@ -639,6 +728,10 @@ async function runPipelineNode(nodeId, context) {
     ];
     if (databaseProfileEnabled(system)) {
       readinessArgs.push("--require-database-evidence");
+    }
+    const goldenFactsPath = resolveGoldenFactsPath(context);
+    if (goldenFactsPath) {
+      readinessArgs.push("--require-golden-eval", "--golden", goldenFactsPath);
     }
     return runNodeScript(readinessArgs, { cwd: projectRoot });
   }
@@ -832,6 +925,7 @@ module.exports = {
   operationSpecNeedsRefresh,
   loadSystem,
   pathIsInside,
+  resolveGoldenFactsPath,
   resolveNodeMaxAttempts,
   resetSystemOutputDirectory,
   runPipelineNodeWithState,

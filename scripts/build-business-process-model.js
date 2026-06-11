@@ -8,6 +8,19 @@ const {
   readRequiredJsonObject,
   writeJson,
 } = require("./system-whitepaper-lib");
+const {
+  categoryLabel,
+  classifyObjectCategory,
+  classifyProcessRole,
+  collectEvidenceText,
+  hasDefaultDomainLeak,
+  isStateSignal,
+  roleLabel,
+} = require("./business-process/generic-rules");
+const {
+  applyDomainProfileLabel,
+  assertValidDomainProfile,
+} = require("./business-process/domain-profile");
 
 const CONFIDENCE_RANK = { low: 1, medium: 2, high: 3 };
 
@@ -93,6 +106,34 @@ function buildSourceArtifacts(input = {}) {
     };
   }
   return result;
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (!value || typeof value !== "object") return JSON.stringify(value);
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+}
+
+function businessProcessContentForHash(artifact = {}) {
+  return {
+    version: artifact.version,
+    system: artifact.system || {},
+    businessObjects: artifact.businessObjects || [],
+    states: artifact.states || [],
+    moduleResponsibilities: artifact.moduleResponsibilities || [],
+    processes: artifact.processes || [],
+    feedbackLoops: artifact.feedbackLoops || [],
+    pending: artifact.pending || [],
+    metrics: artifact.metrics || {},
+    rules: artifact.rules || {},
+  };
+}
+
+function hashBusinessProcessContent(artifact = {}) {
+  return crypto
+    .createHash("sha256")
+    .update(stableJson(businessProcessContentForHash(artifact)))
+    .digest("hex");
 }
 
 function sourceRef(artifact, pointer, id, label = "", type = "artifact") {
@@ -431,134 +472,83 @@ function combineSupport(...supports) {
   };
 }
 
-function inferBusinessObjectName(record = {}) {
-  const haystack = `${record.name} ${record.businessHint}`;
-  if (/元数据|字段映射|字典|数据源/.test(haystack)) return "元数据/数据源配置";
-  if (/发布|上线/.test(haystack)) return "AI发布上线项";
-  if (/运行观测|监控|告警|运行指标/.test(haystack)) return "运行观测与质量风险";
-  if (/AI任务|任务管理|需求/.test(haystack)) return "AI任务配置";
-  return `${record.name}业务对象`;
-}
-
-function buildBusinessObjects(records = []) {
-  const objects = [];
-  const contentRecords = records.filter((record) => !isHomeModuleName(record.name));
-  const taskFields = ["保险公司", "任务类型", "接口方式", "配置时间", "需求状态", "配置质量"];
-  const taskSupport = collectFieldSupport(contentRecords, taskFields);
-  const taskFieldNames = uniqueStrings(
-    taskSupport.evidence
-      .map((item) => item.value)
-      .filter((field) => taskFields.some((pattern) => labelMatches(field, pattern))),
+function inferBusinessObject(record = {}, options = {}) {
+  const fields = recordFields(record);
+  const actions = uniqueStrings(record.rowActions || []);
+  const haystack = collectEvidenceText([
+    record.name,
+    record.businessHint,
+    ...fields,
+    ...actions,
+  ]);
+  const category = classifyObjectCategory(haystack);
+  const genericLabel = categoryLabel(category);
+  const profileLabel = applyDomainProfileLabel(
+    options.domainProfile,
+    category,
+    applyDomainProfileLabel(options.domainProfile, "work-item", ""),
   );
-  if (taskFieldNames.length >= 3) {
-    objects.push({
-      id: "business-object:insurer-integration-task",
-      name: "保司对接需求/任务",
-      category: "core-work-item",
-      modules: taskSupport.records.map((record) => record.name),
-      fields: taskFieldNames,
-      stateFields: taskFieldNames.filter((field) => /状态|质量/.test(field)),
-      actions: uniqueStrings(taskSupport.records.flatMap((record) => record.rowActions || [])),
-      source: taskSupport.source,
-      evidence: taskSupport.evidence,
-      confidence: taskFieldNames.length >= 5 ? "high" : "medium",
-      reasoning:
-        "多个模块列表共同出现保险公司、任务类型、接口方式、需求状态、配置质量等字段，可抽象为跨模块承载的保司对接需求/任务对象。",
-    });
-  }
-
-  for (const record of contentRecords) {
-    const name = inferBusinessObjectName(record);
-    const support = {
-      records: [record],
-      source: record.sources || [],
-      evidence: moduleEvidence(record),
-    };
-    objects.push({
-      id: stableId("business-object", [name]),
-      name,
-      category: /元数据/.test(name)
-        ? "metadata"
-        : /发布/.test(name)
-          ? "release"
-          : /观测|风险/.test(name)
-            ? "observation"
-            : "configuration",
-      modules: [record.name],
-      fields: uniqueStrings(record.columns || []),
-      stateFields: uniqueStrings(record.columns || []).filter((field) => /状态|质量|阶段/.test(field)),
-      actions: uniqueStrings(record.rowActions || []),
-      source: support.source,
-      evidence: support.evidence,
-      confidence: recordConfidence(record),
-      reasoning: record.businessHint
-        ? `模块业务提示与页面结构支持将「${record.name}」抽象为「${name}」。`
-        : `基于模块名称、列表字段和可见操作抽象「${name}」，需业务侧确认命名。`,
-    });
-  }
-
-  return uniqueBy(objects, (item) => item.id);
+  const name = profileLabel || `${record.name}${genericLabel}`;
+  return { name, category, fields, actions, haystack };
 }
 
-function valueAppearsInEvidence(value, support) {
-  return asArray(support.evidence).some((item) => item.value.includes(value));
-}
-
-function buildStateGroup(records, definition) {
-  const fieldSupport = collectFieldSupport(records, [definition.field]);
-  const valueSupport = collectFieldSupport(records, definition.values);
-  const support = combineSupport(fieldSupport, valueSupport);
-  if (!fieldSupport.evidence.length && !valueSupport.evidence.length) return null;
-  const values = definition.values
-    .filter((value) => valueAppearsInEvidence(value, valueSupport))
-    .map((value) => ({
-      name: value,
-      source: valueSupport.source,
-      evidence: valueSupport.evidence.filter((item) => item.value.includes(value)),
-      confidence: "medium",
-    }));
-  return {
-    id: stableId("state", [definition.id]),
-    object: definition.object,
-    field: definition.field,
-    stateType: definition.stateType,
-    values,
-    modules: support.records.map((record) => record.name),
-    source: support.source,
-    evidence: support.evidence,
-    confidence: values.length ? "medium" : "low",
-    reasoning: values.length
-      ? `状态值来自页面筛选项或列表字段文案：${values.map((item) => item.name).join("、")}。`
-      : `仅观察到「${definition.field}」字段，未采集到明确枚举值。`,
-  };
+function buildBusinessObjects(records = [], options = {}) {
+  const contentRecords = records.filter((record) => !isHomeModuleName(record.name));
+  return uniqueBy(
+    contentRecords.map((record) => {
+      const inferred = inferBusinessObject(record, options);
+      const support = {
+        records: [record],
+        source: record.sources || [],
+        evidence: moduleEvidence(record),
+      };
+      return {
+        id: stableId("business-object", [record.name, inferred.category]),
+        name: inferred.name,
+        category: inferred.category,
+        modules: [record.name],
+        fields: inferred.fields,
+        stateFields: inferred.fields.filter(isStateSignal),
+        actions: inferred.actions,
+        source: support.source,
+        evidence: support.evidence,
+        confidence: recordConfidence(record),
+        reasoning: record.businessHint
+          ? `模块业务提示与页面结构支持将「${record.name}」抽象为「${inferred.name}」。`
+          : `基于模块名称、列表字段和可见操作抽象「${inferred.name}」，需业务侧确认命名。`,
+      };
+    }),
+    (item) => item.id,
+  );
 }
 
 function buildStates(records = []) {
   const contentRecords = records.filter((record) => !isHomeModuleName(record.name));
-  const definitions = [
-    {
-      id: "demand-status",
-      object: "保司对接需求/任务",
-      field: "需求状态",
-      stateType: "lifecycle",
-      values: ["需求待生效", "需求生效", "需求已完成"],
-    },
-    {
-      id: "configuration-quality",
-      object: "AI任务配置",
-      field: "配置质量",
-      stateType: "quality",
-      values: ["高风险", "需关注", "良好"],
-    },
-    {
-      id: "interface-mode",
-      object: "保司对接需求/任务",
-      field: "接口方式",
-      stateType: "classification",
-      values: ["实时回调", "查询接口", "获取文件"],
-    },
-  ];
-  return definitions.map((definition) => buildStateGroup(contentRecords, definition)).filter(Boolean);
+  const states = [];
+  for (const record of contentRecords) {
+    const fields = recordFields(record).filter(isStateSignal);
+    for (const field of fields) {
+      const support = collectFieldSupport([record], [field]);
+      if (!support.evidence.length) continue;
+      states.push({
+        id: stableId("state", [record.name, field]),
+        object: `${record.name}业务对象`,
+        field,
+        stateType: /质量|风险|异常|告警/.test(field)
+          ? "quality-or-risk"
+          : /审批|审核|状态|进度|阶段|完成|结果/.test(field)
+            ? "lifecycle"
+            : "classification",
+        values: [],
+        modules: [record.name],
+        source: support.source,
+        evidence: support.evidence,
+        confidence: recordConfidence(record),
+        reasoning: `字段「${field}」来自页面列表或筛选条件，可作为流程推进、分类或风险判断信号。`,
+      });
+    }
+  }
+  return uniqueBy(states, (item) => item.id);
 }
 
 function inferResponsibility(record = {}) {
@@ -579,14 +569,16 @@ function buildModuleResponsibilities(records = []) {
     managedFields: uniqueStrings(record.columns || []),
     visibleActions: uniqueStrings(record.rowActions || []),
     stateFields: uniqueStrings(record.columns || []).filter((field) => /状态|质量|阶段/.test(field)),
-    upstreamObjects: /发布|运行观测/.test(`${record.name} ${record.businessHint}`)
-      ? ["AI任务配置", "保司对接需求/任务"]
-      : [],
-    downstreamObjects: /元数据/.test(`${record.name} ${record.businessHint}`)
-      ? ["AI任务配置"]
-      : /运行观测/.test(`${record.name} ${record.businessHint}`)
-        ? ["问题回流修正"]
-        : [],
+    processRole: classifyProcessRole(
+      collectEvidenceText([
+        record.name,
+        record.businessHint,
+        ...recordFields(record),
+        ...asArray(record.rowActions),
+      ]),
+    ),
+    upstreamObjects: [],
+    downstreamObjects: [],
     source: record.sources || [],
     evidence: moduleEvidence(record),
     confidence: recordConfidence(record),
@@ -602,6 +594,8 @@ function makeStep(id, order, name, support, options = {}) {
     modules: uniqueStrings(asArray(support.records).map((record) => record.name)),
     action: compactString(options.action),
     transition: compactString(options.transition),
+    role: compactString(options.role),
+    status: compactString(options.status || "inferred"),
     source: uniqueBy(support.source || [], sourceKey),
     evidence: uniqueBy(support.evidence || [], evidenceKey),
     confidence: options.confidence || "low",
@@ -610,163 +604,202 @@ function makeStep(id, order, name, support, options = {}) {
   };
 }
 
-function buildEndToEndProcess(records = []) {
-  const contentRecords = records.filter((record) => !isHomeModuleName(record.name));
-  const taskSupport = collectFieldSupport(contentRecords, [
-    "保险公司",
-    "任务类型",
-    "接口方式",
-    "需求状态",
-    "配置质量",
-  ]);
-  const metadataSupport = collectModuleSupport(contentRecords, "元数据|字段映射|字典|数据源");
-  const taskConfigSupport = collectModuleSupport(contentRecords, "AI任务管理|任务管理");
-  const qualitySupport = combineSupport(
-    collectFieldSupport(contentRecords, ["配置质量", "高风险", "需关注", "良好"]),
-    collectActionSupport(contentRecords, ["质量"]),
-  );
-  const releaseSupport = collectModuleSupport(contentRecords, "AI发布|发布|上线");
-  const observationSupport = collectModuleSupport(contentRecords, "运行观测|监控|告警|运行指标");
-  const feedbackSupport = combineSupport(
-    collectFieldSupport(contentRecords, ["配置质量", "高风险", "需关注"]),
-    collectActionSupport(contentRecords, ["编辑", "配置历史", "质量"]),
-    observationSupport,
-    metadataSupport,
-    taskConfigSupport,
-  );
-
-  const steps = [
-    makeStep(
-      "step:insurer-integration-task",
-      1,
-      "保司对接需求/任务",
-      taskSupport,
-      {
-        businessObject: "保司对接需求/任务",
-        action: "按保险公司、任务类型、接口方式、需求状态等字段识别对接需求或任务。",
-        transition: "形成后续元数据准备与 AI 任务配置的业务对象。",
-        confidence: taskSupport.evidence.length >= 5 ? "high" : "medium",
-        reasoning: "字段组合直接来自模块列表与筛选项。",
-      },
+function workflowStepSource(workflow = {}, step = {}, workflowIndex = 0, stepIndex = 0) {
+  const refs = asArray(step.evidenceRefs);
+  if (refs.length) {
+    return refs.map((ref) =>
+      sourceRef(
+        ref.artifact || "workflow-spec",
+        ref.pointer || `/workflows/${workflowIndex}/steps/${stepIndex}`,
+        step.id || step.name,
+        step.name || workflow.name,
+        ref.type || "workflow-step",
+      ),
+    );
+  }
+  return [
+    sourceRef(
+      "workflow-spec",
+      `/workflows/${workflowIndex}/steps/${stepIndex}`,
+      step.id || step.name,
+      step.name || workflow.name,
+      "workflow-step",
     ),
-    makeStep("step:metadata-preparation", 2, "元数据准备", metadataSupport, {
-      businessObject: "元数据/数据源配置",
-      action: "维护对接字段映射、字典或元数据标准。",
-      transition: "为 AI 任务配置提供前置数据定义。",
-      confidence: metadataSupport.evidence.length ? "medium" : "low",
-      reasoning: "依据元数据管理模块名称、业务提示和已确认模块/功能 claim。",
-      boundary: "未观察到从元数据管理自动流转到任务配置的页面操作。",
-    }),
-    makeStep("step:ai-task-configuration", 3, "AI任务配置", taskConfigSupport, {
-      businessObject: "AI任务配置",
-      action: "配置、查看、编辑保司数据对接 AI 任务。",
-      transition: "任务配置进入质量检查或发布前校验。",
-      confidence: taskConfigSupport.evidence.length ? recordConfidence(taskConfigSupport.records[0]) : "low",
-      reasoning: "依据 AI任务管理模块业务提示、列表字段与编辑/查看/质量等操作。",
-    }),
-    makeStep("step:quality-check", 4, "质量检查", qualitySupport, {
-      businessObject: "AI任务配置",
-      action: "围绕配置质量、高风险、需关注等质量信号执行检查。",
-      transition: "质量结果影响发布或回流修正。",
-      confidence:
-        qualitySupport.evidence.some((item) => item.value === "质量") &&
-        qualitySupport.evidence.some((item) => /配置质量|高风险|需关注|良好/.test(item.value))
-          ? "high"
-          : "medium",
-      reasoning: "配置质量字段、质量操作和质量枚举值均来自页面结构。",
-    }),
-    makeStep("step:release-online", 5, "发布上线", releaseSupport, {
-      businessObject: "AI发布上线项",
-      action: "管理 AI 能力发布与上线变更。",
-      transition: "发布后进入运行观测。",
-      confidence: releaseSupport.evidence.length ? "medium" : "low",
-      reasoning: "依据 AI发布管理模块名称、业务提示和已确认模块/功能 claim。",
-      boundary: "未采集到明确的提交发布按钮或上线审批流，发布顺序为模块职责推断。",
-    }),
-    makeStep("step:runtime-observation", 6, "运行观测", observationSupport, {
-      businessObject: "运行观测与质量风险",
-      action: "查看任务运行指标、异常告警或数据质量监控。",
-      transition: "观测结果可能触发问题回流。",
-      confidence: observationSupport.evidence.length ? "medium" : "low",
-      reasoning: "依据数据与运行观测模块名称、业务提示和已确认模块/功能 claim。",
-      boundary: "未采集到真实运行指标明细或告警处置记录。",
-    }),
-    makeStep("step:feedback-correction", 7, "问题回流修正", feedbackSupport, {
-      businessObject: "质量问题/修正项",
-      action: "基于高风险、需关注、质量和配置历史等信号回到配置或元数据环节修正。",
-      transition: "修正后重新进入质量检查、发布与观测。",
-      confidence:
-        feedbackSupport.evidence.some((item) => /高风险|需关注|配置质量/.test(item.value)) &&
-        feedbackSupport.evidence.some((item) => /编辑|配置历史|质量/.test(item.value))
-          ? "medium"
-          : "low",
-      reasoning: "质量风险字段与编辑/质量/配置历史操作共同支持回流修正推理。",
-      boundary: "未观察到系统自动创建问题单或自动回滚；回流为证据约束下的业务推理。",
-    }),
-  ].filter((step) => step.source.length && step.evidence.length);
+  ];
+}
+
+function workflowStepEvidence(workflow = {}, step = {}, workflowIndex = 0, stepIndex = 0) {
+  const label = compactString(workflow.module || workflow.name || "workflow");
+  const value = compactString(step.name || step.title || `步骤 ${stepIndex + 1}`);
+  return [
+    evidenceRef(
+      "workflow-step",
+      label,
+      value,
+      `/workflows/${workflowIndex}/steps/${stepIndex}`,
+    ),
+  ];
+}
+
+function buildNarratableWorkflowSteps(workflowSpec = {}, options = {}) {
+  const steps = [];
+  for (const [workflowIndex, workflow] of asArray(workflowSpec.workflows).entries()) {
+    const evidenceStatus = compactString(workflow.evidenceStatus);
+    const canUse =
+      (evidenceStatus === "observed" && workflow.canNarrateAsObserved === true) ||
+      (evidenceStatus === "inferred" && workflow.canNarrateAsInferred === true);
+    if (!canUse) continue;
+    for (const [stepIndex, step] of asArray(workflow.steps).entries()) {
+      const role = classifyProcessRole(
+        collectEvidenceText([
+          workflow.name,
+          workflow.module,
+          step.name,
+          step.action,
+          ...asArray(step.buttons),
+          ...asArray(step.fields).map((field) => field.label || field.name || field),
+        ]),
+      );
+      steps.push({
+        id: stableId("step", [workflow.module, workflow.name, step.name || stepIndex + 1]),
+        order: steps.length + 1,
+        name: compactString(step.name || `观察步骤 ${stepIndex + 1}`),
+        businessObject: compactString(workflow.businessObject?.name || workflow.module || ""),
+        modules: uniqueStrings([workflow.module]),
+        action: compactString(step.action || step.name || ""),
+        transition: "",
+        role,
+        roleLabel: applyDomainProfileLabel(options.domainProfile, role, roleLabel(role)),
+        status: evidenceStatus === "observed" ? "observed" : "inferred",
+        source: uniqueBy(workflowStepSource(workflow, step, workflowIndex, stepIndex), sourceKey),
+        evidence: uniqueBy(workflowStepEvidence(workflow, step, workflowIndex, stepIndex), evidenceKey),
+        confidence: evidenceStatus === "observed" ? workflow.confidence || "medium" : capConfidence(workflow.confidence || "medium", "medium"),
+        reasoning: evidenceStatus === "observed"
+          ? "该步骤来自 workflow-spec 的 observed workflow，可作为已观察流程步骤叙述。"
+          : "该步骤来自 workflow-spec 的 inferred workflow，依据首页流程卡片等 UI 证据归纳，不能写成已观察执行。",
+        boundary: evidenceStatus === "observed" ? "" : compactString(
+          asArray(workflow.boundaries).map((boundary) => boundary.reason).filter(Boolean).join(" "),
+        ) || "该步骤为证据约束下的流程推理，不代表已观察到实际执行。",
+      });
+    }
+  }
+  return steps;
+}
+
+function buildInferredModuleSteps(records = [], existingModules = new Set(), options = {}) {
+  const contentRecords = records.filter((record) => !isHomeModuleName(record.name));
+  const steps = [];
+  for (const record of contentRecords) {
+    if (existingModules.has(record.name)) continue;
+    const role = classifyProcessRole(
+      collectEvidenceText([
+        record.name,
+        record.businessHint,
+        ...recordFields(record),
+        ...asArray(record.rowActions),
+      ]),
+    );
+    const support = {
+      records: [record],
+      source: record.sources || [],
+      evidence: moduleEvidence(record),
+    };
+    if (!support.source.length || !support.evidence.length) continue;
+    const stepName = applyDomainProfileLabel(options.domainProfile, role, roleLabel(role));
+    steps.push(makeStep(stableId("step", [record.name, role]), steps.length + 1, stepName, support, {
+      businessObject: `${record.name}业务对象`,
+      action: inferResponsibility(record),
+      role,
+      status: "inferred",
+      confidence: capConfidence(recordConfidence(record), "medium"),
+      reasoning: "模块职责、字段和可见操作支持该流程角色，但未观察到跨模块自动流转。",
+      boundary: "该步骤为证据约束下的业务流程推理，不能写成已验证自动流转。",
+    }));
+  }
+  return steps;
+}
+
+function buildEndToEndProcess(records = [], input = {}) {
+  const contentRecords = records.filter((record) => !isHomeModuleName(record.name));
+  const workflowSteps = buildNarratableWorkflowSteps(input.workflowSpec, input);
+  const observedModules = new Set(workflowSteps.flatMap((step) => step.modules || []));
+  const inferredSteps = buildInferredModuleSteps(contentRecords, observedModules, input);
+  const steps = [...workflowSteps, ...inferredSteps].map((step, index) => ({ ...step, order: index + 1 }));
 
   if (!steps.length) return [];
-  const observedFlows = contentRecords.flatMap((record) => record.flows || []);
-  const sequenceConfidence = observedFlows.length ? minConfidence(steps.map((step) => step.confidence)) : "medium";
+  const observedCount = steps.filter((step) => step.status === "observed").length;
+  const inferredCount = steps.filter((step) => step.status !== "observed").length;
+  const status = observedCount && inferredCount ? "partially-observed" : observedCount ? "observed" : "inferred";
+  const boundary = status === "observed"
+    ? ""
+    : observedCount
+      ? "存在已观察步骤，但跨模块顺序或未覆盖模块职责仍为证据约束推理。"
+      : "未观察到端到端流程执行证据，流程顺序不能写成已验证自动流转。";
+  const reasoning = status === "observed"
+    ? "流程由 observed workflow 步骤确定性生成；每个步骤均保留来源与证据。"
+    : observedCount
+      ? "流程由 observed workflow 步骤与证据约束下的 inferred workflow 或模块职责推理共同生成；每个步骤均保留来源与证据。"
+      : "流程由 inferred workflow、模块职责、字段状态信号和可见操作在证据约束下推理生成；不能写成已观察执行。";
   return [
     {
-      id: "process:insurer-demand-to-runtime-feedback",
-      name: "保司对接需求/任务到运行观测回流闭环",
-      type: observedFlows.length ? "observed-or-supported" : "inferred-end-to-end",
-      status: observedFlows.length ? "partially-observed" : "inferred",
-      confidence: capConfidence(minConfidence(steps.map((step) => step.confidence)), sequenceConfidence),
+      id: stableId("process", [input.system?.code || "system", "business-flow"]),
+      name: "业务处理链路",
+      type: status === "observed" ? "observed-workflow" : "generic-business-process",
+      status,
+      confidence: status === "observed"
+        ? minConfidence(steps.map((step) => step.confidence))
+        : capConfidence(minConfidence(steps.map((step) => step.confidence)), "medium"),
       steps,
       source: uniqueBy(steps.flatMap((step) => step.source), sourceKey),
       evidence: uniqueBy(steps.flatMap((step) => step.evidence).slice(0, 40), evidenceKey),
-      reasoning:
-        "端到端顺序由模块职责、共享字段、质量状态和可见操作确定性推理；每个步骤均保留来源与证据。",
-      boundary: observedFlows.length
-        ? "存在模块内流程证据，但跨模块端到端顺序仍需业务侧确认。"
-        : "operation-spec 未记录已执行的跨模块流程，端到端顺序不得写成已验证系统自动流转。",
+      reasoning,
+      boundary,
     },
   ];
 }
 
 function buildFeedbackLoops(records = []) {
   const contentRecords = records.filter((record) => !isHomeModuleName(record.name));
-  const observationSupport = collectModuleSupport(contentRecords, "运行观测|监控|告警|运行指标");
-  const riskSupport = collectFieldSupport(contentRecords, ["配置质量", "高风险", "需关注"]);
-  const correctionSupport = collectActionSupport(contentRecords, ["编辑", "配置历史", "质量"]);
-  const metadataSupport = collectModuleSupport(contentRecords, "元数据|字段映射|字典|数据源");
-  const support = combineSupport(observationSupport, riskSupport, correctionSupport, metadataSupport);
+  const signalSupport = collectFieldSupport(
+    contentRecords,
+    contentRecords.flatMap((record) => recordFields(record).filter(isStateSignal)),
+  );
+  const correctionSupport = collectActionSupport(contentRecords, ["编辑", "调整", "撤回", "重试", "修正", "冻结", "解冻"]);
+  const support = combineSupport(signalSupport, correctionSupport);
   if (!support.evidence.length) return [];
 
   const loopSteps = [
-    makeStep("feedback-step:observe-risk", 1, "运行观测识别质量风险", combineSupport(observationSupport, riskSupport), {
-      businessObject: "运行观测与质量风险",
-      action: "查看配置质量、高风险或需关注信号。",
-      confidence: riskSupport.evidence.length ? "medium" : "low",
+    makeStep("feedback-step:detect-signal", 1, "识别状态或质量信号", signalSupport, {
+      businessObject: "状态/质量信号",
+      action: "查看状态、结果、风险、异常或质量字段。",
+      role: "validate-or-check",
+      status: "inferred",
+      confidence: signalSupport.evidence.length ? "medium" : "low",
+      boundary: "未观察到自动问题创建，仅能说明页面存在判断信号。",
     }),
-    makeStep("feedback-step:locate-cause", 2, "查看质量与配置历史", correctionSupport, {
-      businessObject: "质量问题/修正项",
-      action: "通过质量、配置历史等入口定位问题。",
+    makeStep("feedback-step:correct-record", 2, "执行修正或重试", correctionSupport, {
+      businessObject: "修正项",
+      action: "通过编辑、调整、撤回、重试或冻结等入口修正记录。",
+      role: "correct-or-retry",
+      status: "inferred",
       confidence: correctionSupport.evidence.length ? "medium" : "low",
-    }),
-    makeStep("feedback-step:correct-config", 3, "回到配置或元数据修正", combineSupport(correctionSupport, metadataSupport), {
-      businessObject: "AI任务配置",
-      action: "编辑 AI 任务配置或修正元数据准备项。",
-      confidence: correctionSupport.evidence.length && metadataSupport.evidence.length ? "medium" : "low",
-      boundary: "未观察到自动问题单或强制回流，仅能作为人工修正闭环推理。",
+      boundary: "未观察到强制闭环或自动回滚，只能作为人工修正或重试入口推理。",
     }),
   ].filter((step) => step.source.length && step.evidence.length);
+  if (!loopSteps.length) return [];
 
   return [
     {
-      id: "feedback:runtime-quality-correction",
-      name: "运行观测与质量问题回流",
+      id: "feedback:status-signal-correction",
+      name: "状态信号与问题修正回流",
       status: "inferred",
       confidence: minConfidence(loopSteps.map((step) => step.confidence)),
-      trigger: "配置质量出现高风险或需关注，或运行观测发现异常。",
-      correctionTargets: ["AI任务配置", "元数据/数据源配置"],
+      trigger: "页面出现状态、结果、质量、风险或异常信号，或存在编辑、调整、撤回、重试等修正入口。",
+      correctionTargets: uniqueStrings(loopSteps.flatMap((step) => step.modules || [])),
       steps: loopSteps,
       source: uniqueBy(loopSteps.flatMap((step) => step.source), sourceKey),
       evidence: uniqueBy(loopSteps.flatMap((step) => step.evidence), evidenceKey),
-      boundary: "该闭环来自字段、动作与模块职责组合推理，不代表系统已自动闭环处理。",
+      boundary: "该回流来自字段、动作与模块职责组合推理，不代表系统已自动闭环处理。",
     },
   ];
 }
@@ -918,11 +951,16 @@ function buildBusinessProcessModel(input = {}) {
   const operationSpec = input.operationSpec || {};
   const evidenceSummary = input.evidenceSummary || {};
   const verifiedClaims = input.verifiedClaims || {};
+  const workflowSpec = input.workflowSpec || {};
+  const domainProfile = input.domainProfile || null;
+  if (domainProfile) assertValidDomainProfile(domainProfile);
+  const system = resolveSystem(operationSpec, evidenceSummary, verifiedClaims);
   const records = buildModuleRecords(operationSpec, evidenceSummary, verifiedClaims);
-  const businessObjects = buildBusinessObjects(records);
+  const profileOptions = { domainProfile, workflowSpec, system };
+  const businessObjects = buildBusinessObjects(records, profileOptions);
   const states = buildStates(records);
   const moduleResponsibilities = buildModuleResponsibilities(records);
-  const processes = buildEndToEndProcess(records);
+  const processes = buildEndToEndProcess(records, profileOptions);
   const feedbackLoops = buildFeedbackLoops(records);
   const pending = buildPendingItems({
     operationSpec,
@@ -943,9 +981,9 @@ function buildBusinessProcessModel(input = {}) {
   };
   const artifact = {
     artifactType: "business-process-model",
-    version: 1,
+    version: 2,
     generatedAt: resolveGeneratedAt(operationSpec, evidenceSummary, verifiedClaims, input),
-    system: resolveSystem(operationSpec, evidenceSummary, verifiedClaims),
+    system,
     sourceArtifacts: input.sourceArtifacts || {},
     businessObjects,
     states,
@@ -969,11 +1007,100 @@ function buildBusinessProcessModel(input = {}) {
       noUnsupportedConclusion: true,
       processStepsRequireSourceAndEvidence: true,
       inferredSequenceMustBeLabeled: true,
+      observedRequiresWorkflowEvidence: true,
+      domainProfileExplicitOnly: true,
       purpose:
         "Deterministic business-process abstraction for later narrative stages; not a replacement for verified operation evidence.",
     },
   };
+  artifact.derivation = {
+    builder: "build-business-process-model",
+    algorithmVersion: 2,
+    profileId: domainProfile?.profileId || "",
+    sourceHash: crypto
+      .createHash("sha256")
+      .update(stableJson(artifact.sourceArtifacts || {}))
+      .digest("hex"),
+    contentHash: hashBusinessProcessContent(artifact),
+  };
   return artifact;
+}
+
+function assertJsonObject(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+}
+
+function assertArray(value, label) {
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array.`);
+}
+
+function assertValidBusinessProcessStatus(status, label) {
+  const allowed = new Set(["observed", "partially-observed", "inferred", "candidate", "pending"]);
+  if (!allowed.has(String(status || ""))) {
+    throw new Error(`${label} status must be one of observed, partially-observed, inferred, candidate, pending.`);
+  }
+}
+
+function assertValidSourceEvidenceArrays(item, label) {
+  assertArray(item.source, `${label}.source`);
+  assertArray(item.evidence, `${label}.evidence`);
+  if (!item.source.length || !item.evidence.length) {
+    throw new Error(`${label} must include non-empty source and evidence arrays.`);
+  }
+}
+
+function assertValidBusinessProcessModelArtifact(value, options = {}) {
+  assertJsonObject(value, "business-process-model.json");
+  if (value.artifactType !== "business-process-model") {
+    throw new Error("business-process-model.json artifactType must be business-process-model.");
+  }
+  if (Number(value.version) !== 2) {
+    throw new Error("business-process-model.json version must be 2.");
+  }
+  assertJsonObject(value.sourceArtifacts, "business-process-model.json sourceArtifacts");
+  assertJsonObject(value.derivation, "business-process-model.json derivation");
+  if (!value.derivation.contentHash) {
+    throw new Error("business-process-model.json derivation.contentHash is required.");
+  }
+  assertArray(value.businessObjects, "business-process-model.json businessObjects");
+  assertArray(value.states, "business-process-model.json states");
+  assertArray(value.moduleResponsibilities, "business-process-model.json moduleResponsibilities");
+  assertArray(value.processes, "business-process-model.json processes");
+  assertArray(value.feedbackLoops, "business-process-model.json feedbackLoops");
+  for (const [index, object] of value.businessObjects.entries()) {
+    if (!object.id || !object.name) throw new Error(`business-process-model.json businessObjects/${index} id and name are required.`);
+    assertValidSourceEvidenceArrays(object, `business-process-model.json businessObjects/${index}`);
+  }
+  for (const [index, processItem] of value.processes.entries()) {
+    if (!processItem.id || !processItem.name) {
+      throw new Error(`business-process-model.json processes/${index} id and name are required.`);
+    }
+    assertValidBusinessProcessStatus(processItem.status, `business-process-model.json processes/${index}`);
+    assertValidSourceEvidenceArrays(processItem, `business-process-model.json processes/${index}`);
+    assertArray(processItem.steps, `business-process-model.json processes/${index}.steps`);
+    for (const [stepIndex, step] of processItem.steps.entries()) {
+      if (!step.id || !step.name) {
+        throw new Error(`business-process-model.json processes/${index}.steps/${stepIndex} id and name are required.`);
+      }
+      assertValidBusinessProcessStatus(step.status, `business-process-model.json processes/${index}.steps/${stepIndex}`);
+      assertValidSourceEvidenceArrays(step, `business-process-model.json processes/${index}.steps/${stepIndex}`);
+      if (step.status !== "observed" && !compactString(step.boundary)) {
+        throw new Error(`business-process-model.json processes/${index}.steps/${stepIndex} inferred or candidate steps must include boundary.`);
+      }
+    }
+    if (processItem.status !== "observed" && !compactString(processItem.boundary)) {
+      throw new Error(`business-process-model.json processes/${index} inferred or candidate process must include boundary.`);
+    }
+  }
+  if (options.validateContentHash !== false) {
+    const expectedHash = hashBusinessProcessContent(value);
+    if (value.derivation.contentHash !== expectedHash) {
+      throw new Error("business-process-model.json derivation.contentHash is stale.");
+    }
+  }
+  return true;
 }
 
 function buildBusinessProcessModelFromDir(inputDir, options = {}) {
@@ -981,17 +1108,29 @@ function buildBusinessProcessModelFromDir(inputDir, options = {}) {
   const operationSpecPath = options.operationSpecPath || path.join(dir, "operation-spec.json");
   const evidenceSummaryPath = options.evidenceSummaryPath || path.join(dir, "evidence-summary.json");
   const verifiedClaimsPath = options.verifiedClaimsPath || path.join(dir, "verified-claims.json");
+  const workflowSpecPath = options.workflowSpecPath || path.join(dir, "workflow-spec.json");
+  const domainProfilePath = options.domainProfilePath || options.domainProfile;
   const operationSpec = readRequiredJsonObject(operationSpecPath, { label: "Operation spec" });
   const evidenceSummary = readRequiredJsonObject(evidenceSummaryPath, { label: "Evidence summary" });
   const verifiedClaims = readRequiredJsonObject(verifiedClaimsPath, { label: "Verified claims" });
+  const workflowSpec = fs.existsSync(workflowSpecPath)
+    ? readRequiredJsonObject(workflowSpecPath, { label: "Workflow spec" })
+    : {};
+  const domainProfile = domainProfilePath
+    ? readRequiredJsonObject(domainProfilePath, { label: "Domain profile" })
+    : null;
   const artifact = buildBusinessProcessModel({
     operationSpec,
+    workflowSpec,
     evidenceSummary,
     verifiedClaims,
+    domainProfile,
     sourceArtifacts: buildSourceArtifacts({
       operationSpec: operationSpecPath,
+      workflowSpec: fs.existsSync(workflowSpecPath) ? workflowSpecPath : "",
       evidenceSummary: evidenceSummaryPath,
       verifiedClaims: verifiedClaimsPath,
+      domainProfile: domainProfilePath || "",
     }),
     generatedAt: options.generatedAt,
   });
@@ -1010,8 +1149,10 @@ function main() {
   const result = buildBusinessProcessModelFromDir(args.input, {
     outputPath: args.output,
     operationSpecPath: args["operation-spec"],
+    workflowSpecPath: args["workflow-spec"],
     evidenceSummaryPath: args["evidence-summary"],
     verifiedClaimsPath: args["verified-claims"],
+    domainProfilePath: args["domain-profile"],
   });
   console.log(`Business process model written: ${result.outputPath}`);
   console.log(
@@ -1029,8 +1170,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  assertValidBusinessProcessModelArtifact,
   buildBusinessProcessModel,
   buildBusinessProcessModelFromDir,
   buildSourceArtifacts,
+  hashBusinessProcessContent,
+  stableJson,
   fingerprintFile,
 };
