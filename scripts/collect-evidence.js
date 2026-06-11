@@ -6,6 +6,7 @@ const {
   applyConfiguredPageZoom,
   buildAuthCookies,
   buildChromiumLaunchArgs,
+  buildInspectionSurfaceSnapshot,
   buildCookiesFromHeader,
   buildQualityReport,
   computeEvidenceMetrics,
@@ -59,6 +60,7 @@ const {
   shouldAutoRefreshCookie,
 } = require("./refresh-huntian-cookie");
 const { loadMenuListCacheRawText, resolveMenuApiPath } = require("./menu-list-capture");
+const { buildQualitySourceArtifacts } = require("./check-quality");
 
 function shouldUsePersistentProfile(config, args = {}) {
   if (args["persistent-profile"] === false) return false;
@@ -75,6 +77,63 @@ let activeCollectOptions = null;
 
 function getCollectOptions() {
   return activeCollectOptions;
+}
+
+function normalizeOverviewTextLine(value = "") {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/([\u4e00-\u9fff])\s+([\u4e00-\u9fff])/g, "$1$2")
+    .trim();
+}
+
+function extractHomeOverviewCardsFromText(text = "") {
+  const normalized = normalizeOverviewTextLine(text);
+  if (!normalized) return [];
+  const headingPattern = /(业务流程|任务流程|业务能力|核心能力|功能流程)/g;
+  const matches = [...normalized.matchAll(headingPattern)];
+  const cards = [];
+  const stopWords = new Set([
+    "首页",
+    "退出",
+    "欢迎使用",
+  ]);
+  for (let index = 0; index < matches.length; index += 1) {
+    const title = matches[index][1];
+    const start = matches[index].index + title.length;
+    const end = index + 1 < matches.length ? matches[index + 1].index : normalized.length;
+    const segment = normalized.slice(start, end).trim();
+    if (!segment) continue;
+    const chunks = segment
+      .split(/\s{2,}|(?=需求输出|需求验证|需求验收|数据监控|需求分析\s*Skill|数据同步\s*Skill|数据验收\s*Skill|数据监控\s*Skill|费用申请|预算校验|财务复核|付款归档|待办处理|异常退回)/)
+      .map(normalizeOverviewTextLine)
+      .filter(Boolean)
+      .filter((chunk) => !stopWords.has(chunk))
+      .slice(0, 24);
+    const items = [];
+    for (const chunk of chunks) {
+      const compact = chunk.replace(/\s+/g, " ").trim();
+      const titleMatch = compact.match(
+        /^(需求输出|需求验证|需求验收|数据监控|需求分析\s*Skill|数据同步\s*Skill|数据验收\s*Skill|数据监控\s*Skill|费用申请|预算校验|财务复核|付款归档|待办处理|异常退回)(.*)$/,
+      );
+      const itemTitle = normalizeOverviewTextLine(titleMatch ? titleMatch[1] : compact.split(" ").slice(0, 2).join(" "));
+      const description = normalizeOverviewTextLine(titleMatch ? titleMatch[2] : compact.replace(itemTitle, ""));
+      if (!itemTitle || itemTitle === title || stopWords.has(itemTitle)) continue;
+      items.push({
+        title: itemTitle,
+        description: description.slice(0, 120),
+      });
+      if (items.length >= 12) break;
+    }
+    if (items.length) {
+      cards.push({
+        title,
+        items,
+        source: "home-overview-card",
+      });
+    }
+    if (cards.length >= 8) break;
+  }
+  return cards;
 }
 
 function readJsonObjectStrict(filePath, label, recoveryHint) {
@@ -301,10 +360,14 @@ async function main() {
     ...metrics,
     blockedItems: result.evidence.blockedItems || [],
   });
-  writeJson(path.join(systemOutput, "evidence.json"), result.evidence);
+  writeJson(evidencePath, result.evidence);
   writeJson(path.join(systemOutput, "quality-report.json"), {
     ...qualityReport,
     counts: metrics.counts,
+    sourceArtifacts: buildQualitySourceArtifacts({
+      evidencePath,
+      operationGuideGatePath: path.join(systemOutput, "operation-guide-gate.json"),
+    }),
   });
   console.log(`Evidence package written: ${systemOutput}`);
   console.log(
@@ -1862,6 +1925,29 @@ async function extractNestedSidebarMenusFromPage(page) {
           if (!title) return;
           pushItem(title, title, href);
         });
+        document.querySelectorAll("body *").forEach((node) => {
+          if (!isVisible(node)) return;
+          const rect = node.getBoundingClientRect();
+          const leftRailLimit = Math.min(320, window.innerWidth * 0.35);
+          if (rect.left < 0 || rect.left > leftRailLimit || rect.width > 360) return;
+          const title = readTitle(node);
+          if (!title || title.length > 40) return;
+          if (!/[\u4e00-\u9fa5A-Za-z0-9]/.test(title)) return;
+          const childTitles = Array.from(node.children || [])
+            .map((child) => readTitle(child))
+            .filter((item) => item && item !== title);
+          if (childTitles.length > 1) return;
+          const style = window.getComputedStyle(node);
+          const className = String(node.className || "");
+          const role = node.getAttribute("role") || "";
+          const looksLikeMenu =
+            style.cursor === "pointer" ||
+            /menu|side|sider|nav|item/i.test(className) ||
+            /menuitem|treeitem|tab|button|link/i.test(role) ||
+            Boolean(node.closest("[class*='menu'],[class*='Menu'],[class*='side'],[class*='Side'],[class*='sider'],[class*='Sider']"));
+          if (!looksLikeMenu) return;
+          pushItem(title, title, readHref(node));
+        });
         const walkTree = (node, prefix) => {
           if (!node || !isVisible(node)) return;
           const role = node.getAttribute("role") || "";
@@ -2291,6 +2377,8 @@ async function inspectSafeContainers({
     attemptedTexts.add(candidateText);
 
     try {
+      const beforeUrl = page.url();
+      const beforeSnapshot = await collectFrameSnapshot(frame).catch(() => null);
       const beforeCount = await visibleContainerCount(frame);
       const clicked = await clickInspectionCandidate(frame, candidate);
       if (!clicked) {
@@ -2302,13 +2390,64 @@ async function inspectSafeContainers({
       await waitForVisibleContainer(frame, getCollectOptions()?.fastNavigation ? 2500 : 5000);
       await page.waitForTimeout(getCollectOptions()?.fastNavigation ? 200 : 400);
       await waitForPageStable(page);
+      const urlChangedAfterClick = page.url() !== beforeUrl;
       const afterCount = await visibleContainerCount(frame);
 
       if (afterCount <= beforeCount) {
-        log("inspect-container", candidate.text, "skipped", {
-          reason: "no-new-visible-container",
+        const afterFrame = await getActiveContentFrame(page);
+        const afterSnapshot = await collectFrameSnapshot(afterFrame).catch(() => null);
+        const surface = buildInspectionSurfaceSnapshot({
+          candidateText,
+          beforeSnapshot,
+          afterSnapshot,
         });
-        await closeTopContainer(page);
+        if (!surface) {
+          log("inspect-container", candidate.text, "skipped", {
+            reason: "no-new-visible-container",
+          });
+          await restoreInspectionContext(page, beforeUrl);
+          if (urlChangedAfterClick) return inspected;
+          continue;
+        }
+
+        const screenshotFile = path
+          .join(
+            "screenshots",
+            safeScreenshotName(
+              system.name,
+              candidate.text,
+              "页面内表单",
+              timestamp,
+            ),
+          )
+          .replace(/\\/g, "/");
+        await page.screenshot({
+          path: path.join(systemOutput, screenshotFile),
+          fullPage: true,
+        });
+        mergeContainerSnapshotIntoEvidence(evidence, {
+          ...surface,
+          id: `${pageId}-container-${inspected + 1}`,
+          sourcePageId: pageId,
+          screenshot: {
+            id: `shot-${pageId}-container-${inspected + 1}`,
+            file: screenshotFile,
+            module: surface.title || candidate.text,
+            function: candidate.text,
+            step: "页面内表单/详情",
+            caption: `${candidate.text} 页面内表单/详情截图。`,
+            includeInWhitepaper: true,
+          },
+        });
+
+        log("inspect-container", candidate.text, "success", {
+          type: surface.type,
+          title: surface.title,
+          captureKind: surface.captureKind,
+        });
+        inspected += 1;
+        await restoreInspectionContext(page, beforeUrl);
+        if (urlChangedAfterClick) return inspected;
         continue;
       }
 
@@ -2340,6 +2479,8 @@ async function inspectSafeContainers({
         ...container,
         id: `${pageId}-container-${inspected + 1}`,
         sourcePageId: pageId,
+        triggerLabel: candidateText,
+        captureKind: "visible-container",
         screenshot: {
           id: `shot-${pageId}-container-${inspected + 1}`,
           file: screenshotFile,
@@ -2356,7 +2497,8 @@ async function inspectSafeContainers({
         title: container.title,
       });
       inspected += 1;
-      await closeTopContainer(page);
+      await restoreInspectionContext(page, beforeUrl);
+      if (urlChangedAfterClick) return inspected;
     } catch (error) {
       log("inspect-container", candidate.text, "skipped", {
         reason: error.message,
@@ -2941,6 +3083,89 @@ async function collectFrameSnapshot(frame) {
       .filter((table) => table.columns.length > 1 || table.rowCount)
       .filter((table) => table.columns.join("|") !== "操作")
       .slice(0, 20);
+    const extractOverviewCards = () => {
+      const normalizeLine = (value) =>
+        String(value || "")
+          .replace(/\s+/g, " ")
+          .replace(/([\u4e00-\u9fff])\s+([\u4e00-\u9fff])/g, "$1$2")
+          .trim();
+      const extractCardsFromText = (text) => {
+        const normalized = normalizeLine(text);
+        const headingPattern = /(业务流程|任务流程|业务能力|核心能力|功能流程)/g;
+        const matches = Array.from(normalized.matchAll(headingPattern));
+        const cards = [];
+        const itemPattern =
+          /^(需求输出|需求验证|需求验收|数据监控|需求分析\s*Skill|数据同步\s*Skill|数据验收\s*Skill|数据监控\s*Skill|费用申请|预算校验|财务复核|付款归档|待办处理|异常退回)(.*)$/;
+        for (let index = 0; index < matches.length; index += 1) {
+          const title = matches[index][1];
+          const start = matches[index].index + title.length;
+          const end = index + 1 < matches.length ? matches[index + 1].index : normalized.length;
+          const segment = normalized.slice(start, end).trim();
+          const chunks = segment
+            .split(/\s{2,}|(?=需求输出|需求验证|需求验收|数据监控|需求分析\s*Skill|数据同步\s*Skill|数据验收\s*Skill|数据监控\s*Skill|费用申请|预算校验|财务复核|付款归档|待办处理|异常退回)/)
+            .map(normalizeLine)
+            .filter(Boolean)
+            .filter((chunk) => !/^(首页|退出|欢迎使用)$/.test(chunk))
+            .slice(0, 24);
+          const items = [];
+          for (const chunk of chunks) {
+            const match = chunk.match(itemPattern);
+            const itemTitle = normalizeLine(match ? match[1] : chunk.split(" ").slice(0, 2).join(" "));
+            const description = normalizeLine(match ? match[2] : chunk.replace(itemTitle, ""));
+            if (!itemTitle || itemTitle === title) continue;
+            items.push({ title: itemTitle, description: description.slice(0, 120) });
+            if (items.length >= 12) break;
+          }
+          if (items.length) cards.push({ title, items, source: "home-overview-card" });
+          if (cards.length >= 8) break;
+        }
+        return cards;
+      };
+      const headings = Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,[class*='title'],[class*='Title']"))
+        .filter(isVisible)
+        .map((element) => ({
+          element,
+          text: textOf(element).replace(/\s+/g, " ").trim(),
+        }))
+        .filter((item) => /业务流程|任务流程|流程|能力|功能|步骤/.test(item.text))
+        .slice(0, 12);
+      const cards = [];
+      const itemText = (value) => value.replace(/\s+/g, " ").trim();
+      for (const heading of headings) {
+        let container = heading.element.parentElement;
+        for (let depth = 0; container && depth < 4; depth += 1) {
+          const text = itemText(container.innerText || container.textContent || "");
+          if (text.length > heading.text.length + 20) break;
+          container = container.parentElement;
+        }
+        if (!container) continue;
+        const rawLines = itemText(container.innerText || container.textContent || "")
+          .split(/\s{2,}|\n|(?<=。)/)
+          .map((line) => itemText(line))
+          .filter(Boolean)
+          .filter((line) => line !== heading.text)
+          .filter((line) => !/^(首页|退出)$/.test(line))
+          .slice(0, 40);
+        const items = [];
+        for (let index = 0; index < rawLines.length; index += 1) {
+          const title = rawLines[index];
+          if (!title || title.length > 30) continue;
+          const next = rawLines[index + 1] || "";
+          const description = next && next.length <= 80 && !/流程$/.test(next) ? next : "";
+          items.push({ title, description });
+          if (description) index += 1;
+          if (items.length >= 12) break;
+        }
+        if (items.length) {
+          cards.push({
+            title: heading.text,
+            items,
+            source: "home-overview-card",
+          });
+        }
+      }
+      return cards.length ? cards.slice(0, 8) : extractCardsFromText(document.body.innerText || "");
+    };
     const landmarks = unique(
       Array.from(document.querySelectorAll("main,nav,header,aside,section,[role]")).map(
         (element) =>
@@ -2956,6 +3181,7 @@ async function collectFrameSnapshot(frame) {
       buttons,
       forms,
       tables,
+      overviewCards: extractOverviewCards(),
       landmarks,
     };
   });
@@ -3188,6 +3414,16 @@ async function collectVisibleContainerSnapshot(target) {
 async function closeTopContainer(page) {
   await page.keyboard.press("Escape").catch(() => {});
   await page.waitForTimeout(200);
+}
+
+async function restoreInspectionContext(page, beforeUrl) {
+  await closeTopContainer(page).catch(() => {});
+  const currentUrl = page.url();
+  if (!beforeUrl || currentUrl === beforeUrl) return;
+  await page.goBack({ waitUntil: "domcontentloaded", timeout: 5000 }).catch(async () => {
+    await page.goto(beforeUrl, { waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {});
+  });
+  await waitForPageStable(page).catch(() => {});
 }
 
 async function expandSafeDynamicMenus(page, log) {
@@ -3807,8 +4043,10 @@ if (require.main === module) {
 } else {
   module.exports = {
     applyVisibleDomMenuCandidatesToEvidence,
+    buildInspectionSurfaceSnapshot,
     collectBrowserEvidence,
     executeWriteValidationBrowser,
+    extractHomeOverviewCardsFromText,
     loadEvidenceForCollection,
     loadWriteValidationInputs,
     preferApiMenusOverDom,

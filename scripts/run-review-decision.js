@@ -16,10 +16,9 @@ const {
 } = require("./pipeline-state");
 const { exportWhitepaperWord } = require("./export-whitepaper-word");
 const {
-  DEFAULT_THRESHOLD,
-  findStaleReadinessSources,
-  normalizeThreshold,
-} = require("./check-truth-readiness");
+  assertApprovalTruthReadiness,
+  truthReadinessLooksLikeSmoke,
+} = require("./approval-guard");
 
 function unique(items) {
   return [...new Set(items.filter(Boolean))];
@@ -30,22 +29,34 @@ function appendNarrativeGuardNodes(nodes) {
   for (const node of nodes || []) {
     result.push(node);
     if (node === "summary") {
-      result.push("db-model", "truth-universe", "truth-claims");
+      result.push("db-model", "truth-universe", "truth-claims", "business-process", "whitepaper-plan");
     }
     if (node === "db-profile") {
-      result.push("db-model", "truth-universe", "truth-claims");
+      result.push("db-model", "truth-universe", "truth-claims", "business-process", "whitepaper-plan");
     }
     if (node === "db-model") {
-      result.push("truth-universe", "truth-claims");
+      result.push("truth-universe", "truth-claims", "business-process", "whitepaper-plan");
+    }
+    if (node === "truth-universe") {
+      result.push("truth-claims", "business-process", "whitepaper-plan");
+    }
+    if (node === "truth-claims") {
+      result.push("business-process", "whitepaper-plan");
+    }
+    if (node === "business-process") {
+      result.push("whitepaper-plan");
     }
     if (node === "narrative") {
-      result.push("fact-check");
+      result.push("fact-check", "golden-eval");
+    }
+    if (node === "fact-check") {
+      result.push("golden-eval");
     }
     if (node === "quality") {
       result.push("truth-readiness");
     }
   }
-  if (result.some((node) => ["truth-claims", "narrative", "fact-check"].includes(node))) {
+  if (result.some((node) => ["truth-claims", "business-process", "whitepaper-plan", "narrative", "fact-check", "golden-eval"].includes(node))) {
     result.push("truth-readiness");
   }
   return unique(result);
@@ -251,123 +262,6 @@ function buildReviewDecision(input = {}) {
   };
 }
 
-function readApprovalTruthReadiness(inputDir) {
-  const reportPath = path.join(inputDir, "truth-readiness-report.json");
-  if (!fs.existsSync(reportPath)) {
-    throw new Error(`truth-readiness-report.json not found: ${reportPath}`);
-  }
-  let report = null;
-  try {
-    report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
-  } catch (error) {
-    throw new Error(`truth-readiness-report.json is malformed: ${error.message}`);
-  }
-  if (!report || typeof report !== "object" || Array.isArray(report)) {
-    throw new Error(`truth-readiness-report.json must be a JSON object: ${reportPath}`);
-  }
-  return { reportPath, report };
-}
-
-function approvalTruthScore(report = {}) {
-  const score = Number(report.score);
-  if (Number.isFinite(score)) return score;
-  const scorePercent = Number(report.scorePercent);
-  if (Number.isFinite(scorePercent)) return scorePercent / 100;
-  return 0;
-}
-
-function outputPathHasE2eSegment(inputDir) {
-  return path
-    .resolve(String(inputDir || ""))
-    .split(/[\\/]+/)
-    .some((part) => part.toLowerCase() === "_e2e");
-}
-
-function truthReadinessLooksLikeSmoke(report = {}) {
-  const mode = String(report.mode || "").toLowerCase();
-  if (mode.includes("smoke") || mode.includes("local-e2e")) return true;
-  return (Array.isArray(report.improvementActions) ? report.improvementActions : []).some((item) =>
-    /smoke|local-e2e|本地冒烟/i.test(`${item.id || ""} ${item.message || ""}`),
-  );
-}
-
-function markdownLooksLikeSmoke(markdown = "") {
-  return /local-e2e-smoke|smoke gate|本地冒烟|冒烟|不代表最终业务白皮书|不代表最终业务白皮书内容/i.test(
-    String(markdown || ""),
-  );
-}
-
-function readTextIfExists(filePath) {
-  try {
-    return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
-  } catch {
-    return "";
-  }
-}
-
-function assertNotSmokeApproval(inputDir, reportPath, report = {}, options = {}) {
-  if (options.allowSmokeTruthReadiness) return;
-  const reasons = [];
-  if (truthReadinessLooksLikeSmoke(report)) {
-    reasons.push("truth-readiness-report.json is marked as smoke/local-e2e evidence");
-  }
-  if (outputPathHasE2eSegment(inputDir)) {
-    reasons.push("input directory is under an _e2e smoke output");
-  }
-  const pendingMarkdown = readTextIfExists(path.join(inputDir, "whitepaper.pending-review.md"));
-  if (markdownLooksLikeSmoke(pendingMarkdown)) {
-    reasons.push("pending-review markdown contains smoke wording");
-  }
-  if (reasons.length) {
-    throw new Error(
-      [
-        `Smoke truth readiness report cannot approve real delivery: ${reportPath}`,
-        ...reasons,
-        "run the real pipeline and truth-readiness before approval",
-      ].join("; "),
-    );
-  }
-}
-
-function assertApprovalTruthReadiness(inputDir, options = {}) {
-  const { reportPath, report } = readApprovalTruthReadiness(inputDir);
-  assertNotSmokeApproval(inputDir, reportPath, report, options);
-  const threshold = normalizeThreshold(options.threshold ?? report.threshold ?? DEFAULT_THRESHOLD);
-  const score = approvalTruthScore(report);
-  const blockers = Array.isArray(report.blockers)
-    ? report.blockers.map((item) => item.id || item.message || "").filter(Boolean).join(", ")
-    : "";
-  if (report.canSubmitReview === true && score >= threshold) {
-    const staleSources = findStaleReadinessSources(inputDir, report);
-    if (!staleSources.length) {
-      return report;
-    }
-    throw new Error(
-      [
-        `Truth readiness report is stale: ${reportPath}`,
-        ...staleSources
-          .slice(0, 6)
-          .map((item) => `${item.key}${item.file ? `(${item.file})` : ""}: ${item.reason}`),
-        staleSources.length > 6 ? `and ${staleSources.length - 6} more` : "",
-        "rerun truth-readiness before approval",
-      ]
-        .filter(Boolean)
-        .join("; "),
-    );
-  }
-  throw new Error(
-    [
-      `Truth readiness gate has not passed: ${reportPath}`,
-      `canSubmitReview=${Boolean(report.canSubmitReview)}`,
-      `score=${Math.round(score * 1000) / 10}%`,
-      `threshold=${Math.round(threshold * 1000) / 10}%`,
-      blockers ? `blockers=${blockers}` : "",
-    ]
-      .filter(Boolean)
-      .join("; "),
-  );
-}
-
 function runReviewDecision(options = {}) {
   const inputDir = path.resolve(String(options.inputDir || options.input || "."));
   const evidenceSummary =
@@ -384,7 +278,7 @@ function runReviewDecision(options = {}) {
     if (!fs.existsSync(pendingPath)) {
       throw new Error(`Pending review markdown not found: ${pendingPath}`);
     }
-    assertApprovalTruthReadiness(inputDir, options);
+    assertApprovalTruthReadiness(inputDir, { ...options, state });
     promotePendingReviewToFinal(pendingPath, finalPath, {
       systemName: options.systemName || state?.name,
     });
@@ -404,6 +298,7 @@ function runReviewDecision(options = {}) {
       displayFinalPath: named.final ? path.join(inputDir, named.final) : "",
       displayPendingPath: named.pendingReview ? path.join(inputDir, named.pendingReview) : "",
       docxPath: word.outputPath,
+      docxManifestPath: word.manifestPath,
     };
   }
 
@@ -422,6 +317,9 @@ function runReviewDecision(options = {}) {
           ? path.basename(decision.displayFinalPath)
           : state.artifacts?.final || "whitepaper.final.md",
         docx: decision.docxPath ? path.basename(decision.docxPath) : state.artifacts?.docx || "",
+        docxManifest: decision.docxManifestPath
+          ? path.basename(decision.docxManifestPath)
+          : state.artifacts?.docxManifest || "",
       },
       review: {
         ...state.review,
@@ -452,6 +350,9 @@ function main() {
     status,
     comment: args.comment,
     date: args.date,
+    requireDatabaseEvidence: args["require-database-evidence"],
+    systemCode: args["system-code"] || args.system,
+    systemName: args["system-name"],
   });
   console.log(JSON.stringify(decision, null, 2));
 }

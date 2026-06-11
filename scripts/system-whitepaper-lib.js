@@ -109,12 +109,13 @@ function syncWhitepaperNamedArtifacts(options = {}) {
   const result = { pendingReview: "", final: "" };
   const pendingInternal = path.join(systemOutput, "whitepaper.pending-review.md");
   const finalInternal = path.join(systemOutput, "whitepaper.final.md");
+  const syncFinal = options.syncFinal !== false;
   if (fs.existsSync(pendingInternal)) {
     const pendingName = resolveWhitepaperPendingReviewFileName(evidence, nameOptions);
     fs.copyFileSync(pendingInternal, path.join(systemOutput, pendingName));
     result.pendingReview = pendingName;
   }
-  if (fs.existsSync(finalInternal)) {
+  if (syncFinal && fs.existsSync(finalInternal)) {
     const finalName = resolveWhitepaperFileName(evidence, nameOptions);
     const finalized = finalizeWhitepaperMarkdown(fs.readFileSync(finalInternal, "utf8"), {
       systemName: evidence.systemInfo?.name || options.systemName,
@@ -889,6 +890,7 @@ function menuMatchesPage(menu, page) {
 function mergeMenuMapEntries(menuMap) {
   const byUrl = new Map();
   for (const menu of menuMap || []) {
+    if (isEnvironmentSwitcherMenu(menu)) continue;
     const key = menu.url
       ? `url:${normalizePageUrl(menu.url)}`
       : `text:${String(menu.menuPath || menu.title || "").trim()}`;
@@ -999,6 +1001,11 @@ function buildQualityReport(input) {
   };
 
   const failures = [];
+  const counts = input.counts || {};
+  const hasExplorationEvidence =
+    Number(counts.pages || 0) > 0 ||
+    Number(counts.actions || 0) > 0 ||
+    Number(counts.visitedMenus || 0) > 0;
 
   for (const [key, threshold] of Object.entries(DEFAULT_THRESHOLDS)) {
     if (metrics[key] < threshold) {
@@ -1007,13 +1014,18 @@ function buildQualityReport(input) {
   }
 
   const p0Items = (input.blockedItems || []).filter(
-    (item) => item.severity === "P0",
+    (item) =>
+      item.severity === "P0" &&
+      item.resolved !== true &&
+      !(hasExplorationEvidence && /尚未执行 Playwright 页面探索/.test(String(item.reason || ""))),
   );
   for (const item of p0Items) {
     failures.push(`P0 blocker: ${item.reason || item.function || "unknown"}`);
   }
 
   return {
+    artifactType: "quality-report",
+    version: 1,
     ...metrics,
     failures,
     blockingIssues: p0Items,
@@ -1384,6 +1396,174 @@ function isSafeInspectionClick(candidate) {
   return Boolean(text && inspection && !highImpact);
 }
 
+function classifyCaptureAction(candidate = {}) {
+  const text = normalizeUiText(candidate.text || candidate.name || candidate.label || "");
+  const role = String(candidate.role || "").toLowerCase();
+  if (!text) {
+    return { class: "unknown", safeToClick: false, reason: "missing-label", text };
+  }
+  if (
+    /删除|移除|禁用|停用|审批|审核|通过|驳回|支付|付款|结算|发送|取消订单|关闭订单|关单|作废|下架|确认删除/.test(
+      text,
+    )
+  ) {
+    return { class: "unsafe-write", safeToClick: false, reason: "unsafe-write-action", text };
+  }
+  if (/新增|新建|创建|配置|生成|执行|运行|上传|导入|编辑|修改/.test(text)) {
+    return { class: "flow-start", safeToClick: true, reason: "business-flow-entry", text };
+  }
+  if (/上一步|下一步|保存|提交|确定|确认|发布|完成|开始|运行/.test(text)) {
+    return { class: "flow-progress", safeToClick: true, reason: "business-flow-progress", text };
+  }
+  if (/查看|详情|预览/.test(text)) {
+    return { class: "read-detail", safeToClick: true, reason: "read-only-detail", text };
+  }
+  if (
+    /menu|tree|tab|navigation/.test(role) ||
+    /页签|菜单|导航|切换|高级查询|筛选|过滤|更多/.test(text)
+  ) {
+    return { class: "navigation", safeToClick: true, reason: "navigation", text };
+  }
+  return { class: "unknown", safeToClick: false, reason: "unclassified-action", text };
+}
+
+function snapshotActionLabel(value) {
+  if (typeof value === "string") return normalizeUiText(value);
+  return normalizeUiText(value?.text || value?.name || value?.label || "");
+}
+
+function uniqueSnapshotStrings(values = []) {
+  return uniqueStrings((values || []).map(snapshotActionLabel));
+}
+
+function snapshotFieldLabels(snapshot = {}) {
+  return uniqueStrings(
+    (snapshot.forms || []).flatMap((form) =>
+      (form.fields || []).map((field) => field.label || field.name),
+    ),
+  );
+}
+
+function snapshotTableSignatures(snapshot = {}) {
+  return uniqueStrings(
+    (snapshot.tables || []).map((table) => (table.columns || []).join("|")),
+  );
+}
+
+function isInspectionFlowButton(label) {
+  return /^(上一步|下一步|保存|确定|提交|完成|生成|发布|确认|开始|执行|运行)$/.test(
+    normalizeUiText(label),
+  );
+}
+
+function filterFormsByNewFields(forms = [], beforeFields = new Set()) {
+  return (forms || [])
+    .map((form) => ({
+      ...form,
+      fields: (form.fields || []).filter((field) => {
+        const label = normalizeUiText(field.label || field.name || "");
+        return label && !beforeFields.has(label);
+      }),
+    }))
+    .filter((form) => (form.fields || []).length);
+}
+
+function filterNewTables(tables = [], beforeTables = new Set()) {
+  return (tables || []).filter((table) => {
+    const signature = (table.columns || []).join("|");
+    return signature && !beforeTables.has(signature);
+  });
+}
+
+function buildInspectionSurfaceDelta(input = {}) {
+  const action =
+    input.action ||
+    classifyCaptureAction({
+      text: input.candidateText || input.triggerLabel || "",
+      role: input.role || "button",
+    });
+  if (!action.safeToClick || action.class === "unsafe-write") {
+    return {
+      valid: false,
+      reason: action.reason || "unsafe-action",
+      action,
+      forms: [],
+      tables: [],
+      buttons: [],
+    };
+  }
+
+  const beforeSnapshot = input.beforeSnapshot || {};
+  const afterSnapshot = input.afterSnapshot || {};
+  const beforeFields = new Set(snapshotFieldLabels(beforeSnapshot));
+  const afterFields = snapshotFieldLabels(afterSnapshot);
+  const newFieldLabels = afterFields.filter((label) => !beforeFields.has(label));
+  const beforeTables = new Set(snapshotTableSignatures(beforeSnapshot));
+  const afterTableSignatures = snapshotTableSignatures(afterSnapshot);
+  const hasNewTable = afterTableSignatures.some((signature) => !beforeTables.has(signature));
+  const beforeButtons = new Set(uniqueSnapshotStrings(beforeSnapshot.buttons || []));
+  const flowButtons = uniqueSnapshotStrings(afterSnapshot.buttons || []).filter(isInspectionFlowButton);
+  const deltaButtons = flowButtons.filter((button) => !beforeButtons.has(button));
+  const deltaForms = filterFormsByNewFields(afterSnapshot.forms || [], beforeFields);
+  const deltaTables = filterNewTables(afterSnapshot.tables || [], beforeTables);
+  const fieldCountGrew = afterFields.length > beforeFields.size;
+
+  if (!newFieldLabels.length && !fieldCountGrew && !hasNewTable && !deltaButtons.length) {
+    return {
+      valid: false,
+      reason: "no-meaningful-delta",
+      action,
+      forms: [],
+      tables: [],
+      buttons: [],
+    };
+  }
+  if (!deltaForms.length && !deltaTables.length && !deltaButtons.length) {
+    return {
+      valid: false,
+      reason: "url-only-or-unchanged-surface",
+      action,
+      forms: [],
+      tables: [],
+      buttons: [],
+    };
+  }
+
+  return {
+    valid: true,
+    reason: "meaningful-surface-delta",
+    action,
+    forms: deltaForms.slice(0, 12),
+    tables: deltaTables.slice(0, 12),
+    buttons: deltaButtons.slice(0, 80),
+    addedFieldLabels: newFieldLabels.slice(0, 80),
+    addedTableSignatures: afterTableSignatures
+      .filter((signature) => !beforeTables.has(signature))
+      .slice(0, 40),
+  };
+}
+
+function buildInspectionSurfaceSnapshot(input = {}) {
+  const candidateText = normalizeUiText(input.candidateText || input.triggerLabel || "");
+  if (!isSafeInspectionClick({ text: candidateText, role: input.role || "button" })) return null;
+  const action = input.action || classifyCaptureAction({ text: candidateText, role: input.role || "button" });
+  const delta = buildInspectionSurfaceDelta({ ...input, action });
+  if (!delta.valid) return null;
+
+  return {
+    type: "container",
+    title: candidateText || input.afterSnapshot?.title || "页面内表单/详情",
+    triggerLabel: candidateText,
+    captureKind: "inspection-surface",
+    captureScope: "page-delta",
+    actionClass: action.class,
+    actionClassification: action,
+    buttons: delta.buttons,
+    forms: delta.forms,
+    tables: delta.tables,
+  };
+}
+
 function normalizeUrl(candidateUrl, baseUrl) {
   const url = new URL(candidateUrl, baseUrl);
   url.hash = "";
@@ -1519,6 +1699,7 @@ function mergeFrameSnapshots(snapshots) {
       buttons: [],
       forms: [],
       tables: [],
+      overviewCards: [],
       landmarks: [],
     };
   }
@@ -1559,6 +1740,7 @@ function mergeFrameSnapshots(snapshots) {
   }
 
   const first = items[0];
+  const overviewCards = normalizeOverviewCards(items.flatMap((item) => item.overviewCards || []));
   return {
     title: items.map((item) => item.title).find(Boolean) || first.title || "",
     url: items.map((item) => item.url).find(Boolean) || first.url || "",
@@ -1574,6 +1756,7 @@ function mergeFrameSnapshots(snapshots) {
       .filter((table) => table.columns.length > 1 || table.rowCount)
       .filter((table) => table.columns.join("|") !== "操作")
       .slice(0, 40),
+    overviewCards,
     landmarks: Array.from(new Set(items.flatMap((item) => item.landmarks || []))).slice(0, 80),
   };
 }
@@ -1603,6 +1786,32 @@ function pruneResolvedFailedPages(evidence) {
   return { removed, remaining: kept.length };
 }
 
+function normalizeOverviewCardItem(item = {}) {
+  const title = normalizeUiText(item.title || item.name || item.label || item.text || "");
+  const description = normalizeUiText(item.description || item.summary || item.note || "");
+  if (!title && !description) return null;
+  return { title, description };
+}
+
+function normalizeOverviewCards(cards = []) {
+  const result = [];
+  for (const card of Array.isArray(cards) ? cards : []) {
+    const title = normalizeUiText(card.title || card.name || card.heading || "");
+    const items = (Array.isArray(card.items) ? card.items : [])
+      .map(normalizeOverviewCardItem)
+      .filter(Boolean)
+      .slice(0, 12);
+    if (!title || !items.length) continue;
+    result.push({
+      title,
+      items,
+      source: card.source || "home-overview-card",
+    });
+    if (result.length >= 12) break;
+  }
+  return result;
+}
+
 function selectMenusForEvidenceRefresh(menuMap, limit, evidence) {
   const menus = menuMap || [];
   return menus
@@ -1630,6 +1839,7 @@ function mergePageSnapshotIntoEvidence(evidence, snapshot) {
       title: snapshot.title || "",
       url: snapshot.url || "",
       mainAreas: snapshot.landmarks || [],
+      overviewCards: normalizeOverviewCards(snapshot.overviewCards),
       screenshot: snapshot.screenshot ? snapshot.screenshot.file : "",
       evidenceRefs: snapshot.screenshot ? [snapshot.screenshot.id] : [],
     });
@@ -1638,6 +1848,8 @@ function mergePageSnapshotIntoEvidence(evidence, snapshot) {
     pageRecord.url = snapshot.url || pageRecord.url;
     pageRecord.menuPath = snapshot.menuPath || pageRecord.menuPath;
     pageRecord.mainAreas = snapshot.landmarks || pageRecord.mainAreas;
+    const overviewCards = normalizeOverviewCards(snapshot.overviewCards);
+    if (overviewCards.length) pageRecord.overviewCards = overviewCards;
     if (snapshot.screenshot?.file) {
       pageRecord.screenshot = snapshot.screenshot.file;
       pageRecord.evidenceRefs = snapshot.screenshot.id
@@ -1648,6 +1860,15 @@ function mergePageSnapshotIntoEvidence(evidence, snapshot) {
 
   for (const link of snapshot.links || []) {
     if (!link.text && !link.href) continue;
+    if (
+      isEnvironmentSwitcherMenu({
+        title: link.text || link.href,
+        menuPath: link.text || link.href,
+        url: link.href || "",
+      })
+    ) {
+      continue;
+    }
     const exists = evidence.menuMap.some(
       (item) => item.path === link.text && item.url === link.href,
     );
@@ -1747,6 +1968,12 @@ function mergeContainerSnapshotIntoEvidence(evidence, snapshot) {
     screenshot: snapshot.screenshot ? snapshot.screenshot.file : "",
     evidenceRefs: snapshot.screenshot ? [snapshot.screenshot.id] : [],
     sourcePageId: snapshot.sourcePageId || "",
+    triggerLabel: snapshot.triggerLabel || snapshot.triggerText || "",
+    triggerActionId: snapshot.triggerActionId || "",
+    captureKind: snapshot.captureKind || "container-inspection",
+    captureScope: snapshot.captureScope || "",
+    actionClass: snapshot.actionClass || snapshot.actionClassification?.class || "",
+    actionClassification: snapshot.actionClassification || null,
   });
 
   for (const [index, button] of (snapshot.buttons || []).entries()) {
@@ -2417,6 +2644,15 @@ function buildEvidenceSummary(evidence) {
         fields: fields.slice(0, 20),
       };
     });
+  const homePages = (evidence.pageInventory || []).filter((page) => page.type === "home");
+  const homeOverviewCards = homePages.flatMap((page) =>
+    normalizeOverviewCards(page.overviewCards).map((card) => ({
+      ...card,
+      pageId: page.id || "",
+      pageTitle: page.title || "",
+      screenshot: page.screenshot || "",
+    })),
+  );
 
   return {
     schemaVersion: 1,
@@ -2437,6 +2673,9 @@ function buildEvidenceSummary(evidence) {
     })),
     functions,
     containers,
+    homeOverview: {
+      cards: homeOverviewCards,
+    },
     pendingItems: evidence.pendingItems || [],
     failedPages: evidence.failedPages || [],
     screenshots: (evidence.screenshotIndex || []).map((shot) => ({
@@ -2687,6 +2926,8 @@ function buildChromiumContextLaunchOptions(config = {}, options = {}) {
 module.exports = {
   buildChromiumLaunchArgs,
   buildChromiumContextLaunchOptions,
+  buildInspectionSurfaceDelta,
+  buildInspectionSurfaceSnapshot,
   DEFAULT_CHROME_USER_AGENT,
   DEFAULT_HUNTIAN_BROWSER_CONTINUE_WAIT_MS,
   detectHuntianLoginPageState,
@@ -2718,6 +2959,7 @@ module.exports = {
   shouldCollectMenu,
   buildAuthCookies,
   buildCookiesFromHeader,
+  classifyCaptureAction,
   completeHuntianQuickLogin,
   continueHuntianBrowserLogin,
   waitForApplicationReady,

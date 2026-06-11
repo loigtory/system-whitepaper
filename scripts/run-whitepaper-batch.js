@@ -13,8 +13,7 @@ const {
   writeJson,
 } = require("./system-whitepaper-lib");
 const { NODES, readPipelineStateSafe } = require("./pipeline-state");
-const { runBatchAcceptance } = require("./check-batch-acceptance");
-const { runDeliveryReadiness } = require("./check-delivery-readiness");
+const { assertValidTruthReadinessReportArtifact } = require("./check-truth-readiness");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DEFAULT_BATCH_CONCURRENCY = 4;
@@ -31,12 +30,16 @@ const FULL_WHITEPAPER_NODES = [
   "db-model",
   "truth-universe",
   "truth-claims",
+  "business-process",
+  "whitepaper-plan",
   "build-spec",
+  "workflow-spec",
   "compose-guide",
   "draft",
   "summary",
   "narrative",
   "fact-check",
+  "golden-eval",
   "quality",
   "truth-readiness",
 ];
@@ -139,6 +142,96 @@ function normalizeNodes(nodes) {
 
 function compactItems(items, limit = 8) {
   return (Array.isArray(items) ? items : []).filter(Boolean).slice(0, limit);
+}
+
+const TRUTH_GATE_GAP_TYPES = [
+  { gateId: "workflow", gapType: "workflow-evidence", label: "Workflow evidence" },
+  { gateId: "businessProcess", gapType: "business-process", label: "Business process" },
+  { gateId: "whitepaperPlan", gapType: "whitepaper-plan", label: "Whitepaper plan" },
+  { gateId: "goldenEval", gapType: "golden-eval", label: "Golden Eval" },
+];
+const TRUTH_GATE_GAP_TYPE_ORDER = TRUTH_GATE_GAP_TYPES.map((item) => item.gapType);
+
+function metricSnapshot(metrics = {}, keys = []) {
+  const source = metrics && typeof metrics === "object" && !Array.isArray(metrics) ? metrics : {};
+  return keys.reduce((result, key) => {
+    if (source[key] !== undefined) result[key] = Number(source[key] || 0);
+    return result;
+  }, {});
+}
+
+function summarizeTruthGate(gate = {}, metricKeys = []) {
+  const safeGate = gate && typeof gate === "object" && !Array.isArray(gate) ? gate : {};
+  return {
+    pass: safeGate.pass === true,
+    scorePercent: Number(safeGate.scorePercent || 0),
+    failureCount: Array.isArray(safeGate.failures) ? safeGate.failures.length : 0,
+    failures: compactItems(safeGate.failures, 4).map(String),
+    metrics: metricSnapshot(safeGate.metrics, metricKeys),
+  };
+}
+
+function buildTruthGateSummaryFromGates(gates = {}) {
+  const safeGates = gates && typeof gates === "object" && !Array.isArray(gates) ? gates : {};
+  const gateOrNull = (gateId, metricKeys) =>
+    safeGates[gateId] && typeof safeGates[gateId] === "object" && !Array.isArray(safeGates[gateId])
+      ? summarizeTruthGate(safeGates[gateId], metricKeys)
+      : null;
+  return {
+    workflow: gateOrNull("workflow", [
+      "operationFlowCount",
+      "observedWorkflowCount",
+      "observedWorkflowStepCount",
+    ]),
+    businessProcess: gateOrNull("businessProcess", [
+      "processCount",
+      "staleSourceCount",
+      "stepEvidenceMissingCount",
+      "defaultDomainLeakCount",
+    ]),
+    whitepaperPlan: gateOrNull("whitepaperPlan", [
+      "requiredItemCount",
+      "coveredRequiredItemCount",
+      "planRequiredCoverageRatio",
+      "missingRequiredItemCount",
+    ]),
+    goldenEval: gateOrNull("goldenEval", [
+      "coverageRatio",
+      "criticalCoverageRatio",
+      "overclaimCount",
+    ]),
+  };
+}
+
+function appendTruthGateGaps(gaps = [], gateSummary = {}) {
+  const existingTypes = new Set((Array.isArray(gaps) ? gaps : []).map((gap) => gap.type).filter(Boolean));
+  for (const { gateId, gapType, label } of TRUTH_GATE_GAP_TYPES) {
+    const gate = gateSummary?.[gateId];
+    if (!gate || gate.pass !== false || existingTypes.has(gapType)) continue;
+    gaps.push({
+      type: gapType,
+      severity: "P0",
+      message: compactItems(gate.failures, 1)[0] || `${label} gate did not pass.`,
+    });
+    existingTypes.add(gapType);
+  }
+}
+
+function collectRepairGapTypes(gaps = []) {
+  const types = new Set((Array.isArray(gaps) ? gaps : []).map((gap) => gap.type).filter(Boolean));
+  return TRUTH_GATE_GAP_TYPE_ORDER.filter((type) => types.has(type));
+}
+
+function countGapTypes(systems = []) {
+  const counts = {};
+  for (const system of Array.isArray(systems) ? systems : []) {
+    for (const gap of Array.isArray(system.gaps) ? system.gaps : []) {
+      const type = String(gap.type || "").trim();
+      if (!type) continue;
+      counts[type] = (counts[type] || 0) + 1;
+    }
+  }
+  return counts;
 }
 
 function sanitizeDiagnosticItem(item = {}) {
@@ -326,9 +419,13 @@ function createBatchState(systems = [], options = {}) {
       batchId:
         options.batchId ||
         `batch-${timestamp.replace(/[^0-9A-Za-z]+/g, "").slice(0, 14) || Date.now()}`,
+      artifactType: "batch-run-state",
+      version: 1,
       mode: "batch",
       status: "pending",
       concurrency,
+      configPath: options.configPath || "",
+      outputRoot: options.outputRoot || "",
       currentSystemCode: "",
       total: systems.length,
       summary: {},
@@ -364,6 +461,16 @@ function isFailedSystemStatus(status) {
   return ["failed", "paused"].includes(status);
 }
 
+function normalizeBatchSystemRunStatus(item = {}) {
+  const status = String(item.status || "");
+  const runStatus = String(item.runStatus || "");
+  if (isFailedSystemStatus(status)) return "failed";
+  if (isCompleteSystemStatus(status)) return "completed";
+  if (status === "running") return "running";
+  if (status === "pending") return "queued";
+  return runStatus || "queued";
+}
+
 function classifyBatchFailure(item = {}, pipelineState = null, options = {}) {
   const currentNode = pipelineState?.currentNode || item.currentNode || "";
   const currentPhase = pipelineState?.currentPhase || item.currentPhase || "";
@@ -374,7 +481,7 @@ function classifyBatchFailure(item = {}, pipelineState = null, options = {}) {
   const lower = message.toLowerCase();
   let category = "unknown";
 
-  if (item.signal || /interrupted|sigint|sigterm|paused/.test(lower)) {
+  if (item.signal || item.stopReason || /interrupted|sigint|sigterm|paused|手动停止|停止/.test(lower)) {
     category = "interrupted";
   } else if (
     currentNode === "session" ||
@@ -453,25 +560,23 @@ function recomputeBatchState(state, options = {}) {
   };
 
   for (const item of next.systems) {
-    if (item.runStatus === "queued") summary.queued += 1;
-    if (item.runStatus === "running") summary.running += 1;
-    if (item.runStatus === "completed") summary.completed += 1;
-    if (item.runStatus === "failed") summary.failed += 1;
+    const effectiveRunStatus = normalizeBatchSystemRunStatus(item);
+    if (effectiveRunStatus === "queued") summary.queued += 1;
+    if (effectiveRunStatus === "running") summary.running += 1;
+    if (effectiveRunStatus === "completed") summary.completed += 1;
+    if (effectiveRunStatus === "failed") summary.failed += 1;
     if (item.status === "pending") summary.pending += 1;
     if (item.status === "review-pending") summary.reviewPending += 1;
     if (item.status === "finalized") summary.finalized += 1;
     if (item.status === "paused") summary.paused += 1;
     if (item.status === "success") summary.success += 1;
-    if (isFailedSystemStatus(item.status) && item.runStatus !== "failed") {
-      summary.failed += 1;
-    }
   }
 
-  const runningItem = next.systems.find((item) => item.runStatus === "running");
+  const runningItem = next.systems.find((item) => normalizeBatchSystemRunStatus(item) === "running");
   const failedItem = next.systems.find(
-    (item) => item.runStatus === "failed" || isFailedSystemStatus(item.status),
+    (item) => normalizeBatchSystemRunStatus(item) === "failed" || isFailedSystemStatus(item.status),
   );
-  const queuedItem = next.systems.find((item) => item.runStatus === "queued");
+  const queuedItem = next.systems.find((item) => normalizeBatchSystemRunStatus(item) === "queued");
 
   if (runningItem || (next.startedAt && queuedItem)) {
     next.status = "running";
@@ -508,18 +613,61 @@ function updateBatchSystem(state, systemCode, patch = {}, options = {}) {
   return recomputeBatchState({ ...state, systems }, { now: timestamp });
 }
 
+function terminateBatchInFlightSystems(state = {}, options = {}) {
+  const timestamp = nowIso(options.now);
+  const message = options.message || "Batch run was interrupted.";
+  const signal = options.signal || "";
+  const stopReason = options.stopReason || (signal ? `interrupted:${signal}` : "interrupted");
+  const systems = (Array.isArray(state.systems) ? state.systems : []).map((item) => {
+    const runStatus = String(item.runStatus || "");
+    const status = String(item.status || "");
+    if (!["running", "queued"].includes(runStatus) && status !== "running") return item;
+    const next = {
+      ...item,
+      runStatus: "failed",
+      status: "paused",
+      pid: null,
+      finishedAt: item.finishedAt || timestamp,
+      signal: signal || item.signal || "",
+      stopReason,
+      lastError: item.lastError || message,
+      updatedAt: timestamp,
+    };
+    const failure = classifyBatchFailure(next, null, { args: options.args || {}, message });
+    return {
+      ...next,
+      failure,
+      failureCategory: failure.category,
+      recoverable: failure.recoverable,
+      retryPlan: failure.retryPlan,
+    };
+  });
+  return recomputeBatchState({ ...state, systems }, { now: timestamp });
+}
+
+function shouldPreserveCompletedPartialStatus(item = {}, pipelineStatus = "") {
+  return (
+    item.runStatus === "completed" &&
+    item.exitCode === 0 &&
+    isCompleteSystemStatus(item.status) &&
+    pipelineStatus === "pending"
+  );
+}
+
 function applyPipelineSnapshot(item, pipelineState, options = {}) {
   if (!pipelineState) return item;
   const currentNode = pipelineState.nodes?.[pipelineState.currentNode] || {};
+  const pipelineStatus = pipelineState.overallStatus || item.status;
+  const preserveCompletedPartialStatus = shouldPreserveCompletedPartialStatus(item, pipelineStatus);
   const next = {
     ...item,
-    status: pipelineState.overallStatus || item.status,
+    status: preserveCompletedPartialStatus ? item.status : pipelineStatus,
     currentPhase: pipelineState.currentPhase || item.currentPhase,
     currentNode: pipelineState.currentNode || item.currentNode,
-    lastError: currentNode.lastError || item.lastError || "",
+    lastError: preserveCompletedPartialStatus ? "" : currentNode.lastError || item.lastError || "",
     updatedAt: pipelineState.updatedAt || item.updatedAt,
   };
-  if (item.runStatus !== "running") {
+  if (item.runStatus !== "running" || isFailedSystemStatus(next.status)) {
     if (isFailedSystemStatus(next.status)) next.runStatus = "failed";
     else if (isCompleteSystemStatus(next.status)) next.runStatus = "completed";
   }
@@ -533,32 +681,65 @@ function applyPipelineSnapshot(item, pipelineState, options = {}) {
   return next;
 }
 
+function buildInvalidTruthReadinessSummary(error, truth = {}) {
+  const message = `truth-readiness-report.json is not a valid truth readiness artifact: ${error.message}`;
+  return {
+    scorePercent: 0,
+    canSubmitReview: false,
+    canFinalize: false,
+    blockerCount: 1,
+    blockers: [
+      sanitizeDiagnosticItem({
+        id: "truth-readiness.invalid-artifact",
+        severity: "P0",
+        message,
+        rerunNodes: ["truth-readiness"],
+      }),
+    ],
+    improvementActions: [],
+    generatedAt: truth.generatedAt || "",
+    invalidArtifact: true,
+    error: error.message,
+  };
+}
+
 function buildBatchTruthSummary(systemOutput) {
   const truth = readOptionalJsonObject(path.join(systemOutput, "truth-readiness-report.json"));
   const factCheck = readOptionalJsonObject(path.join(systemOutput, "fact-check-report.json"));
   const repair = readOptionalJsonObject(path.join(systemOutput, "coverage-repair-plan.json"));
-  const factMetrics = truth?.gates?.factCheck?.metrics || factCheck?.metrics || {};
+  let validTruth = null;
+  let truthReadiness = null;
+  if (truth) {
+    try {
+      assertValidTruthReadinessReportArtifact(truth);
+      validTruth = truth;
+      truthReadiness = {
+        scorePercent: Number(truth.scorePercent || 0),
+        canSubmitReview: Boolean(truth.canSubmitReview),
+        canFinalize: Boolean(truth.canFinalize),
+        blockerCount: Array.isArray(truth.blockers) ? truth.blockers.length : 0,
+        blockers: compactItems(truth.blockers, 8).map(sanitizeDiagnosticItem),
+        improvementActions: compactItems(truth.improvementActions, 8).map(sanitizeDiagnosticItem),
+        gates: truth.gates || {},
+        gateSummary: buildTruthGateSummaryFromGates(truth.gates),
+        generatedAt: truth.generatedAt || "",
+      };
+    } catch (error) {
+      truthReadiness = buildInvalidTruthReadinessSummary(error, truth);
+    }
+  }
+  const factMetrics = validTruth?.gates?.factCheck?.metrics || factCheck?.metrics || {};
   return {
-    truthReadiness: truth
-      ? {
-          scorePercent: Number(truth.scorePercent || 0),
-          canSubmitReview: Boolean(truth.canSubmitReview),
-          canFinalize: Boolean(truth.canFinalize),
-          blockerCount: Array.isArray(truth.blockers) ? truth.blockers.length : 0,
-          blockers: compactItems(truth.blockers, 8).map(sanitizeDiagnosticItem),
-          improvementActions: compactItems(truth.improvementActions, 8).map(sanitizeDiagnosticItem),
-          generatedAt: truth.generatedAt || "",
-        }
-      : null,
-    writableClaimCoverage: factCheck || truth?.gates?.factCheck
+    truthReadiness,
+    writableClaimCoverage: factCheck || validTruth?.gates?.factCheck
       ? {
           ratio: Number(factMetrics.writableClaimCoverageRatio || 0),
           minRatio: Number(factMetrics.minWritableClaimCoverage || 0),
           missingWritableClaimCount: Number(factMetrics.missingWritableClaimCount || 0),
           missingWritableClaimIds: Array.isArray(factCheck?.missingWritableClaimIds)
             ? factCheck.missingWritableClaimIds.slice(0, 12)
-            : Array.isArray(truth?.gates?.factCheck?.missingWritableClaimIds)
-              ? truth.gates.factCheck.missingWritableClaimIds.slice(0, 12)
+            : Array.isArray(validTruth?.gates?.factCheck?.missingWritableClaimIds)
+              ? validTruth.gates.factCheck.missingWritableClaimIds.slice(0, 12)
               : [],
         }
       : null,
@@ -635,6 +816,8 @@ function buildSystemDiagnosis(item = {}) {
       canRetry: true,
     });
   } else {
+    const gateSummary = truth.gateSummary || buildTruthGateSummaryFromGates(truth.gates);
+    appendTruthGateGaps(gaps, gateSummary);
     if (!truth.canSubmitReview || score < TARGET_TRUTH_SCORE) {
       gaps.push({
         type: "truth-score",
@@ -682,7 +865,7 @@ function buildSystemDiagnosis(item = {}) {
     actions.push({
       id: "narrative.cover-missing-writable-claims",
       message: "Rerun function-section narrative with missing writable claim IDs.",
-      rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+      rerunNodes: ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
       narrativePart: repair?.narrativePart || "function-sections",
       missingWritableClaimIds: compactItems(coverage?.missingWritableClaimIds, 12),
       quotaImpact: "agent-writing",
@@ -725,13 +908,15 @@ function summarizeDiagnosisSystems(systems = []) {
   const ready = systems.filter((item) => item.ready).length;
   const blocked = systems.filter((item) => !item.ready).length;
   const recoverable = systems.filter((item) => item.recoverable).length;
-  const quotaSensitive = systems.filter((item) =>
-    item.actions.some((action) => action.quotaImpact === "agent-writing"),
-  ).length;
+  const quotaSensitive = systems.filter((item) => {
+    const action = selectRepairAction(item);
+    return action?.quotaImpact === "agent-writing" || normalizeRepairQueueNodes(action?.rerunNodes || []).includes("narrative");
+  }).length;
   const missingWritableClaims = systems.reduce(
     (sum, item) => sum + Number(item.missingWritableClaimCount || 0),
     0,
   );
+  const gapTypes = countGapTypes(systems);
   return {
     total,
     ready,
@@ -739,6 +924,7 @@ function summarizeDiagnosisSystems(systems = []) {
     recoverable,
     quotaSensitive,
     missingWritableClaims,
+    gapTypes,
   };
 }
 
@@ -878,16 +1064,21 @@ function hasWritableClaimGap(system = {}) {
   );
 }
 
+function isStaleRefreshAction(action = {}) {
+  return /stale-sources|stale-refresh|truth\.lineage-stale/i.test(String(action.id || ""));
+}
+
 function scoreRepairAction(action = {}, system = {}) {
   const nodes = normalizeRepairQueueNodes(action.rerunNodes);
   if (!nodes.length) return -100;
   const writableGap = hasWritableClaimGap(system);
   let score = action.canRetry ? 50 : 0;
+  if (isStaleRefreshAction(action) && !nodes.includes("narrative")) score += 80;
   if (writableGap && nodes.includes("narrative")) score += 40;
   if (writableGap && compactItems(action.missingWritableClaimIds, 12).length) score += 35;
   if (/writable|coverage/i.test(action.id || "")) score += 15;
   if (action.rewriteScope || action.narrativePart) score += 10;
-  if (nodes.includes("narrative")) score += 5;
+  if (nodes.includes("narrative")) score += writableGap ? 5 : -10;
   return score;
 }
 
@@ -907,6 +1098,7 @@ function buildRepairQueueItem(system = {}, index = 0, options = {}) {
   const actions = Array.isArray(system.actions) ? system.actions : [];
   const nodes = normalizeRepairQueueNodes(action?.rerunNodes || []);
   const nodesCsv = nodes.join(",");
+  const gapTypes = collectRepairGapTypes(system.gaps);
   const requiresAgentWriting = action?.quotaImpact === "agent-writing" || nodes.includes("narrative");
   const allowAgentWriting = Boolean(options.allowAgentWriting);
   const missingWritableClaimIds = uniqueCompactItems(
@@ -943,6 +1135,8 @@ function buildRepairQueueItem(system = {}, index = 0, options = {}) {
     systemCode: system.code || "",
     systemName: system.name || "",
     priority: resolveRepairPriority(system.gaps),
+    gapTypes,
+    primaryGapType: gapTypes[0] || "",
     reason: gapReason,
     actionId: action?.id || "",
     actionMessage: action?.message || "",
@@ -1088,6 +1282,7 @@ function appendLog(filePath, chunk) {
 }
 
 function writeBatchAcceptance(outputRoot, context, args = {}, systems = []) {
+  const { runBatchAcceptance } = require("./check-batch-acceptance");
   const { state } = runBatchAcceptance({
     args,
     context,
@@ -1097,6 +1292,9 @@ function writeBatchAcceptance(outputRoot, context, args = {}, systems = []) {
 }
 
 function writeBatchTerminalChecks(outputRoot, context, args = {}, systems = []) {
+  const { runBatchAcceptance } = require("./check-batch-acceptance");
+  const { runDeliveryReadiness } = require("./check-delivery-readiness");
+  const { runRealRunReadiness } = require("./check-real-run-readiness");
   const acceptance = runBatchAcceptance({
     args,
     context,
@@ -1107,9 +1305,16 @@ function writeBatchTerminalChecks(outputRoot, context, args = {}, systems = []) 
     acceptanceResult: acceptance,
     outputRoot,
   });
+  const realRun = runRealRunReadiness({
+    args,
+    context,
+    acceptanceReport: acceptance.report,
+    deliveryReport: delivery.report,
+  });
   return {
     acceptance: acceptance.state,
     deliveryReadiness: delivery.state,
+    realRunReadiness: realRun.state,
   };
 }
 
@@ -1126,6 +1331,8 @@ async function runBatchPipeline(options = {}) {
 
   let state = createBatchState(systems, {
     concurrency,
+    configPath: context.configPath,
+    outputRoot: context.outputRoot,
     startedAt: new Date().toISOString(),
     logFileResolver: (system) => resolveBatchLogFile(context.outputRoot, system.code),
   });
@@ -1181,6 +1388,7 @@ async function runBatchPipeline(options = {}) {
       const terminalChecks = writeBatchTerminalChecks(context.outputRoot, context, args, systems);
       state.acceptance = terminalChecks.acceptance;
       state.deliveryReadiness = terminalChecks.deliveryReadiness;
+      state.realRunReadiness = terminalChecks.realRunReadiness;
       writeBatchRunState(context.outputRoot, state);
       resolve(state);
     };
@@ -1315,16 +1523,11 @@ async function runBatchPipeline(options = {}) {
             // Best-effort shutdown.
           }
         }
-        state = recomputeBatchState(
-          {
-            ...state,
-            systems: state.systems.map((item) =>
-              item.runStatus === "running"
-                ? { ...item, runStatus: "failed", status: "paused", lastError: `Interrupted by ${signal}` }
-                : item,
-            ),
-          },
-        );
+        state = terminateBatchInFlightSystems(state, {
+          signal,
+          message: `Interrupted by ${signal}`,
+          stopReason: `signal:${signal}`,
+        });
         const { diagnosis, artifacts } = writeBatchDiagnosis(context.outputRoot, state);
         const { repairQueue, artifacts: repairQueueArtifacts } = writeBatchRepairQueue(
           context.outputRoot,
@@ -1347,6 +1550,7 @@ async function runBatchPipeline(options = {}) {
         const terminalChecks = writeBatchTerminalChecks(context.outputRoot, context, args, systems);
         state.acceptance = terminalChecks.acceptance;
         state.deliveryReadiness = terminalChecks.deliveryReadiness;
+        state.realRunReadiness = terminalChecks.realRunReadiness;
         writeBatchRunState(context.outputRoot, state);
         process.exit(130);
       });
@@ -1392,7 +1596,9 @@ module.exports = {
   resolveBatchLogFile,
   runBatchPipeline,
   selectBatchSystems,
+  normalizeBatchSystemRunStatus,
   summarizeBatchFailures,
+  terminateBatchInFlightSystems,
   updateBatchSystem,
   renderBatchDiagnosisMarkdown,
   writeBatchDiagnosis,

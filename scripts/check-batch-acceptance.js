@@ -3,11 +3,26 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const {
+  finalizeWhitepaperMarkdown,
   parseArgs,
   readOptionalJsonObject,
   writeJson,
 } = require("./system-whitepaper-lib");
-const { findStaleReadinessSources, normalizeThreshold } = require("./check-truth-readiness");
+const {
+  assertValidTruthReadinessReportArtifact,
+  buildTruthReadinessReport,
+  findStaleReadinessSources,
+  isValidDatabaseProfile,
+  loadReadinessInputs,
+  normalizeThreshold,
+  scanDatabaseProfileSafety,
+} = require("./check-truth-readiness");
+const {
+  assertValidRepairClosureArtifact,
+  assertValidRepairFollowUpPlanArtifact,
+  fingerprintFile,
+} = require("./repair-artifacts");
+const { outputPathHasE2eSegment } = require("./approval-guard");
 
 const DEFAULT_TARGET_TRUTH_SCORE_PERCENT = 95;
 const ACCEPTED_BATCH_STATUSES = new Set(["success", "review-pending", "finalized"]);
@@ -28,6 +43,23 @@ function splitCsv(value) {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function unique(items) {
+  return [...new Set((items || []).filter(Boolean))];
+}
+
+function withGoldenEvalNode(nodes = []) {
+  const source = Array.isArray(nodes) ? nodes : [];
+  const shouldInsert = source.includes("fact-check") && source.includes("quality");
+  const result = [];
+  for (const node of source) {
+    if (node === "quality" && shouldInsert && !result.includes("golden-eval")) {
+      result.push("golden-eval");
+    }
+    if (!result.includes(node)) result.push(node);
+  }
+  return result;
 }
 
 function percentFromReport(report = {}) {
@@ -64,12 +96,589 @@ function fileExists(filePath) {
   return fs.existsSync(filePath);
 }
 
+function readTextIfExists(filePath) {
+  try {
+    return fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+  } catch {
+    return "";
+  }
+}
+
+function finalMatchesPendingReview(pendingMarkdown = "", finalMarkdown = "", options = {}) {
+  return String(finalMarkdown || "") === finalizeWhitepaperMarkdown(pendingMarkdown, options);
+}
+
+function truthReportLooksLikeSmoke(report = {}) {
+  const mode = String(report.mode || "").toLowerCase();
+  if (mode.includes("smoke") || mode.includes("local-e2e")) return true;
+  return (Array.isArray(report.improvementActions) ? report.improvementActions : []).some((item) =>
+    /smoke|local-e2e/i.test(`${item.id || ""} ${item.message || ""}`),
+  );
+}
+
+function truthRequiresDatabaseEvidence(truth = {}, databaseProfileConfigured = false) {
+  if (databaseProfileConfigured) return true;
+  if (truth.requirements?.databaseEvidenceRequired !== undefined) {
+    return truth.requirements.databaseEvidenceRequired;
+  }
+  if (truth.gates?.database?.required !== undefined) return truth.gates.database.required;
+  return false;
+}
+
+function isSafeDatabaseProfileForSystem(profile, system = {}) {
+  return isValidDatabaseProfile(profile, system) && scanDatabaseProfileSafety(profile).pass === true;
+}
+
+function currentTruthFailureSummary(report = {}) {
+  const blockers = Array.isArray(report.blockers)
+    ? report.blockers.map((item) => item.id || item.message || "").filter(Boolean)
+    : [];
+  const failures = Object.values(report.gates || {})
+    .flatMap((gate) => (Array.isArray(gate?.failures) ? gate.failures : []))
+    .map(String)
+    .filter(Boolean);
+  return unique([...blockers, ...failures]).slice(0, 8).join(", ");
+}
+
+function currentTruthRerunNodes(report = {}) {
+  const nodes = unique(
+    (Array.isArray(report.blockers) ? report.blockers : []).flatMap((item) =>
+      Array.isArray(item.rerunNodes) ? item.rerunNodes : [],
+    ),
+  );
+  return nodes.length ? nodes : ["truth-readiness"];
+}
+
+function markdownLooksLikeSmoke(markdown = "") {
+  const text = String(markdown || "");
+  if (/local-e2e-smoke|smoke gate|smoke artifact/i.test(text)) return true;
+  if (text.includes("\u672c\u5730\u5192\u70df") || text.includes("\u5192\u70df")) return true;
+  if (text.includes("\u4e0d\u4ee3\u8868\u6700\u7ec8\u4e1a\u52a1\u767d\u76ae\u4e66")) return true;
+  return /local-e2e-smoke|smoke gate|本地冒烟|冒烟|不代表最终业务白皮书|不代表最终业务白皮书内容/i.test(text);
+}
+
 function readBatchArtifact(outputRoot, fileName) {
   return readOptionalJsonObject(path.join(outputRoot, "_batch", fileName));
 }
 
 function generatedAtMatches(actual, expected) {
   return Boolean(actual && expected && String(actual) === String(expected));
+}
+
+function numberFrom(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function sortedCodes(items = []) {
+  return unique(
+    (Array.isArray(items) ? items : [])
+      .map((item) => String(item || "").trim())
+      .filter(Boolean),
+  ).sort();
+}
+
+function diffCodeSets(actual = [], expected = []) {
+  const actualCodes = sortedCodes(actual);
+  const expectedCodes = new Set(sortedCodes(expected));
+  return actualCodes.filter((code) => !expectedCodes.has(code));
+}
+
+function codeSetLabel(codes = []) {
+  return sortedCodes(codes).join(",") || "-";
+}
+
+function summarizeSelectedDiagnosis(diagnosis = {}, targetCodes = new Set(), options = {}) {
+  const targetTruthScorePercent = Number(options.targetTruthScorePercent || DEFAULT_TARGET_TRUTH_SCORE_PERCENT);
+  const systems = (Array.isArray(diagnosis?.systems) ? diagnosis.systems : []).filter((item) =>
+    targetCodes.has(String(item.code || "").trim()),
+  );
+  if (!systems.length) {
+    const summary = diagnosis?.summary || {};
+    return {
+      total: numberFrom(summary.total),
+      ready: numberFrom(summary.ready),
+      blocked: numberFrom(summary.blocked),
+      belowTarget: numberFrom(summary.belowTarget),
+      missingWritableClaims: numberFrom(summary.missingWritableClaims),
+    };
+  }
+  return {
+    total: systems.length,
+    ready: systems.filter((item) => item.ready === true).length,
+    blocked: systems.filter((item) => item.ready !== true).length,
+    belowTarget: systems.filter((item) => {
+      const score = Number(item.truthScorePercent);
+      return Number.isFinite(score) && score < targetTruthScorePercent;
+    }).length,
+    missingWritableClaims: systems.reduce((sum, item) => sum + numberFrom(item.missingWritableClaimCount), 0),
+  };
+}
+
+function summarizeSelectedRepairQueue(repairQueue = {}, targetCodes = new Set()) {
+  const items = Array.isArray(repairQueue?.items)
+    ? repairQueue.items.filter((item) => targetCodes.has(String(item.systemCode || "").trim()))
+    : null;
+  if (!items) {
+    const summary = repairQueue?.summary || {};
+    return {
+      total: numberFrom(summary.total),
+      autoRunnable: numberFrom(summary.autoRunnable),
+      blocked: numberFrom(summary.blocked),
+      requiresAgentWriting: numberFrom(summary.requiresAgentWriting),
+    };
+  }
+  return {
+    total: items.length,
+    autoRunnable: items.filter((item) => item.canAutoRun === true).length,
+    blocked: items.filter((item) => item.blockedReason || item.canAutoRun === false).length,
+    requiresAgentWriting: items.filter((item) => item.requiresAgentWriting || item.quotaImpact === "agent-writing").length,
+  };
+}
+
+function collectFollowUpPlanSystemCodes(plan = {}) {
+  return sortedCodes([
+    ...(Array.isArray(plan.commands) ? plan.commands.flatMap((item) => item.systems || []) : []),
+    ...(Array.isArray(plan.queueItems) ? plan.queueItems.map((item) => item.systemCode) : []),
+    ...(Array.isArray(plan.blockedQueueItems) ? plan.blockedQueueItems.map((item) => item.systemCode) : []),
+  ]);
+}
+
+function collectClosureGroupSystemCodes(closure = {}) {
+  return sortedCodes([
+    ...(Array.isArray(closure.failedGroups) ? closure.failedGroups.flatMap((item) => item.systems || []) : []),
+    ...(Array.isArray(closure.pendingGroups) ? closure.pendingGroups.flatMap((item) => item.systems || []) : []),
+  ]);
+}
+
+function collectLoopStateSystemCodes(loopState = {}) {
+  const codes = [];
+  for (const round of Array.isArray(loopState.rounds) ? loopState.rounds : []) {
+    const args = Array.isArray(round.args) ? round.args : [];
+    for (let index = 0; index < args.length; index += 1) {
+      if (String(args[index]) === "--systems") {
+        codes.push(...splitCsv(args[index + 1]));
+      }
+    }
+  }
+  return sortedCodes(codes);
+}
+
+function repairQueueItemSignature(item = {}) {
+  return [
+    String(item.id || ""),
+    String(item.systemCode || ""),
+    String(item.nodesCsv || (Array.isArray(item.nodes) ? item.nodes.join(",") : "")),
+    String(item.narrativePart || ""),
+    String(item.quotaImpact || ""),
+    String(item.blockedReason || ""),
+  ].join("|");
+}
+
+function selectedRepairQueueItemSignatures(repairQueue = {}, targetCodes = new Set()) {
+  if (!Array.isArray(repairQueue?.items)) return null;
+  return repairQueue.items
+    .filter((item) => targetCodes.has(String(item.systemCode || "").trim()))
+    .map(repairQueueItemSignature)
+    .sort();
+}
+
+function followUpPlanQueueItemSignatures(plan = {}) {
+  if (!Array.isArray(plan?.queueItems)) return null;
+  return plan.queueItems.map(repairQueueItemSignature).sort();
+}
+
+function sameStringList(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right)) return true;
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+function summariesMatch(actual = {}, expected = {}, keys = []) {
+  return keys.every((key) => numberFrom(actual?.[key]) === numberFrom(expected?.[key]));
+}
+
+function normalizeSourceFingerprint(record = {}) {
+  const fingerprint = record.fingerprint || {};
+  return {
+    exists: Boolean(fingerprint.exists),
+    size: Number.isFinite(Number(fingerprint.size)) ? Number(fingerprint.size) : 0,
+    sha256: String(fingerprint.sha256 || ""),
+  };
+}
+
+function sourceFingerprintMatches(expected = {}, actual = {}) {
+  const expectedFingerprint = normalizeSourceFingerprint(expected);
+  const actualFingerprint = normalizeSourceFingerprint(actual);
+  return (
+    expectedFingerprint.exists === actualFingerprint.exists &&
+    expectedFingerprint.size === actualFingerprint.size &&
+    expectedFingerprint.sha256 === actualFingerprint.sha256
+  );
+}
+
+function batchSourceArtifact(outputRoot, fileName) {
+  return {
+    file: fileName,
+    fingerprint: fingerprintFile(path.join(outputRoot, "_batch", fileName)),
+  };
+}
+
+function findSourceArtifactMismatches(artifact = {}, expectedSources = {}, ownerFile = "artifact") {
+  const recorded = artifact.sourceArtifacts;
+  const mismatches = [];
+  if (!recorded || typeof recorded !== "object" || Array.isArray(recorded)) {
+    return [`${ownerFile} does not record sourceArtifacts.`];
+  }
+  for (const [key, expected] of Object.entries(expectedSources)) {
+    const actual = recorded[key];
+    if (!actual) {
+      mismatches.push(`${ownerFile} does not record sourceArtifacts.${key}.`);
+      continue;
+    }
+    if (String(actual.file || "") !== String(expected.file || "")) {
+      mismatches.push(
+        `${ownerFile} sourceArtifacts.${key} file changed from ${actual.file || "unknown"} to ${expected.file || "unknown"}.`,
+      );
+      continue;
+    }
+    if (!sourceFingerprintMatches(actual, expected)) {
+      mismatches.push(`${ownerFile} sourceArtifacts.${key} fingerprint is stale.`);
+    }
+  }
+  return mismatches;
+}
+
+function pushBindingBlocker(blockers, id, mismatches = [], messagePrefix = "") {
+  if (!mismatches.length) return;
+  blockers.push(
+    blocker(id, `${messagePrefix}${mismatches.slice(0, 5).join(" ")}`, {
+      rerunNodes: ["repair:batch", "repair:loop", "acceptance"],
+    }),
+  );
+}
+
+function findRepairClosureBindingMismatches(closure = {}, context = {}) {
+  const { outputRoot = "", diagnosis = null, repairQueue = null, targetCodes = new Set(), targetTruthScorePercent } = context;
+  const mismatches = [];
+  if (diagnosis && !generatedAtMatches(closure.diagnosis?.generatedAt, diagnosis.generatedAt)) {
+    mismatches.push(
+      `diagnosis generatedAt mismatch: closure=${closure.diagnosis?.generatedAt || "-"} current=${diagnosis.generatedAt || "-"}.`,
+    );
+  }
+  if (repairQueue && !generatedAtMatches(closure.repairQueue?.generatedAt, repairQueue.generatedAt)) {
+    mismatches.push(
+      `repair queue generatedAt mismatch: closure=${closure.repairQueue?.generatedAt || "-"} current=${repairQueue.generatedAt || "-"}.`,
+    );
+  }
+
+  if (diagnosis) {
+    const expectedDiagnosis = summarizeSelectedDiagnosis(diagnosis, targetCodes, { targetTruthScorePercent });
+    if (
+      !summariesMatch(closure.diagnosis?.summary || {}, expectedDiagnosis, [
+        "total",
+        "ready",
+        "blocked",
+        "belowTarget",
+        "missingWritableClaims",
+      ])
+    ) {
+      mismatches.push(
+        `diagnosis summary mismatch for selected systems ${codeSetLabel([...targetCodes])}: closure=${JSON.stringify(
+          closure.diagnosis?.summary || {},
+        )} current=${JSON.stringify(expectedDiagnosis)}.`,
+      );
+    }
+  }
+
+  if (repairQueue) {
+    const expectedRepairQueue = summarizeSelectedRepairQueue(repairQueue, targetCodes);
+    if (
+      !summariesMatch(closure.repairQueue?.summary || {}, expectedRepairQueue, [
+        "total",
+        "autoRunnable",
+        "blocked",
+        "requiresAgentWriting",
+      ])
+    ) {
+      mismatches.push(
+        `repair queue summary mismatch for selected systems ${codeSetLabel([...targetCodes])}: closure=${JSON.stringify(
+          closure.repairQueue?.summary || {},
+        )} current=${JSON.stringify(expectedRepairQueue)}.`,
+      );
+    }
+  }
+
+  const closureGroupCodes = collectClosureGroupSystemCodes(closure);
+  const outOfScopeCodes = diffCodeSets(closureGroupCodes, [...targetCodes]);
+  if (outOfScopeCodes.length) {
+    mismatches.push(
+      `closure groups reference systems outside current selection: ${codeSetLabel(outOfScopeCodes)}; selected=${codeSetLabel([
+        ...targetCodes,
+      ])}.`,
+    );
+  }
+
+  mismatches.push(
+    ...findSourceArtifactMismatches(
+      closure,
+      {
+        batchDiagnosis: batchSourceArtifact(outputRoot, "diagnosis.json"),
+        repairQueue: batchSourceArtifact(outputRoot, "repair-queue.json"),
+      },
+      "repair-closure.json",
+    ),
+  );
+
+  return mismatches;
+}
+
+function findFollowUpPlanBindingMismatches(plan = {}, context = {}) {
+  const {
+    outputRoot = "",
+    diagnosis = null,
+    repairQueue = null,
+    repairClosure = null,
+    repairClosureMatches = false,
+    targetCodes = new Set(),
+  } = context;
+  const mismatches = [];
+  if (diagnosis && !generatedAtMatches(plan.source?.diagnosisGeneratedAt, diagnosis.generatedAt)) {
+    mismatches.push(
+      `diagnosis generatedAt mismatch: plan=${plan.source?.diagnosisGeneratedAt || "-"} current=${diagnosis.generatedAt || "-"}.`,
+    );
+  }
+  if (repairQueue && !generatedAtMatches(plan.source?.repairQueueGeneratedAt, repairQueue.generatedAt)) {
+    mismatches.push(
+      `repair queue generatedAt mismatch: plan=${plan.source?.repairQueueGeneratedAt || "-"} current=${repairQueue.generatedAt || "-"}.`,
+    );
+  }
+  if (repairClosure && plan.source?.closureStatus && String(plan.source.closureStatus) !== String(repairClosure.status || "")) {
+    mismatches.push(
+      `closure status mismatch: plan=${plan.source.closureStatus || "-"} current=${repairClosure.status || "-"}.`,
+    );
+  }
+  if (plan.status === "complete" && plan.source?.closureStatus === "passed" && (!repairClosure || !repairClosureMatches)) {
+    mismatches.push("complete follow-up plan is not bound to the current passed repair closure.");
+  }
+
+  const planCodes = collectFollowUpPlanSystemCodes(plan);
+  const outOfScopeCodes = diffCodeSets(planCodes, [...targetCodes]);
+  if (outOfScopeCodes.length) {
+    mismatches.push(
+      `follow-up plan references systems outside current selection: ${codeSetLabel(outOfScopeCodes)}; selected=${codeSetLabel([
+        ...targetCodes,
+      ])}.`,
+    );
+  }
+
+  if (repairQueue) {
+    const selectedQueue = summarizeSelectedRepairQueue(repairQueue, targetCodes);
+    const planSummary = plan.summary || {};
+    if (numberFrom(planSummary.remainingQueueItems) !== selectedQueue.total) {
+      mismatches.push(
+        `remainingQueueItems mismatch: plan=${numberFrom(planSummary.remainingQueueItems)} current=${selectedQueue.total}.`,
+      );
+    }
+    if (
+      planSummary.agentWritingQueueItems !== undefined &&
+      numberFrom(planSummary.agentWritingQueueItems) !== selectedQueue.requiresAgentWriting
+    ) {
+      mismatches.push(
+        `agentWritingQueueItems mismatch: plan=${numberFrom(planSummary.agentWritingQueueItems)} current=${selectedQueue.requiresAgentWriting}.`,
+      );
+    }
+    if (
+      planSummary.lowQuotaQueueItems !== undefined &&
+      numberFrom(planSummary.lowQuotaQueueItems) !== selectedQueue.total - selectedQueue.requiresAgentWriting
+    ) {
+      mismatches.push(
+        `lowQuotaQueueItems mismatch: plan=${numberFrom(planSummary.lowQuotaQueueItems)} current=${
+          selectedQueue.total - selectedQueue.requiresAgentWriting
+        }.`,
+      );
+    }
+    const expectedSignatures = selectedRepairQueueItemSignatures(repairQueue, targetCodes);
+    const actualSignatures = followUpPlanQueueItemSignatures(plan);
+    if (!sameStringList(actualSignatures, expectedSignatures)) {
+      mismatches.push("follow-up queueItems do not match the current selected repair queue.");
+    }
+  }
+
+  mismatches.push(
+    ...findSourceArtifactMismatches(
+      plan,
+      {
+        batchDiagnosis: batchSourceArtifact(outputRoot, "diagnosis.json"),
+        repairQueue: batchSourceArtifact(outputRoot, "repair-queue.json"),
+        repairClosure: batchSourceArtifact(outputRoot, "repair-closure.json"),
+      },
+      "repair-follow-up-plan.json",
+    ),
+  );
+
+  return mismatches;
+}
+
+function parseTimeMs(value) {
+  const ms = Date.parse(String(value || ""));
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function findFollowUpLoopStateBindingMismatches(loopState = {}, context = {}) {
+  const { outputRoot = "", followUpPlan = null, repairClosure = null, targetCodes = new Set() } = context;
+  const mismatches = [];
+  if (loopState.artifactType && loopState.artifactType !== "batch-repair-follow-up-loop-state") {
+    mismatches.push(`artifactType mismatch: ${loopState.artifactType}.`);
+  }
+
+  const expectedPlanPath = path.resolve(path.join(outputRoot, "_batch", "repair-follow-up-plan.json"));
+  if (loopState.planPath && path.resolve(String(loopState.planPath)) !== expectedPlanPath) {
+    mismatches.push(`planPath mismatch: loop=${loopState.planPath} current=${expectedPlanPath}.`);
+  }
+
+  if (followUpPlan) {
+    if (
+      loopState.finalPlan?.status &&
+      followUpPlan.status &&
+      String(loopState.finalPlan.status) !== String(followUpPlan.status)
+    ) {
+      mismatches.push(`finalPlan status mismatch: loop=${loopState.finalPlan.status} current=${followUpPlan.status}.`);
+    }
+    if (
+      loopState.finalPlan?.summary &&
+      !summariesMatch(loopState.finalPlan.summary, followUpPlan.summary || {}, [
+        "commands",
+        "lowQuotaCommands",
+        "agentWritingCommands",
+        "remainingQueueItems",
+        "blockedQueueItems",
+      ])
+    ) {
+      mismatches.push("finalPlan summary does not match the current follow-up plan.");
+    }
+    const finishedAtMs = parseTimeMs(loopState.finishedAt || loopState.updatedAt);
+    const planGeneratedAtMs = parseTimeMs(followUpPlan.generatedAt);
+    if (finishedAtMs !== null && planGeneratedAtMs !== null && finishedAtMs < planGeneratedAtMs) {
+      mismatches.push(
+        `loop state predates current follow-up plan: loopFinished=${loopState.finishedAt || loopState.updatedAt || "-"} planGenerated=${
+          followUpPlan.generatedAt || "-"
+        }.`,
+      );
+    }
+  } else if (loopState.status === "complete") {
+    mismatches.push("complete follow-up loop state exists but the current follow-up plan is missing.");
+  }
+
+  if (
+    loopState.status === "complete" &&
+    followUpPlan &&
+    followUpPlan.status !== "complete" &&
+    repairClosure?.status !== "passed"
+  ) {
+    mismatches.push(`complete loop state conflicts with current follow-up status ${followUpPlan.status || "unknown"}.`);
+  }
+
+  const loopCodes = collectLoopStateSystemCodes(loopState);
+  const outOfScopeCodes = diffCodeSets(loopCodes, [...targetCodes]);
+  if (outOfScopeCodes.length) {
+    mismatches.push(
+      `loop rounds reference systems outside current selection: ${codeSetLabel(outOfScopeCodes)}; selected=${codeSetLabel([
+        ...targetCodes,
+      ])}.`,
+    );
+  }
+
+  mismatches.push(
+    ...findSourceArtifactMismatches(
+      loopState,
+      {
+        followUpPlan: batchSourceArtifact(outputRoot, "repair-follow-up-plan.json"),
+      },
+      "repair-follow-up-loop-state.json",
+    ),
+  );
+
+  return mismatches;
+}
+
+function assertJsonObject(value, message) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(message);
+  }
+}
+
+function assertArray(value, message) {
+  if (!Array.isArray(value)) {
+    throw new Error(message);
+  }
+}
+
+function assertBoolean(value, message) {
+  if (typeof value !== "boolean") {
+    throw new Error(message);
+  }
+}
+
+function assertFiniteNumber(value, message) {
+  if (!Number.isFinite(Number(value))) {
+    throw new Error(message);
+  }
+}
+
+function assertValidBatchAcceptanceReportArtifact(report = {}) {
+  assertJsonObject(report, "acceptance-report.json must be a JSON object.");
+  if (report.artifactType !== "batch-acceptance-report") {
+    throw new Error("acceptance-report.json artifactType must be batch-acceptance-report.");
+  }
+  assertFiniteNumber(report.version, "acceptance-report.json version must be numeric.");
+  if (!String(report.generatedAt || "").trim()) {
+    throw new Error("acceptance-report.json generatedAt must be present.");
+  }
+  if (!["accepted", "blocked"].includes(String(report.status || ""))) {
+    throw new Error("acceptance-report.json status must be accepted or blocked.");
+  }
+  assertBoolean(report.canSubmitAll, "acceptance-report.json canSubmitAll must be a boolean.");
+  assertFiniteNumber(report.targetTruthScorePercent, "acceptance-report.json targetTruthScorePercent must be numeric.");
+  assertJsonObject(report.summary, "acceptance-report.json summary must be a JSON object.");
+  assertArray(report.systems, "acceptance-report.json systems must be an array.");
+  assertArray(report.blockers, "acceptance-report.json blockers must be an array.");
+  assertArray(report.warnings, "acceptance-report.json warnings must be an array.");
+
+  const total = report.systems.length;
+  const summaryTotal = Number(report.summary.total);
+  if (Number.isFinite(summaryTotal) && summaryTotal !== total) {
+    throw new Error("acceptance-report.json summary.total must match systems length.");
+  }
+  if (report.status === "accepted" && report.canSubmitAll !== true) {
+    throw new Error("acceptance-report.json status=accepted requires canSubmitAll=true.");
+  }
+  if (report.canSubmitAll && report.status !== "accepted") {
+    throw new Error("acceptance-report.json canSubmitAll=true requires status=accepted.");
+  }
+  if (report.canSubmitAll) {
+    if (total <= 0) {
+      throw new Error("acceptance-report.json canSubmitAll=true requires at least one system.");
+    }
+    if (report.blockers.length > 0 || Number(report.summary.blockers || 0) > 0) {
+      throw new Error("acceptance-report.json canSubmitAll=true requires zero blockers.");
+    }
+    if (Number(report.summary.accepted) !== total || Number(report.summary.blocked || 0) !== 0) {
+      throw new Error("acceptance-report.json canSubmitAll=true requires all systems accepted.");
+    }
+    for (const system of report.systems) {
+      assertJsonObject(system, "acceptance-report.json systems[] must be JSON objects.");
+      const accepted = system.accepted === true || system.status === "accepted";
+      if (!accepted) {
+        throw new Error("acceptance-report.json canSubmitAll=true requires every system to be accepted.");
+      }
+      if (Array.isArray(system.blockers) && system.blockers.length > 0) {
+        throw new Error("acceptance-report.json canSubmitAll=true requires system blockers to be empty.");
+      }
+      if (system.canSubmitReview === false) {
+        throw new Error("acceptance-report.json canSubmitAll=true requires every system canSubmitReview=true.");
+      }
+    }
+  }
 }
 
 function buildSystemAcceptance(system = {}, context = {}, options = {}) {
@@ -83,19 +692,33 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
   const truth = readOptionalJsonObject(truthPath);
   const factCheck = readOptionalJsonObject(factCheckPath);
   const databaseProfile = readOptionalJsonObject(databaseProfilePath);
+  const pendingMarkdown = readTextIfExists(pendingReviewPath);
+  const finalMarkdown = readTextIfExists(finalPath);
   const targetTruthScorePercent = Number(options.targetTruthScorePercent || DEFAULT_TARGET_TRUTH_SCORE_PERCENT);
   const blockers = [];
   const warnings = [];
   const databaseProfileConfigured = Boolean(system.databaseProfile?.enabled);
   const whitepaperExists = fileExists(pendingReviewPath) || fileExists(finalPath);
+  const smokeWhitepaper = markdownLooksLikeSmoke(pendingMarkdown) || markdownLooksLikeSmoke(finalMarkdown);
   let scorePercent = 0;
   let canSubmitReview = false;
   let canFinalize = false;
   let staleSources = [];
+  let smokeTruth = false;
   let missingWritableClaimCount = null;
   let writableClaimCoverageRatio = null;
   let minWritableClaimCoverage = null;
-  let databaseEvidenceAvailable = Boolean(databaseProfile);
+  let databaseEvidenceAvailable = isSafeDatabaseProfileForSystem(databaseProfile, { code });
+  let databaseProfileUnsafe = false;
+
+  if (outputPathHasE2eSegment(outputDir)) {
+    blockers.push(
+      blocker("truth-readiness.output-under-e2e", "System output is under an _e2e smoke directory, not a real batch output.", {
+        systemCode: code,
+        rerunNodes: ["truth-readiness"],
+      }),
+    );
+  }
 
   if (!truth) {
     blockers.push(
@@ -105,11 +728,69 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
       }),
     );
   } else {
-    scorePercent = percentFromReport(truth);
-    canSubmitReview = Boolean(truth.canSubmitReview);
-    canFinalize = Boolean(truth.canFinalize);
-    staleSources = findStaleReadinessSources(outputDir, truth);
-    if (!canSubmitReview) {
+    const truthContractFailures = [];
+    try {
+      assertValidTruthReadinessReportArtifact(truth);
+    } catch (error) {
+      truthContractFailures.push(error.message);
+    }
+    if (truthContractFailures.length) {
+      blockers.push(
+        blocker("truth-readiness.invalid-artifact", "truth-readiness-report.json is not a valid truth readiness artifact.", {
+          systemCode: code,
+          rerunNodes: ["truth-readiness"],
+        }),
+      );
+    }
+    scorePercent = truthContractFailures.length ? 0 : percentFromReport(truth);
+    canSubmitReview = truthContractFailures.length ? false : Boolean(truth.canSubmitReview);
+    canFinalize = truthContractFailures.length ? false : Boolean(truth.canFinalize);
+    staleSources = truthContractFailures.length ? [] : findStaleReadinessSources(outputDir, truth);
+    smokeTruth = truthReportLooksLikeSmoke(truth);
+    const requireDatabaseEvidence = truthContractFailures.length
+      ? databaseProfileConfigured
+      : truthRequiresDatabaseEvidence(truth, databaseProfileConfigured);
+    const currentTruth = buildTruthReadinessReport({
+      artifacts: loadReadinessInputs(outputDir),
+      threshold: targetTruthScorePercent,
+      requireDatabaseEvidence,
+      expectedSystem: { code, name: system.name || "" },
+    });
+    const currentScorePercent = percentFromReport(currentTruth);
+    const currentDatabaseProfileUnsafe = (Array.isArray(currentTruth.blockers) ? currentTruth.blockers : []).find(
+      (item) => item.id === "database.profile-unsafe",
+    );
+    if (currentDatabaseProfileUnsafe) {
+      databaseProfileUnsafe = true;
+      blockers.push(
+        blocker(
+          "database.profile-unsafe",
+          currentDatabaseProfileUnsafe.message || "database-profile.json is not safely redacted for Truth Pipeline use.",
+          {
+            systemCode: code,
+            rerunNodes: currentDatabaseProfileUnsafe.rerunNodes || [
+              "db-profile",
+              "db-model",
+              "truth-universe",
+              "truth-claims",
+              "truth-readiness",
+            ],
+          },
+        ),
+      );
+    }
+    scorePercent = Math.min(scorePercent, currentScorePercent);
+    canSubmitReview = canSubmitReview && Boolean(currentTruth.canSubmitReview);
+    canFinalize = canFinalize && Boolean(currentTruth.canFinalize);
+    if (smokeTruth) {
+      blockers.push(
+        blocker("truth-readiness.smoke-report", "truth-readiness-report.json is marked as local smoke evidence.", {
+          systemCode: code,
+          rerunNodes: ["truth-readiness"],
+        }),
+      );
+    }
+    if (!truthContractFailures.length && truth.canSubmitReview !== true) {
       blockers.push(
         blocker("truth-readiness.not-submittable", "truth-readiness-report.json does not allow review submission.", {
           systemCode: code,
@@ -124,7 +805,25 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
           `Truth readiness score ${scorePercent}% is below ${targetTruthScorePercent}%.`,
           {
             systemCode: code,
-            rerunNodes: ["truth-claims", "narrative", "fact-check", "quality", "truth-readiness"],
+            rerunNodes: withGoldenEvalNode(["truth-claims", "narrative", "fact-check", "quality", "truth-readiness"]),
+          },
+        ),
+      );
+    }
+    if (!currentTruth.canSubmitReview || currentScorePercent < targetTruthScorePercent) {
+      const summary = currentTruthFailureSummary(currentTruth);
+      blockers.push(
+        blocker(
+          "truth-readiness.current-gate-failed",
+          [
+            `Current truth readiness gate fails against latest artifacts: canSubmitReview=${Boolean(currentTruth.canSubmitReview)}, score=${currentScorePercent}%.`,
+            summary ? `Reasons: ${summary}.` : "",
+          ]
+            .filter(Boolean)
+            .join(" "),
+          {
+            systemCode: code,
+            rerunNodes: currentTruthRerunNodes(currentTruth),
           },
         ),
       );
@@ -137,7 +836,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
         }),
       );
     }
-    const factMetrics = truth.gates?.factCheck?.metrics || factCheck?.metrics || {};
+    const factMetrics = currentTruth.gates?.factCheck?.metrics || truth.gates?.factCheck?.metrics || factCheck?.metrics || {};
     missingWritableClaimCount = Number(factMetrics.missingWritableClaimCount || 0);
     writableClaimCoverageRatio = Number(factMetrics.writableClaimCoverageRatio);
     minWritableClaimCoverage = Number(factMetrics.minWritableClaimCoverage || 0.8);
@@ -152,7 +851,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
       blockers.push(
         blocker("fact-check.writable-coverage", "Writable claim coverage is below threshold.", {
           systemCode: code,
-          rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+          rerunNodes: withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
         }),
       );
     }
@@ -160,23 +859,41 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
       blockers.push(
         blocker("fact-check.missing-writable-claims", `${missingWritableClaimCount} writable claim(s) remain uncovered.`, {
           systemCode: code,
-          rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+          rerunNodes: withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
         }),
       );
     }
-    databaseEvidenceAvailable = Boolean(truth.gates?.database?.available || databaseProfile);
+    databaseEvidenceAvailable = Boolean(
+      currentTruth.gates?.database?.profileAvailable || isSafeDatabaseProfileForSystem(databaseProfile, { code }),
+    );
   }
 
   if (!whitepaperExists) {
     blockers.push(
       blocker("whitepaper.missing", "No pending-review or final whitepaper Markdown exists.", {
         systemCode: code,
-        rerunNodes: ["narrative", "fact-check", "quality", "truth-readiness"],
+        rerunNodes: withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
+      }),
+    );
+  }
+  if (smokeWhitepaper) {
+    blockers.push(
+      blocker("whitepaper.smoke-artifact", "Whitepaper Markdown contains local smoke wording.", {
+        systemCode: code,
+        rerunNodes: withGoldenEvalNode(["narrative", "fact-check", "quality", "truth-readiness"]),
+      }),
+    );
+  }
+  if (fileExists(finalPath) && fileExists(pendingReviewPath) && !finalMatchesPendingReview(pendingMarkdown, finalMarkdown, { systemName: system.name || "" })) {
+    blockers.push(
+      blocker("whitepaper.final-not-approved-pending", "Final whitepaper differs from the approved pending-review markdown.", {
+        systemCode: code,
+        rerunNodes: ["review"],
       }),
     );
   }
 
-  if (databaseProfileConfigured && !databaseProfile) {
+  if (databaseProfileConfigured && !databaseEvidenceAvailable && !databaseProfileUnsafe) {
     blockers.push(
       blocker("database.profile-missing", "databaseProfile.enabled=true but no redacted database evidence is available.", {
         systemCode: code,
@@ -202,6 +919,7 @@ function buildSystemAcceptance(system = {}, context = {}, options = {}) {
     whitepaperExists,
     pendingReviewExists: fileExists(pendingReviewPath),
     finalExists: fileExists(finalPath),
+    smokeEvidence: smokeTruth || smokeWhitepaper,
     databaseProfileConfigured,
     databaseEvidenceAvailable,
     missingWritableClaimCount,
@@ -225,6 +943,26 @@ function buildBatchArtifactAcceptance(context = {}, systems = [], options = {}) 
   const blockers = [];
   const warnings = [];
   const targetCodes = new Set(systems.map((system) => String(system.code || "").trim()).filter(Boolean));
+  let repairClosureValid = Boolean(repairClosure);
+  let followUpPlanValid = Boolean(followUpPlan);
+
+  if (repairClosure) {
+    try {
+      assertValidRepairClosureArtifact(repairClosure);
+    } catch (error) {
+      repairClosureValid = false;
+      blockers.push(blocker("repair.closure-invalid-artifact", `Repair closure artifact is invalid: ${error.message}`));
+    }
+  }
+
+  if (followUpPlan) {
+    try {
+      assertValidRepairFollowUpPlanArtifact(followUpPlan);
+    } catch (error) {
+      followUpPlanValid = false;
+      blockers.push(blocker("repair.follow-up-invalid-artifact", `Repair follow-up artifact is invalid: ${error.message}`));
+    }
+  }
 
   if (!batchState) {
     blockers.push(blocker("batch.run-state-missing", "outputs/_batch/run-state.json is missing or malformed."));
@@ -237,14 +975,21 @@ function buildBatchArtifactAcceptance(context = {}, systems = [], options = {}) 
         blockers.push(blocker("batch.run-state-system-missing", `Batch run-state is missing target system ${code}.`, { systemCode: code }));
         continue;
       }
-      if (item.runStatus !== "completed" || !ACCEPTED_SYSTEM_STATUSES.has(String(item.status || ""))) {
+      if (String(item.status || "") === "skipped") {
+        blockers.push(blocker("batch.run-state-system-skipped", `Batch run-state marks ${code} as skipped; skipped systems are not deliverable.`, { systemCode: code }));
+      } else if (item.runStatus !== "completed" || !ACCEPTED_SYSTEM_STATUSES.has(String(item.status || ""))) {
         blockers.push(blocker("batch.run-state-system-incomplete", `Batch run-state does not mark ${code} complete.`, { systemCode: code }));
       }
     }
     if (!ACCEPTED_BATCH_STATUSES.has(String(batchState.status || ""))) {
       const targetSystemsDone = [...targetCodes].every((code) => {
         const item = byCode.get(code);
-        return item && item.runStatus === "completed" && ACCEPTED_SYSTEM_STATUSES.has(String(item.status || ""));
+        return (
+          item &&
+          item.runStatus === "completed" &&
+          String(item.status || "") !== "skipped" &&
+          ACCEPTED_SYSTEM_STATUSES.has(String(item.status || ""))
+        );
       });
       if (targetSystemsDone) {
         warnings.push(warning("batch.global-status-not-success", `Batch status is ${batchState.status || "unknown"}, but target systems are complete.`));
@@ -305,27 +1050,69 @@ function buildBatchArtifactAcceptance(context = {}, systems = [], options = {}) 
     }
   }
 
-  const repairClosureMatches =
-    repairClosure &&
-    generatedAtMatches(repairClosure.diagnosis?.generatedAt, diagnosis?.generatedAt) &&
-    generatedAtMatches(repairClosure.repairQueue?.generatedAt, repairQueue?.generatedAt);
-  if (repairClosure && repairClosure.status !== "passed" && (remainingRepairItems > 0 || repairClosureMatches)) {
+  const repairClosureBindingMismatches =
+    repairClosureValid && repairClosure
+      ? findRepairClosureBindingMismatches(repairClosure, {
+          outputRoot,
+          diagnosis,
+          repairQueue,
+          targetCodes,
+          targetTruthScorePercent: options.targetTruthScorePercent,
+        })
+      : [];
+  pushBindingBlocker(
+    blockers,
+    "repair.closure-stale",
+    repairClosureBindingMismatches,
+    "Repair closure is stale or out of scope: ",
+  );
+  const repairClosureMatches = repairClosureValid && repairClosure && repairClosureBindingMismatches.length === 0;
+  if (repairClosureValid && repairClosure && repairClosure.status !== "passed" && (remainingRepairItems > 0 || repairClosureMatches)) {
     blockers.push(blocker("repair.closure-not-passed", "Repair closure is not passed while repair items remain."));
-  } else if (repairClosure && repairClosure.status !== "passed") {
+  } else if (repairClosureValid && repairClosure && repairClosure.status !== "passed") {
     warnings.push(warning("repair.closure-not-passed-stale", "Repair closure is not passed, but current repair queue is empty."));
   }
 
-  const followUpMatches =
-    followUpPlan &&
-    generatedAtMatches(followUpPlan.source?.diagnosisGeneratedAt, diagnosis?.generatedAt) &&
-    generatedAtMatches(followUpPlan.source?.repairQueueGeneratedAt, repairQueue?.generatedAt);
-  if (followUpPlan && ["ready-to-run", "needs-agent-writing", "blocked"].includes(String(followUpPlan.status || ""))) {
+  const followUpBindingMismatches =
+    followUpPlanValid && followUpPlan
+      ? findFollowUpPlanBindingMismatches(followUpPlan, {
+          outputRoot,
+          diagnosis,
+          repairQueue,
+          repairClosure,
+          repairClosureMatches,
+          targetCodes,
+        })
+      : [];
+  pushBindingBlocker(
+    blockers,
+    "repair.follow-up-stale",
+    followUpBindingMismatches,
+    "Repair follow-up plan is stale or out of scope: ",
+  );
+  const followUpMatches = followUpPlanValid && followUpPlan && followUpBindingMismatches.length === 0;
+  if (followUpPlanValid && followUpPlan && ["ready-to-run", "needs-agent-writing", "blocked"].includes(String(followUpPlan.status || ""))) {
     if (remainingRepairItems > 0 || followUpMatches) {
       blockers.push(blocker("repair.follow-up-not-complete", `Repair follow-up status is ${followUpPlan.status}.`));
     } else {
       warnings.push(warning("repair.follow-up-not-complete-stale", `Repair follow-up status is ${followUpPlan.status}, but current repair queue is empty.`));
     }
   }
+
+  const followUpLoopStateBindingMismatches = followUpLoopState
+    ? findFollowUpLoopStateBindingMismatches(followUpLoopState, {
+        outputRoot,
+        followUpPlan,
+        repairClosure,
+        targetCodes,
+      })
+    : [];
+  pushBindingBlocker(
+    blockers,
+    "repair.loop-stale-artifact",
+    followUpLoopStateBindingMismatches,
+    "Repair follow-up loop state is stale or out of scope: ",
+  );
 
   if (followUpLoopState && !["complete"].includes(String(followUpLoopState.status || ""))) {
     if (remainingRepairItems > 0) {
@@ -402,6 +1189,7 @@ function summarizeSystems(systems = []) {
     minTruthScorePercent: scores.length ? Math.min(...scores) : 0,
     missingWritableClaims: systems.reduce((sum, item) => sum + Number(item.missingWritableClaimCount || 0), 0),
     staleSystems: systems.filter((item) => Number(item.staleSourceCount || 0) > 0).length,
+    smokeEvidence: systems.filter((item) => item.smokeEvidence).length,
     databaseBacked: systems.filter((item) => item.databaseEvidenceAvailable).length,
     databaseConfigured: systems.filter((item) => item.databaseProfileConfigured).length,
     whitepapers: systems.filter((item) => item.whitepaperExists).length,
@@ -580,6 +1368,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  assertValidBatchAcceptanceReportArtifact,
   buildBatchAcceptanceStateSummary,
   buildBatchAcceptanceReport,
   buildBatchArtifactAcceptance,

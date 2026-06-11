@@ -1,0 +1,261 @@
+{
+  "artifactType": "golden-facts",
+  "version": 1,
+  "datasetId": "adp-golden-eval",
+  "systemCode": "adp",
+  "systemName": "AI保单数据闭环平台",
+  "usagePolicy": {
+    "purpose": "golden_eval_only",
+    "generationInputAllowed": false,
+    "allowedConsumers": ["golden-eval-runner"],
+    "forbiddenConsumers": [
+      "evidence",
+      "truth-model",
+      "whitepaper-plan",
+      "narrative-writing",
+      "ai-provider-prompts"
+    ]
+  },
+  "facts": [
+    {
+      "id": "ADP-P0-001",
+      "priority": "P0",
+      "category": "platform_positioning",
+      "statement": "ADP 平台定位是保司数据对接闭环，解决产品上架最后一公里问题。",
+      "match": {
+        "all": ["保司数据", "闭环"],
+        "groups": [["产品上架最后一公里", "上架最后一公里"]]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "(合同|预算|财务报销).{0,16}(系统|平台)",
+          "message": "ADP 不应被写成合同、预算或财务报销系统。"
+        }
+      ]
+    },
+    {
+      "id": "ADP-P0-002",
+      "priority": "P0",
+      "category": "business_value",
+      "statement": "ADP 的核心价值是业务提供保司接口文档后，减少开发改代码。",
+      "match": {
+        "groups": [
+          ["业务提供保司接口文档", "业务提供接口文档", "保司接口文档"],
+          ["减少开发改代码", "减少开发改造", "减少代码改造"]
+        ]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "完全不需要开发|无需人工确认",
+          "message": "ADP 不能被夸大为完全不需要开发或无需人工确认。"
+        }
+      ]
+    },
+    {
+      "id": "ADP-P0-003",
+      "priority": "P0",
+      "category": "business_value",
+      "statement": "ADP 目标接入效率从约 4 天缩短到约半天。",
+      "match": {
+        "groups": [
+          ["约4天", "4天"],
+          ["约半天", "半天"],
+          ["接入效率", "接入周期", "缩短"]
+        ]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "分钟级|实时接入|固定SLA",
+          "message": "ADP 接入效率不能被写成分钟级、实时或固定 SLA。"
+        }
+      ]
+    },
+    {
+      "id": "ADP-P0-004",
+      "priority": "P0",
+      "category": "workflow",
+      "statement": "ADP 主流程包含定义参数、需求输出、用例执行、验收确认四个前置步骤。",
+      "match": {
+        "groups": [["定义参数"], ["需求输出"], ["用例执行"], ["验收确认"]]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "按钮存在.{0,20}(流程已完成|端到端完成)",
+          "message": "按钮存在不能直接证明端到端流程已完成。"
+        }
+      ]
+    },
+    {
+      "id": "ADP-P0-005",
+      "priority": "P0",
+      "category": "workflow",
+      "statement": "验收确认后进入发布开启环节。",
+      "match": {
+        "groups": [["验收确认"], ["发布开启", "开启发布"], ["验收确认后", "验收后进入"]]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "未验收.{0,16}(发布|生效)|无需验收.{0,16}(发布|生效)",
+          "message": "不能写成未验收或无需验收即可发布生效。"
+        }
+      ]
+    },
+    {
+      "id": "ADP-P0-006",
+      "priority": "P0",
+      "category": "workflow",
+      "statement": "发布开启后，平台定时拉取保司数据。",
+      "match": {
+        "groups": [["发布开启", "开启发布"], ["定时拉保司数据", "定时拉取保司数据", "定时同步保司数据"]]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "HiAgent.{0,16}(直接)?(拉取|调用|调).{0,8}保司",
+          "message": "HiAgent 不应被描述为直接拉取或调用保司数据。"
+        }
+      ]
+    },
+    {
+      "id": "ADP-P0-007",
+      "priority": "P0",
+      "category": "workflow",
+      "statement": "平台拉取保司数据后写入核心系统。",
+      "match": {
+        "groups": [["平台"], ["保司数据"], ["写核心", "写入核心", "核心系统"]]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "HiAgent.{0,16}(直接)?(写|写入).{0,8}核心",
+          "message": "HiAgent 不应被描述为直接写核心。"
+        }
+      ]
+    },
+    {
+      "id": "ADP-P0-008",
+      "priority": "P0",
+      "category": "workflow",
+      "statement": "ADP 主流程末端包含数据监控。",
+      "match": {
+        "groups": [["数据监控", "运行观测"], ["流程末端", "闭环末端", "末端"]]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "监控入口存在.{0,20}(所有|全部).{0,8}(规则|质量).{0,8}已验证",
+          "message": "监控入口存在不能证明所有质量规则已验证。"
+        }
+      ]
+    },
+    {
+      "id": "ADP-P1-009",
+      "priority": "P1",
+      "category": "module_responsibility",
+      "statement": "AI任务管理是 ADP 需要覆盖的核心模块。",
+      "match": {
+        "all": ["AI任务管理"]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "AI任务管理.{0,16}(发布开启|数据监控)",
+          "message": "AI任务管理不应被混写成发布或监控模块。"
+        }
+      ]
+    },
+    {
+      "id": "ADP-P1-010",
+      "priority": "P1",
+      "category": "module_responsibility",
+      "statement": "AI发布管理是 ADP 需要覆盖的核心模块，关联发布开启。",
+      "match": {
+        "all": ["AI发布管理"],
+        "groups": [["发布开启", "开启发布"]]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "AI发布管理.{0,16}(需求生成|测试生成)",
+          "message": "AI发布管理不应被写成需求或测试生成模块。"
+        }
+      ]
+    },
+    {
+      "id": "ADP-P1-011",
+      "priority": "P1",
+      "category": "module_responsibility",
+      "statement": "AI数据监控或数据与运行观测是 ADP 需要覆盖的核心模块。",
+      "match": {
+        "groups": [["AI数据监控", "数据监控", "数据与运行观测", "运行观测"]]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "(数据监控|运行观测).{0,16}(调保司|写核心)",
+          "message": "监控模块不应被写成负责调保司或写核心。"
+        }
+      ]
+    },
+    {
+      "id": "ADP-P1-012",
+      "priority": "P1",
+      "category": "module_responsibility",
+      "statement": "元数据管理是 ADP 需要覆盖的核心模块。",
+      "match": {
+        "all": ["元数据管理"]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "元数据管理.{0,16}(虚构字段|虚构表结构)",
+          "message": "不能虚构元数据字段、表结构或配置规则。"
+        }
+      ]
+    },
+    {
+      "id": "ADP-P0-013",
+      "priority": "P0",
+      "category": "state_transition",
+      "statement": "ADP 状态流转需要覆盖草稿、需求已完成、需求待生效、需求已生效。",
+      "match": {
+        "groups": [["草稿"], ["需求已完成"], ["需求待生效"], ["需求已生效"]]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "审批通过|已下架",
+          "message": "不能虚构审批通过、已下架等未纳入标准事实的状态。"
+        }
+      ]
+    },
+    {
+      "id": "ADP-P0-014",
+      "priority": "P0",
+      "category": "external_boundary",
+      "statement": "外部职责边界是平台调保司、平台写核心。",
+      "match": {
+        "groups": [["平台调保司", "平台调用保司"], ["平台写核心", "平台写入核心"]]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "HiAgent.{0,16}(调|调用).{0,8}保司|HiAgent.{0,16}(写|写入).{0,8}核心",
+          "message": "外部职责边界不能写成 HiAgent 直接调保司或写核心。"
+        }
+      ]
+    },
+    {
+      "id": "ADP-P0-015",
+      "priority": "P0",
+      "category": "external_boundary",
+      "statement": "HiAgent 负责需求和测试类生成，不直接调保司或写核心。",
+      "match": {
+        "all": ["HiAgent"],
+        "groups": [
+          ["需求生成", "需求类生成"],
+          ["测试生成", "测试类生成"],
+          ["不直接调保司", "不负责调保司"],
+          ["不直接写核心", "不负责写核心"]
+        ]
+      },
+      "forbiddenClaims": [
+        {
+          "pattern": "HiAgent.{0,16}(执行|负责).{0,8}(保司调用|核心写入|最终事实裁判)",
+          "message": "HiAgent 不应被写成执行保司调用、核心写入或最终事实裁判。"
+        }
+      ]
+    }
+  ]
+}

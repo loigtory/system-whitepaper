@@ -1,5 +1,7 @@
 # 财务中台试点：实现回顾与后续计划
 
+> 当前说明：本文件是 fin-center 历史试点复盘，不作为当前流程或验收依据。当前可交付白皮书以 `SKILL.md`、Truth Pipeline、`truth-readiness-report.json canSubmitReview=true && score>=95`、批量验收、交付就绪和 `.docx.manifest.json` 为准；下文旧 `canFinalize`、脚本四件套和命名稿描述仅反映早期阶段。
+
 > 状态基准：`outputs/fin-center` 证据包（2026-05-20），脚本目录 `skill/system-whitepaper`  
 > 质量门禁：`canFinalize: true`（核心菜单 86/86，页面 55，动作 310，表格 77）
 

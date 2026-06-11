@@ -9,7 +9,11 @@ const {
   parseSystemsConfig,
   resolveConfigRelativePath,
 } = require("./system-whitepaper-lib");
-const { resolveDatabaseProfileConfig } = require("./collect-database-profile");
+const {
+  assertPrivateDatabaseMetadataPath,
+  assertPrivateDatabaseSecretPath,
+  resolveDatabaseProfileConfig,
+} = require("./collect-database-profile");
 
 function pushIssue(list, id, message, details = {}) {
   list.push({ id, message, ...details });
@@ -163,43 +167,59 @@ function validateSystem(system, index, seenCodes, failures, warnings, checks, co
   if (system.databaseProfile?.enabled) {
     const databaseProfile = resolveDatabaseProfileConfig(system, configDir);
     let databaseSecret = null;
-    if (!databaseProfile.secretFile) {
-      pushIssue(
-        failures,
-        "system.database-secret-missing",
-        `${label}: databaseProfile.enabled is true but secretFile is not configured.`,
-      );
-    } else if (!fs.existsSync(databaseProfile.secretFile)) {
-      pushIssue(
-        failures,
-        "system.database-secret-file-missing",
-        `${label}: database secret file not found: ${databaseProfile.secretFile}`,
-      );
-    } else {
-      try {
-        databaseSecret = JSON.parse(fs.readFileSync(databaseProfile.secretFile, "utf8"));
-        if (!databaseSecret || typeof databaseSecret !== "object" || Array.isArray(databaseSecret)) {
-          throw new Error("not object");
-        }
-      } catch {
+    let secretPathAllowed = true;
+    try {
+      assertPrivateDatabaseSecretPath(system, configDir, databaseProfile);
+    } catch (error) {
+      secretPathAllowed = false;
+      pushIssue(failures, "system.database-secret-path-unsafe", `${label}: ${error.message}`);
+    }
+    if (databaseProfile.secretFile && secretPathAllowed) {
+      if (!fs.existsSync(databaseProfile.secretFile)) {
         pushIssue(
           failures,
-          "system.database-secret-file-malformed",
-          `${label}: database secret file must be a valid JSON object: ${databaseProfile.secretFile}`,
+          "system.database-secret-file-missing",
+          `${label}: database secret file not found: ${databaseProfile.secretFile}`,
         );
+      } else {
+        try {
+          databaseSecret = JSON.parse(fs.readFileSync(databaseProfile.secretFile, "utf8"));
+          if (!databaseSecret || typeof databaseSecret !== "object" || Array.isArray(databaseSecret)) {
+            throw new Error("not object");
+          }
+        } catch {
+          pushIssue(
+            failures,
+            "system.database-secret-file-malformed",
+            `${label}: database secret file must be a valid JSON object: ${databaseProfile.secretFile}`,
+          );
+        }
       }
     }
 
-    if (
-      databaseProfile.mode !== "connector" &&
-      databaseProfile.metadataFile &&
-      !fs.existsSync(databaseProfile.metadataFile)
-    ) {
-      pushIssue(
-        warnings,
-        "system.database-metadata-file-missing",
-        `${label}: database metadata file not found: ${databaseProfile.metadataFile}`,
-      );
+    if (databaseProfile.mode !== "connector") {
+      const metadataFile = databaseProfile.metadataFile || databaseSecret?.metadataFile || "";
+      let metadataPath = "";
+      if (!metadataFile) {
+        pushIssue(
+          failures,
+          "system.database-metadata-file-missing",
+          `${label}: database metadata file is required for non-connector database evidence.`,
+        );
+      } else {
+        try {
+          metadataPath = assertPrivateDatabaseMetadataPath(system, configDir, metadataFile);
+        } catch (error) {
+          pushIssue(failures, "system.database-metadata-path-unsafe", `${label}: ${error.message}`);
+        }
+      }
+      if (metadataPath && !fs.existsSync(metadataPath)) {
+        pushIssue(
+          failures,
+          "system.database-metadata-file-missing",
+          `${label}: database metadata file not found: ${metadataPath}`,
+        );
+      }
     }
 
     if (

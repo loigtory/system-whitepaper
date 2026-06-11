@@ -84,12 +84,21 @@ function prepareSmokeOutput(options = {}) {
     scorePercent: 99,
     canSubmitReview: true,
     canFinalize: true,
+    requirements: { databaseEvidenceRequired: false },
     gates: {
       evidence: { pass: true, scorePercent: 100 },
       claims: { pass: true, scorePercent: 100 },
       factCheck: { pass: true, scorePercent: 100 },
       narrative: { pass: true, scorePercent: 100 },
+      workflow: {
+        pass: true,
+        scorePercent: 100,
+        metrics: { operationFlowCount: 1, observedWorkflowStepCount: 1 },
+      },
+      businessProcess: { pass: true, scorePercent: 100 },
+      whitepaperPlan: { pass: true, scorePercent: 100 },
       database: { pass: true, available: false, scorePercent: 0 },
+      lineage: { pass: true, scorePercent: 100 },
     },
     blockers: [],
     improvementActions: [
@@ -141,6 +150,7 @@ function runLocalE2ESmoke(options = {}) {
   const decision = runReviewDecision({
     inputDir: smokeOutput,
     status: "approved",
+    systemCode,
     systemName,
     date: options.date,
     allowSmokeTruthReadiness: true,

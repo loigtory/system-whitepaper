@@ -2,14 +2,41 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const {
   parseArgs,
   readRequiredJsonObject,
   writeJson,
 } = require("./system-whitepaper-lib");
+const { assertValidFunctionUniverseArtifact } = require("./check-truth-readiness");
 
 function compactString(value) {
   return String(value || "").trim();
+}
+
+function fingerprintFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { exists: false, size: 0, mtimeMs: null, sha256: "" };
+  }
+  const buffer = fs.readFileSync(filePath);
+  const stat = fs.statSync(filePath);
+  return {
+    exists: true,
+    size: stat.size,
+    mtimeMs: Math.round(stat.mtimeMs),
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+function buildSourceArtifacts(input = {}) {
+  const result = {};
+  if (input.functionUniversePath) {
+    result.functionUniverse = {
+      file: path.basename(input.functionUniversePath),
+      fingerprint: fingerprintFile(input.functionUniversePath),
+    };
+  }
+  return result;
 }
 
 function uniqueBy(items, keyFn) {
@@ -54,6 +81,13 @@ function claimHasDatabaseEvidence(claim = {}) {
   return sourceTypeStartsWith(claim.sources, "db-");
 }
 
+function claimHasStructuredFunctionEvidence(claim = {}) {
+  const evidence = claim.evidence || {};
+  return ["actions", "queryFields", "tableColumns"].some(
+    (key) => Array.isArray(evidence[key]) && evidence[key].length > 0,
+  );
+}
+
 function confidenceRank(value) {
   return { high: 3, medium: 2, low: 1 }[value] || 0;
 }
@@ -86,7 +120,13 @@ function classifyClaim(confidence, sources = []) {
 
 function claimIsWritable(claim) {
   if (claimHasDatabaseEvidence(claim) && !claimHasUiEvidence(claim)) return false;
-  if (claim.status === "confirmed") return true;
+  if (claim.type === "module-presence") {
+    return claim.status === "confirmed" && claimHasUiEvidence(claim);
+  }
+  if (claim.type === "function-presence") {
+    return claim.status === "confirmed" && claimHasUiEvidence(claim) && claimHasStructuredFunctionEvidence(claim);
+  }
+  if (claim.status === "confirmed") return claimHasUiEvidence(claim);
   if (claim.status !== "inferred") return false;
   if (claim.type === "function-entity-link") {
     return claimHasUiEvidence(claim) && claimHasDatabaseEvidence(claim);
@@ -256,8 +296,20 @@ function buildEntityRelationClaims(universe = {}) {
   });
 }
 
+function assertValidFunctionUniverse(universe = {}) {
+  try {
+    assertValidFunctionUniverseArtifact(universe);
+  } catch (error) {
+    if (/rules\.noConclusion=true/.test(error.message)) {
+      throw new Error("function-universe.json must declare rules.noConclusion=true before claims can be generated.");
+    }
+    throw error;
+  }
+}
+
 function buildVerifiedClaimsArtifact(input = {}) {
   const universe = input.functionUniverse || {};
+  assertValidFunctionUniverse(universe);
   const claims = [
     ...buildModuleClaims(universe),
     ...buildFunctionClaims(universe),
@@ -275,6 +327,7 @@ function buildVerifiedClaimsArtifact(input = {}) {
     system: universe.system || null,
     claims: uniqueClaims,
     writableClaimIds: writableClaims.map((claim) => claim.id),
+    sourceArtifacts: input.sourceArtifacts || {},
     metrics: {
       claimCount: uniqueClaims.length,
       writableClaimCount: writableClaims.length,
@@ -290,6 +343,7 @@ function buildVerifiedClaimsArtifact(input = {}) {
       lowConfidenceNotWritable: true,
       databaseOnlyNotConfirmed: true,
       databaseOnlyNotWritable: true,
+      screenshotOnlyFunctionNotWritable: true,
       purpose:
         "Claims are the only allowed business-writing source for the next narrative/fact-check stages.",
     },
@@ -302,7 +356,11 @@ function buildVerifiedClaimsFromDir(inputDir, options = {}) {
     options.functionUniversePath || path.join(dir, "function-universe.json"),
     { label: "Function universe" },
   );
-  const artifact = buildVerifiedClaimsArtifact({ functionUniverse });
+  const functionUniversePath = options.functionUniversePath || path.join(dir, "function-universe.json");
+  const artifact = buildVerifiedClaimsArtifact({
+    functionUniverse,
+    sourceArtifacts: buildSourceArtifacts({ functionUniversePath }),
+  });
   const outputPath = options.outputPath || path.join(dir, "verified-claims.json");
   writeJson(outputPath, artifact);
   return { outputPath, artifact };
@@ -332,8 +390,11 @@ if (require.main === module) {
 module.exports = {
   buildVerifiedClaimsArtifact,
   buildVerifiedClaimsFromDir,
+  buildSourceArtifacts,
   claimHasDatabaseEvidence,
+  claimHasStructuredFunctionEvidence,
   claimHasUiEvidence,
   claimIsWritable,
   classifyClaim,
+  fingerprintFile,
 };

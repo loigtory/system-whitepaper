@@ -13,6 +13,7 @@ const {
   resolveConfigRelativePath,
   resolveWhitepaperFileName,
   resolveWhitepaperPendingReviewFileName,
+  finalizeWhitepaperMarkdown,
   syncWhitepaperNamedArtifacts,
 } = require("../system-whitepaper-lib");
 const {
@@ -32,8 +33,14 @@ const {
   killProjectPipelineProcesses,
   listProjectPipelinePids,
 } = require("./process-control");
+const { assertApprovalTruthReadiness } = require("../approval-guard");
 const { runReviewDecision } = require("../run-review-decision");
+const {
+  terminateBatchInFlightSystems,
+  writeBatchRunState,
+} = require("../run-whitepaper-batch");
 const { findStaleReadinessSources } = require("../check-truth-readiness");
+const { validateFinalDocx } = require("../check-delivery-readiness");
 const { isCursorSdkConfigured, resolveNarrativeProvider } = require("../narrative/resolve-provider");
 const { formatCny, formatUsd } = require("../narrative/usage-cost");
 
@@ -107,13 +114,60 @@ function resolveFinalMarkdownPath(systemOutput, state, system = {}) {
   return "";
 }
 
-function ensureDocxArtifact(systemOutput, state, system = {}) {
-  let docxPath = resolveDocxArtifact(systemOutput, state.artifacts?.docx);
-  if (docxPath && fs.existsSync(docxPath)) return docxPath;
+function assertDashboardFinalDeliveryAllowed(systemOutput, state = {}, system = {}) {
   const reviewApproved =
     state.overallStatus === "finalized" || state.review?.status === "approved";
-  if (!reviewApproved) return docxPath || "";
+  if (!reviewApproved) {
+    throw new Error("Final delivery requires approved review state.");
+  }
+  const pendingPath = path.join(systemOutput, "whitepaper.pending-review.md");
+  const finalPath = path.join(systemOutput, "whitepaper.final.md");
+  if (!fs.existsSync(pendingPath) || !fs.existsSync(finalPath)) {
+    throw new Error("Final delivery requires both pending-review and final whitepaper Markdown.");
+  }
+  const pendingMarkdown = fs.readFileSync(pendingPath, "utf8");
+  const finalMarkdown = fs.readFileSync(finalPath, "utf8");
+  const expectedFinal = finalizeWhitepaperMarkdown(pendingMarkdown, {
+    systemName: system.name || state.name || "",
+  });
+  if (finalMarkdown !== expectedFinal) {
+    throw new Error("Final delivery requires final Markdown to match the approved pending-review Markdown.");
+  }
+  assertApprovalTruthReadiness(systemOutput, {
+    state,
+    systemCode: system.code || state.code || "",
+    systemName: system.name || state.name || "",
+  });
+}
+
+function dashboardFinalDeliveryAllowed(systemOutput, state = {}, system = {}) {
+  try {
+    assertDashboardFinalDeliveryAllowed(systemOutput, state, system);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ensureDocxArtifact(systemOutput, state, system = {}, options = {}) {
+  let docxPath = resolveDocxArtifact(systemOutput, state.artifacts?.docx);
   const mdPath = resolveFinalMarkdownPath(systemOutput, state, system);
+  const finalDeliveryAllowed =
+    options.finalDeliveryAllowed !== undefined
+      ? Boolean(options.finalDeliveryAllowed)
+      : dashboardFinalDeliveryAllowed(systemOutput, state, system);
+  if (!finalDeliveryAllowed) return "";
+  if (docxPath && fs.existsSync(docxPath)) {
+    if (!mdPath) return docxPath;
+    const docxState = {
+      ...state,
+      artifacts: {
+        ...(state.artifacts || {}),
+        docx: path.basename(docxPath),
+      },
+    };
+    if (validateFinalDocx(systemOutput, docxState, mdPath).valid) return docxPath;
+  }
   if (!mdPath) return docxPath || "";
   const { exportWhitepaperWord } = require("../export-whitepaper-word");
   return exportWhitepaperWord({
@@ -140,9 +194,11 @@ function resolveArtifactFileInfo(systemOutput, options = {}) {
 }
 
 function buildArtifactSnapshot(systemOutput, state, system = {}) {
+  const finalDeliveryAllowed = dashboardFinalDeliveryAllowed(systemOutput, state, system);
   syncWhitepaperNamedArtifacts({
     systemOutput,
     systemName: system.name || state?.name,
+    syncFinal: finalDeliveryAllowed,
   });
   const artifacts = state.artifacts || {};
   return {
@@ -175,12 +231,14 @@ function buildArtifactSnapshot(systemOutput, state, system = {}) {
       internalName: artifacts.pendingReview || "whitepaper.pending-review.md",
       displayNameResolver: resolveWhitepaperPendingReviewFileName,
     }),
-    final: resolveArtifactFileInfo(systemOutput, {
-      systemName: system.name || state?.name,
-      internalName: artifacts.final || "whitepaper.final.md",
-      displayNameResolver: resolveWhitepaperFileName,
-    }),
-    docx: fileInfo(ensureDocxArtifact(systemOutput, state, system)),
+    final: finalDeliveryAllowed
+      ? resolveArtifactFileInfo(systemOutput, {
+          systemName: system.name || state?.name,
+          internalName: artifacts.final || "whitepaper.final.md",
+          displayNameResolver: resolveWhitepaperFileName,
+        })
+      : fileInfo(path.join(systemOutput, artifacts.final || "whitepaper.final.md")),
+    docx: fileInfo(ensureDocxArtifact(systemOutput, state, system, { finalDeliveryAllowed })),
     operationGuide: fileInfo(path.join(systemOutput, "operation-guide.md")),
     operationSpec: fileInfo(path.join(systemOutput, "operation-spec.json")),
   };
@@ -197,6 +255,53 @@ function buildOperationGuideGateSnapshot(systemOutput) {
   };
 }
 
+function metricSnapshot(metrics = {}, keys = []) {
+  const source = metrics && typeof metrics === "object" && !Array.isArray(metrics) ? metrics : {};
+  return keys.reduce((result, key) => {
+    if (source[key] !== undefined) result[key] = Number(source[key] || 0);
+    return result;
+  }, {});
+}
+
+function buildTruthGateSummary(gates = {}) {
+  const safeGates = gates && typeof gates === "object" && !Array.isArray(gates) ? gates : {};
+  const gateSummary = (gateId, metricKeys) => {
+    const gate = safeGates[gateId];
+    if (!gate || typeof gate !== "object" || Array.isArray(gate)) return null;
+    return {
+      pass: gate.pass === true,
+      scorePercent: Number(gate.scorePercent || 0),
+      failureCount: Array.isArray(gate.failures) ? gate.failures.length : 0,
+      failures: Array.isArray(gate.failures) ? gate.failures.slice(0, 4).map(String) : [],
+      metrics: metricSnapshot(gate.metrics, metricKeys),
+    };
+  };
+  return {
+    workflow: gateSummary("workflow", [
+      "operationFlowCount",
+      "observedWorkflowCount",
+      "observedWorkflowStepCount",
+    ]),
+    businessProcess: gateSummary("businessProcess", [
+      "processCount",
+      "staleSourceCount",
+      "stepEvidenceMissingCount",
+      "defaultDomainLeakCount",
+    ]),
+    whitepaperPlan: gateSummary("whitepaperPlan", [
+      "requiredItemCount",
+      "coveredRequiredItemCount",
+      "planRequiredCoverageRatio",
+      "missingRequiredItemCount",
+    ]),
+    goldenEval: gateSummary("goldenEval", [
+      "coverageRatio",
+      "criticalCoverageRatio",
+      "overclaimCount",
+    ]),
+  };
+}
+
 function buildTruthReadinessSnapshot(systemOutput) {
   const report = readOptionalJsonObject(path.join(systemOutput, "truth-readiness-report.json"));
   if (!report) return null;
@@ -204,6 +309,7 @@ function buildTruthReadinessSnapshot(systemOutput) {
   const stale = staleSources.length > 0;
   const gates = report.gates && typeof report.gates === "object" && !Array.isArray(report.gates) ? report.gates : {};
   const factCheck = gates.factCheck || {};
+  const goldenEval = gates.goldenEval || {};
   return {
     scorePercent: Number(report.scorePercent || 0),
     threshold: Number(report.threshold || 0),
@@ -215,6 +321,7 @@ function buildTruthReadinessSnapshot(systemOutput) {
     blockers: Array.isArray(report.blockers) ? report.blockers : [],
     improvementActions: Array.isArray(report.improvementActions) ? report.improvementActions : [],
     gates,
+    gateSummary: buildTruthGateSummary(gates),
     writableClaimCoverage: {
       ratio: Number(factCheck.metrics?.writableClaimCoverageRatio || 0),
       minRatio: Number(factCheck.metrics?.minWritableClaimCoverage || 0),
@@ -224,6 +331,15 @@ function buildTruthReadinessSnapshot(systemOutput) {
       missingWritableClaimIds: Array.isArray(factCheck.missingWritableClaimIds)
         ? factCheck.missingWritableClaimIds.slice(0, 20)
         : [],
+    },
+    goldenEval: {
+      required: Boolean(goldenEval.required),
+      available: Boolean(goldenEval.available),
+      pass: goldenEval.pass === true,
+      coverageRatio: Number(goldenEval.metrics?.coverageRatio || 0),
+      criticalCoverageRatio: Number(goldenEval.metrics?.criticalCoverageRatio || 0),
+      overclaimCount: Number(goldenEval.metrics?.overclaimCount || 0),
+      scorePercent: Number(goldenEval.scorePercent || 0),
     },
     generatedAt: report.generatedAt || "",
   };
@@ -635,6 +751,9 @@ function buildEvidenceSnapshot(systemOutput) {
 }
 
 function resolveArtifactDownloadPath(systemOutput, artifactKey, state, system = {}) {
+  if (artifactKey === "final") {
+    assertDashboardFinalDeliveryAllowed(systemOutput, state || {}, system);
+  }
   const snapshot = buildArtifactSnapshot(systemOutput, state, system);
   const artifact = snapshot[artifactKey];
   if (!artifact?.exists || !artifact.path) {
@@ -705,6 +824,9 @@ function buildProgress(state) {
     completed,
     failed,
     total: nodeIds.length,
+    kind: "nodes",
+    label: "节点进度",
+    unitLabel: "已完成节点",
     percent: nodeIds.length ? Math.round((completed / nodeIds.length) * 100) : 0,
   };
 }
@@ -842,12 +964,64 @@ function resolveTrackedRun(systems) {
 
 function progressFromBatchSummary(summary = {}) {
   const total = Number(summary.total || 0);
-  const completed = Number(summary.completed || 0) + Number(summary.failed || 0);
-  const boundedCompleted = Math.min(total, Math.max(0, completed));
+  const successful = Number(summary.successful ?? summary.completed ?? 0);
+  const failed = Number(summary.failed || 0);
+  const finished = Number(summary.finished ?? successful + failed);
+  const boundedFinished = Math.min(total, Math.max(0, finished));
   return {
     total,
-    completed: boundedCompleted,
-    percent: total ? Math.round((boundedCompleted / total) * 100) : 0,
+    finished: boundedFinished,
+    successful: Math.min(total, Math.max(0, successful)),
+    failed: Math.min(total, Math.max(0, failed)),
+    completed: boundedFinished,
+    kind: "batch",
+    label: "运行进度",
+    unitLabel: "运行结束",
+    percent: total ? Math.round((boundedFinished / total) * 100) : 0,
+  };
+}
+
+function isStopTerminatedBatchSystem(item = {}) {
+  const runStatus = String(item.runStatus || "");
+  const status = String(item.status || "");
+  const stopReason = String(item.stopReason || "");
+  const signal = String(item.signal || "");
+  const failureCategory = String(item.failureCategory || item.failure?.category || "");
+  const lastError = String(item.lastError || "");
+  const stopMarked =
+    Boolean(stopReason || signal) ||
+    failureCategory === "interrupted" ||
+    /dashboard-stop|interrupted|sigint|sigterm|手动停止|停止/.test(lastError.toLowerCase());
+  return stopMarked && runStatus === "failed" && status === "paused";
+}
+
+function normalizeRetryNodes(retryPlan = {}) {
+  if (Array.isArray(retryPlan.nodes)) return retryPlan.nodes.filter(Boolean).join(",");
+  return String(retryPlan.nodes || "");
+}
+
+function buildBatchStopSummary(batch = {}) {
+  const systems = Array.isArray(batch?.systems) ? batch.systems : [];
+  const terminatedSystems = systems.filter(isStopTerminatedBatchSystem).map((item) => ({
+    code: item.code || "",
+    name: item.name || "",
+    status: item.status || "",
+    runStatus: item.runStatus || "",
+    stopReason: item.stopReason || item.signal || item.failureCategory || item.failure?.category || "",
+    lastError: item.lastError || "",
+    retryNodes: normalizeRetryNodes(item.retryPlan || item.failure?.retryPlan || {}),
+    finishedAt: item.finishedAt || "",
+    updatedAt: item.updatedAt || "",
+  }));
+  const stoppedTimes = terminatedSystems
+    .map((item) => item.finishedAt || item.updatedAt)
+    .filter(Boolean)
+    .sort();
+  return {
+    terminatedBatchSystems: terminatedSystems.map((item) => item.code).filter(Boolean),
+    terminatedSystems,
+    terminatedCount: terminatedSystems.length,
+    lastStoppedAt: stoppedTimes.length ? stoppedTimes[stoppedTimes.length - 1] : "",
   };
 }
 
@@ -877,7 +1051,9 @@ function buildBatchActiveRun(run, systems, batch) {
   const repairQueue = batch?.repairQueue || null;
   const acceptance = batch?.acceptance || null;
   const deliveryReadiness = batch?.deliveryReadiness || null;
+  const realRunReadiness = batch?.realRunReadiness || null;
   const repairFollowUp = batch?.repairFollowUp || null;
+  const stopSummary = batch?.stopSummary || buildBatchStopSummary(batch);
   return {
     mode: "batch",
     systemCode: currentCodes.join(","),
@@ -895,7 +1071,9 @@ function buildBatchActiveRun(run, systems, batch) {
     repairQueue,
     acceptance,
     deliveryReadiness,
+    realRunReadiness,
     repairFollowUp,
+    stopSummary,
     startedAt: run.startedAt || batch?.startedAt || "",
     runningMs:
       run.startedAt || batch?.startedAt
@@ -982,6 +1160,41 @@ function pauseRunningStatesOnDisk(configPath, options = {}) {
   return paused;
 }
 
+function terminateBatchRunStateOnDisk(configPath, options = {}) {
+  const { outputRoot } = resolveDashboardPaths({ configPath });
+  const batchPath = path.join(outputRoot, "_batch", "run-state.json");
+  const state = readOptionalJsonObject(batchPath);
+  if (!state || !Array.isArray(state.systems)) {
+    return { changed: false, terminatedSystems: [], state: null };
+  }
+  const before = state.systems.map((item) => ({
+    code: item.code,
+    runStatus: item.runStatus,
+    status: item.status,
+  }));
+  const next = terminateBatchInFlightSystems(state, {
+    message: options.message || "用户手动停止",
+    stopReason: options.stopReason || "dashboard-stop",
+  });
+  const terminatedSystems = next.systems
+    .filter((item, index) => {
+      const previous = before[index] || {};
+      return (
+        previous.code === item.code &&
+        (previous.runStatus !== item.runStatus || previous.status !== item.status) &&
+        item.runStatus === "failed" &&
+        item.status === "paused"
+      );
+    })
+    .map((item) => item.code)
+    .filter(Boolean);
+  if (!terminatedSystems.length) {
+    return { changed: false, terminatedSystems: [], state };
+  }
+  writeBatchRunState(outputRoot, next);
+  return { changed: true, terminatedSystems, state: next };
+}
+
 function resetPipelineStateOnDisk(systemCode, configPath) {
   const { config, outputRoot } = resolveDashboardPaths({ configPath });
   const system = (config.systems || []).find((item) => item.code === systemCode);
@@ -1039,6 +1252,13 @@ function buildDashboardSnapshot(options = {}) {
     json: fileInfo(path.join(outputRoot, "_batch", "delivery-readiness-report.json")),
     markdown: fileInfo(path.join(outputRoot, "_batch", "delivery-readiness-report.md")),
   };
+  const batchRealRunReadinessReport = readOptionalJsonObject(
+    path.join(outputRoot, "_batch", "real-run-readiness-report.json"),
+  );
+  const batchRealRunReadinessArtifacts = {
+    json: fileInfo(path.join(outputRoot, "_batch", "real-run-readiness-report.json")),
+    markdown: fileInfo(path.join(outputRoot, "_batch", "real-run-readiness-report.md")),
+  };
   const batchRepairRunState = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-run-state.json"));
   const batchRepairRunPlan = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-run-plan.json"));
   const batchRepairClosure = readOptionalJsonObject(path.join(outputRoot, "_batch", "repair-closure.json"));
@@ -1056,9 +1276,11 @@ function buildDashboardSnapshot(options = {}) {
     followUpMarkdown: fileInfo(path.join(outputRoot, "_batch", "repair-follow-up-plan.md")),
     followUpLoopState: fileInfo(path.join(outputRoot, "_batch", "repair-follow-up-loop-state.json")),
   };
+  const batchStopSummary = batch ? buildBatchStopSummary(batch) : null;
   const batchForActiveRun = batch
     ? {
         ...batch,
+        stopSummary: batch.stopSummary || batchStopSummary,
         diagnosis:
           batch.diagnosis ||
           (batchDiagnosis
@@ -1101,6 +1323,25 @@ function buildDashboardSnapshot(options = {}) {
                   deliveryReadinessMarkdown: "delivery-readiness-report.md",
                 },
                 generatedAt: batchDeliveryReadinessReport.generatedAt || "",
+              }
+            : null),
+        realRunReadiness:
+          batch.realRunReadiness ||
+          (batchRealRunReadinessReport
+            ? {
+                status: batchRealRunReadinessReport.status || "",
+                canStartRealRun: Boolean(batchRealRunReadinessReport.canStartRealRun),
+                canDeliver: Boolean(batchRealRunReadinessReport.canDeliver),
+                summary: batchRealRunReadinessReport.summary || {},
+                batchRun: batchRealRunReadinessReport.batchRun || null,
+                acceptance: batchRealRunReadinessReport.acceptance || null,
+                deliveryReadiness: batchRealRunReadinessReport.deliveryReadiness || null,
+                artifacts: {
+                  realRunReadinessJson: "real-run-readiness-report.json",
+                  realRunReadinessMarkdown: "real-run-readiness-report.md",
+                },
+                generatedAt: batchRealRunReadinessReport.generatedAt || "",
+                nextAction: batchRealRunReadinessReport.nextAction || "",
               }
             : null),
         repairFollowUp:
@@ -1187,12 +1428,15 @@ function buildDashboardSnapshot(options = {}) {
     batchAcceptanceArtifacts,
     batchDeliveryReadinessReport,
     batchDeliveryReadinessArtifacts,
+    batchRealRunReadinessReport,
+    batchRealRunReadinessArtifacts,
     batchRepairRunState,
     batchRepairRunPlan,
     batchRepairClosure,
     batchRepairFollowUpPlan,
     batchRepairFollowUpLoopState,
     batchRepairRunArtifacts,
+    batchStopSummary,
     summary: buildSummary(systems),
     activeRun,
     systems,
@@ -1305,7 +1549,15 @@ function forceStopPipelineSync(options = {}) {
     system: options.system,
     message: options.message || "用户手动停止",
   });
-  return { killedPids: [...new Set(killedPids)], pausedSystems };
+  const batchTermination = terminateBatchRunStateOnDisk(options.configPath, {
+    message: options.message || "用户手动停止",
+    stopReason: "dashboard-stop",
+  });
+  return {
+    killedPids: [...new Set(killedPids)],
+    pausedSystems,
+    terminatedBatchSystems: batchTermination.terminatedSystems,
+  };
 }
 
 function schedulePipelineProcessCleanup(skipPids = []) {
@@ -1407,19 +1659,20 @@ function runPipeline(options = {}) {
 function stopPipeline(options = {}) {
   const configPath = options.configPath || currentRun?.configPath || "config/systems.local.yaml";
   const targetSystem = currentRun?.mode === "batch" ? "" : options.system;
-  const { killedPids, pausedSystems } = forceStopPipelineSync({
+  const { killedPids, pausedSystems, terminatedBatchSystems } = forceStopPipelineSync({
     configPath,
     system: targetSystem,
     message: options.message || "用户手动停止",
   });
   schedulePipelineProcessCleanup(killedPids);
-  if (!killedPids.length && !pausedSystems.length) {
-    return { status: "idle", killedPids, pausedSystems };
+  if (!killedPids.length && !pausedSystems.length && !terminatedBatchSystems.length) {
+    return { status: "idle", killedPids, pausedSystems, terminatedBatchSystems };
   }
   return {
     status: "stopped",
     killedPids,
     pausedSystems,
+    terminatedBatchSystems,
     staleStateCleared: pausedSystems.length > 0 && killedPids.length === 0,
   };
 }
@@ -1515,6 +1768,9 @@ function renderMarkdownToHtml(markdown) {
 
 function resolvePreviewArtifact(systemOutput, artifactKey, system = {}) {
   const { state } = readDashboardPipelineState(path.join(systemOutput, "pipeline-state.json"));
+  if (artifactKey === "final") {
+    assertDashboardFinalDeliveryAllowed(systemOutput, state || {}, system);
+  }
   const snapshot = buildArtifactSnapshot(systemOutput, state || {}, system);
   const artifact = snapshot[artifactKey];
   if (!artifact?.exists || !artifact.path) {
@@ -1644,10 +1900,15 @@ async function routeRequest(request, response, options = {}) {
       const body = await readRequestJson(request);
       if (!body.system) throw new Error("system is required");
       const { configPath, config, outputRoot } = resolveDashboardPaths(options);
+      const system = (config.systems || []).find((item) => item.code === body.system);
+      if (!system) throw new Error(`System not found: ${body.system}`);
       const decision = runReviewDecision({
         inputDir: path.join(outputRoot, body.system),
         status: body.status || body.decision,
         comment: body.comment,
+        requireDatabaseEvidence: system.databaseProfile?.enabled,
+        systemCode: system.code,
+        systemName: system.name,
       });
       let payload = decision;
       if (decision.status === "rejected" && body.autoRerun !== false && decision.rerunNodes?.length) {
@@ -1736,4 +1997,5 @@ module.exports = {
   routeRequest,
   startDashboardServer,
   stopPipeline,
+  terminateBatchRunStateOnDisk,
 };

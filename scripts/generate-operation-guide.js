@@ -9,6 +9,10 @@ const {
   readOptionalJsonObject,
   readRequiredJsonObject,
 } = require("./system-whitepaper-lib");
+const {
+  assertValidOperationGuideGateArtifact,
+  assertValidOperationSpecArtifact,
+} = require("./operation-spec/lib");
 
 function loadContext(args) {
   const configPath = path.resolve(args.config || "config/systems.local.yaml");
@@ -197,7 +201,19 @@ function main() {
     throw new Error(`operation-spec.json not found: ${specPath}. Run build-operation-spec first.`);
   }
   const spec = readRequiredJsonObject(specPath, { label: "operation-spec.json" });
+  try {
+    assertValidOperationSpecArtifact(spec);
+  } catch (error) {
+    throw new Error(`operation-spec.json is not a valid operation spec artifact: ${error.message}`);
+  }
   const gate = readOptionalJsonObject(gatePath, spec.gate || { canComposeGuide: false });
+  if (gate && gate.artifactType) {
+    try {
+      assertValidOperationGuideGateArtifact(gate, spec);
+    } catch (error) {
+      throw new Error(`operation-guide-gate.json is not a valid operation guide gate artifact: ${error.message}`);
+    }
+  }
 
   const allowDraft = Boolean(args["allow-draft"] || system.operationGuideAllowDraft);
   if (!gate.canComposeGuide && !allowDraft && !spec.gate?.canComposeGuide) {

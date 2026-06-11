@@ -2,11 +2,16 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const {
   parseArgs,
   readRequiredJsonObject,
   writeJson,
 } = require("./system-whitepaper-lib");
+const {
+  assertValidDatabaseProfileArtifact,
+  scanDatabaseProfileSafety,
+} = require("./check-truth-readiness");
 
 const STATUS_FIELD_PATTERN = /(status|state|stage|flag|type|状态|阶段|类型|标识)/i;
 const TIME_FIELD_PATTERN = /(time|date|created|updated|创建|更新|时间|日期)/i;
@@ -15,6 +20,31 @@ const SENSITIVE_FIELD_PATTERN = /(phone|mobile|tel|email|idcard|identity|cert|ca
 
 function compactString(value) {
   return String(value || "").trim();
+}
+
+function fingerprintFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return { exists: false, size: 0, mtimeMs: null, sha256: "" };
+  }
+  const buffer = fs.readFileSync(filePath);
+  const stat = fs.statSync(filePath);
+  return {
+    exists: true,
+    size: stat.size,
+    mtimeMs: Math.round(stat.mtimeMs),
+    sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
+function buildSourceArtifacts(input = {}) {
+  const result = {};
+  if (input.databaseProfilePath) {
+    result.databaseProfile = {
+      file: path.basename(input.databaseProfilePath),
+      fingerprint: fingerprintFile(input.databaseProfilePath),
+    };
+  }
+  return result;
 }
 
 function uniqueBy(items, keyFn) {
@@ -214,9 +244,42 @@ function buildEntityModel(dataDictionary = {}, options = {}) {
 }
 
 function buildDatabaseModelArtifacts(profile = {}, options = {}) {
+  try {
+    assertValidDatabaseProfileArtifact(profile);
+  } catch (error) {
+    throw new Error(
+      [
+        "database-profile.json is not a valid database profile artifact; refusing to build database model artifacts.",
+        error.message,
+      ].join(" "),
+    );
+  }
+  const safety = scanDatabaseProfileSafety(profile);
+  if (!safety.pass) {
+    throw new Error(
+      [
+        "database-profile.json is not safely redacted; refusing to build database model artifacts.",
+        ...safety.failures,
+      ].join(" "),
+    );
+  }
   const generatedAt = options.generatedAt || new Date().toISOString();
   const dataDictionary = buildDataDictionary(profile, { generatedAt });
   const entityModel = buildEntityModel(dataDictionary, { generatedAt });
+  const sourceArtifacts = buildSourceArtifacts(options);
+  dataDictionary.sourceArtifacts = sourceArtifacts;
+  entityModel.sourceArtifacts = {
+    ...sourceArtifacts,
+    dataDictionary: {
+      artifactType: "in-memory-data-dictionary",
+      fingerprint: {
+        exists: true,
+        size: JSON.stringify(dataDictionary).length,
+        mtimeMs: null,
+        sha256: crypto.createHash("sha256").update(JSON.stringify(dataDictionary)).digest("hex"),
+      },
+    },
+  };
   return { dataDictionary, entityModel };
 }
 
@@ -226,13 +289,31 @@ function buildDatabaseModelFromDir(inputDir, options = {}) {
     options.databaseProfilePath || path.join(dir, "database-profile.json"),
     { label: "Database profile" },
   );
-  const artifacts = buildDatabaseModelArtifacts(profile, options);
+  const databaseProfilePath = options.databaseProfilePath || path.join(dir, "database-profile.json");
+  const artifacts = buildDatabaseModelArtifacts(profile, { ...options, databaseProfilePath });
   const dataDictionaryPath = options.dataDictionaryPath || path.join(dir, "data-dictionary.json");
   const entityModelPath = options.entityModelPath || path.join(dir, "entity-model.json");
   writeJson(dataDictionaryPath, artifacts.dataDictionary);
+  artifacts.entityModel.sourceArtifacts = {
+    ...(artifacts.entityModel.sourceArtifacts || {}),
+    dataDictionary: {
+      file: path.basename(dataDictionaryPath),
+      fingerprint: fingerprintFile(dataDictionaryPath),
+    },
+  };
   writeJson(entityModelPath, artifacts.entityModel);
   return { ...artifacts, dataDictionaryPath, entityModelPath };
 }
+
+module.exports = {
+  buildDataDictionary,
+  buildDatabaseModelArtifacts,
+  buildDatabaseModelFromDir,
+  buildSourceArtifacts,
+  buildEntityModel,
+  fingerprintFile,
+  inferEntityRelations,
+};
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -256,11 +337,3 @@ if (require.main === module) {
     process.exit(1);
   }
 }
-
-module.exports = {
-  buildDataDictionary,
-  buildDatabaseModelArtifacts,
-  buildDatabaseModelFromDir,
-  buildEntityModel,
-  inferEntityRelations,
-};

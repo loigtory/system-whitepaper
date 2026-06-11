@@ -1,11 +1,11 @@
 # 白皮书叙事成稿规则（阶段 3b）
 
 > 适用节点：**成稿 · 写稿**、**审定 · 审阅驳回后的重写决策**。  
-> 输入必须来自压缩后的 `evidence-summary.json`、`quality-report.json`、截图索引与审核意见；阶段 3b 不直接读取 `whitepaper.draft.md` 或完整 `evidence.json`。
+> 输入必须来自压缩后的 `evidence-summary.json`、`quality-report.json`、`verified-claims.json`、截图索引与审核意见；阶段 3b 不直接读取 `whitepaper.draft.md` 或完整 `evidence.json`。
 
 ## 1. 定位
 
-`generate-whitepaper.js` 只生成**底稿**，用于保存事实、字段、截图索引和证据链。真正的白皮书正文由 Cursor Agent / LLM 在本规则约束下完成，输出 `whitepaper.pending-review.md`。
+`generate-whitepaper.js` 只生成**底稿**，用于保存事实、字段、截图索引和证据链。真正的白皮书正文由 Agent / LLM 在本规则约束下完成，输出 `whitepaper.pending-review.md`。确定性业务结论必须来自 `verified-claims.json` 中 `writable=true` 的 claim；数据库-only 或 non-writable claim 只能写入证据边界、待确认或辅助说明。
 
 Agent 的任务不是把按钮和字段重新排列，而是把证据翻译成业务人员能理解的内容：
 
@@ -126,6 +126,7 @@ Agent 的任务不是把按钮和字段重新排列，而是把证据翻译成�
 | 功能说明 | 大量重复模板句 |
 | 操作说明 | 只罗列按钮 |
 | 结论证据 | 写了证据里没有的模块/流程 |
+| 可写结论 | 把 non-writable 或 database-only claim 写成确认功能 |
 | 写操作 | 把“看到按钮”写成“已验证” |
 | 待确认 | 未验证内容没有进入待确认 |
 
@@ -169,4 +170,6 @@ Agent 的任务不是把按钮和字段重新排列，而是把证据翻译成�
 - 不手写完整附录；附录由脚本根据 `evidence-summary` 生成，正文只保留必要截图和证据引用。
 - 正式待审核稿写入 `whitepaper.pending-review.md`。
 - 不覆盖 `whitepaper.draft.md`。
-- 审核通过后才生成 `whitepaper.final.md` 和 Word。
+- 只使用固定 `## 1` 至 `## 6` 正文章节；第 6 章“待确认事项”使用扁平 bullet，不新增 `### P0`、`### 模块与功能` 等自定义分组标题。
+- 审核通过且当前 `truth-readiness-report.json` 达标、指纹非 stale、非 smoke/e2e 后，才生成 `whitepaper.final.md` 和 Word。
+- Word 必须带 `.docx.manifest.json`，用于证明当前 `.docx` 绑定当前 `whitepaper.final.md`。
