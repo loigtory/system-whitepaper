@@ -39,27 +39,31 @@ Playwright UI Evidence
 目标态约束：
 
 - `operation-spec.json` 记录模块、页面、动作、表单、容器和 observed operation flows。
-- `workflow-spec.json` 只从 observed flows 生成可叙述步骤；planned/candidate 不得写成已验证流程。
+- `workflow-spec.json` 明确区分 `observed`、`inferred`、`candidate`：observed 可写为已观察流程，inferred 只能带证据边界叙述，candidate 不得写成已验证流程。
 - `business-process-model.json` 或后续 `truth-model.json` 只保存有来源的业务对象、状态、模块职责、流程推理和边界。
 - `whitepaper-plan.json` 是写稿唯一章节计划，明确每章可写事实、禁止项、待确认项和证据引用。
 - `fact-check-report.json` 与 `truth-readiness-report.json` 必须阻断无证据、低覆盖、stale lineage、unsafe DB、manual-only 写稿和流程缺失。
 
 ## 3. 版本切分总览
 
-| 版本 | 主题 | 目标 | 优先级 | 预计工期 |
-| --- | --- | --- | --- | --- |
-| V0 | 执行治理与基线冻结 | 建立版本执行模板、质量基线、4-agent 计划模板 | P0 | 1-2 天 |
-| V1 | 流程证据硬门禁 | 无 observed flow/workflow step 时阻断正式写稿和 review | P0 | 3-5 天 |
-| V2 | 通用业务过程模型 | 去 ADP 特化，建立通用证据驱动业务对象/流程推理模型 | P0 | 5-8 天 |
-| V3 | 白皮书计划层 | 以 whitepaper-plan 控制写稿，不让模型自由组织事实 | P1 | 4-6 天 |
-| V4 | 95% 质量与评测闭环 | 提升 claim/process/golden 覆盖门槛并接入验收 | P1 | 4-6 天 |
-| V5 | 真实批量运行与交付稳定 | ADP fresh reset + 多系统泛化 + dashboard/repair 收口 | P1/P2 | 5-8 天 |
+| 版本 | 主题 | 目标 | 优先级 | 状态 | 预计工期 |
+| --- | --- | --- | --- | --- | --- |
+| V0 | 执行治理与基线冻结 | 建立版本执行模板、质量基线、4-agent 计划模板 | P0 | 已完成 | 1-2 天 |
+| V1 | 流程证据硬门禁 | 无可叙述 workflow evidence 时阻断正式写稿和 review | P0 | 已完成 | 3-5 天 |
+| V2 | 通用业务过程模型 | 去 ADP 特化，建立通用证据驱动业务对象/流程推理模型 | P0 | 已完成 | 5-8 天 |
+| V3 | 白皮书计划层 | 以 whitepaper-plan 控制写稿，不让模型自由组织事实 | P1 | 已完成 | 4-6 天 |
+| V4 | 95% 质量与评测闭环 | 提升 claim/process/golden 覆盖门槛并接入验收 | P1 | 已完成 | 4-6 天 |
+| V5 | 真实批量运行与交付稳定 | ADP fresh reset + 多系统泛化 + dashboard/repair 收口 | P1/P2 | 已完成 | 5-8 天 |
+| V6 | Portal workflow 语义修正 | 首页流程卡片作为 inferred workflow，不再误计 observed | P1 | 已完成 | 1-2 天 |
+| V7 | 多系统泛化试运行与接入治理 | 用非 ADP 系统验证通用性，固化系统接入、运行资源和验收边界 | P1 | 下一步 | 4-7 天 |
 
 版本推进规则：
 
 - V0-V2 不追求白皮书漂亮，先确保“证据不足时不能写成真相”。
 - V3-V4 再追求白皮书质量、真实度评分和自动修复闭环。
-- V5 才做批量真实运行、dashboard 展示和交付体验收口。
+- V5 做批量真实运行、dashboard 展示和交付体验收口。
+- V6 修正 portal 首页流程卡片的 observed/inferred 口径，确保 ADP 只是试点，不形成系统特化。
+- V7 开始用财务、人力、内部基础等非 ADP 系统做泛化试运行和接入治理，不再只证明单一试点。
 - 任何版本都不能降低安全规则、证据 traceability、DB 脱敏或 readiness 阈值来换取通过。
 
 ## 4. 通用执行路线
@@ -299,7 +303,73 @@ V0 可全部只写 docs 和 `.agents/4-agent-plan.json`，主 agent 合并后只
 - dashboard 能展示每系统 flow/process/plan/golden 缺口和建议 rerun nodes。
 - repair queue 不自动运行 Agent-writing 任务，除非显式授权。
 
-## 11. 质量门禁策略
+## 11. V6 Portal Workflow 语义修正
+
+### 11.1 方案
+
+V6 修正 V5 真实 ADP 试点暴露出的首页流程卡片语义问题：portal 首页卡片可以作为截图和页面文本支持的业务流程推理，但不能计为已观察执行流程。`workflow-spec`、`truth-readiness`、`business-process-model` 和叙事生成必须明确区分 `observed`、`inferred`、`candidate`。
+
+### 11.2 完成结果
+
+- `workflow-spec.json` 增加 inferred/homeOverview/narratable 指标。
+- `truth-readiness-report.json` 的 workflow gate 改为 “Workflow evidence”，显式报告 observed/inferred 步骤数。
+- `business-process-model.json` 保持 homepage-card 步骤为 inferred，不能写成 observed execution。
+- Phase3b 合并同类待确认项，避免重复不确定性文案影响叙事质量门禁。
+- ADP 试点通过 deterministic rerun：workflow `observed=0`、`inferred=7`、truth readiness `100%`、delivery/real readiness `ready`。
+
+### 11.3 验收标准
+
+- 首页卡片流程在 homepage-only portal fixture 中必须为 `inferred`，不能为 `observed`。
+- `observedWorkflowCount=0` 时，只要 `narratableWorkflowCount>0` 且 inferred boundary 完整，workflow gate 可以通过但必须显式报告边界。
+- 财务、人力、内部基础等非 ADP portal fixture 使用同一逻辑。
+- 不新增 ADP 特化、不弱化安全规则、不把 DB/secrets 进入 prompt 或白皮书。
+
+### 11.4 Checkpoint
+
+- `docs/checkpoints/2026-06-11-v6-portal-workflow-semantics-checkpoint.md`
+- `docs/superpowers/plans/2026-06-11-v6-portal-workflow-semantics.md`
+- `docs/superpowers/specs/2026-06-11-v6-portal-workflow-semantics-design.md`
+
+## 12. V7 多系统泛化试运行与接入治理
+
+### 12.1 方案
+
+V7 不再证明单一 ADP 试点，而是把 V0-V6 的证据链、写稿链、质量门禁、批量验收、交付 readiness 应用到至少 2-3 类非 ADP 系统：财务、人力、内部基础或其他真实内部系统。V7 的目标是固化“新系统接入 -> 预检 -> 试运行 -> 阻塞分类 -> 修复队列 -> 验收”的通用治理闭环。
+
+### 12.2 拆分任务
+
+| 任务 | 目标 | 文件所有权 | 验证 |
+| --- | --- | --- | --- |
+| V7-A 接入画像 | 定义新系统接入清单、必备配置、auth/DB/浏览器前置检查 | `docs/`, `scripts/doctor.js` 可选 | doctor/config tests |
+| V7-B 多系统 dry-run | 对非 ADP 系统先跑 doctor/real:check/低风险节点，记录可运行性 | ignored `outputs/`, checkpoint | real-run readiness |
+| V7-C 泛化缺口分类 | 将非 ADP 阻塞归类为 auth、menu、evidence、workflow、DB、narrative、delivery | batch/dashboard/readiness docs/scripts | diagnosis tests |
+| V7-D 接入验收模板 | 输出每个新系统的接入验收表、风险边界和是否可进入 batch 的判定 | `docs/checkpoints/`, `docs/VERSION-EXECUTION-TEMPLATE.md` | docs review + gate |
+
+### 12.3 4-agent 并行方式
+
+优先单 agent 推进总控与小改造；只有当需要同时验证多个真实系统，且另一项目没有占用多 agent 资源时，再启用 4-agent：
+
+- Agent A：财务系统接入预检和 evidence readiness。
+- Agent B：人力系统接入预检和 workflow/business-process readiness。
+- Agent C：内部基础系统接入预检和 DB/权限边界。
+- Agent D：batch/dashboard/repair 分类与 V7 checkpoint 汇总。
+
+主 agent 负责：
+
+- 确认每个系统独立 output 目录，不并发跑同一 system code。
+- 不提交 ignored outputs、secrets、cookies、真实客户产物。
+- 统一判断是否触发 Agent-writing quota，必要时降级为 dry-run/plan。
+- 只基于新鲜 gate 输出宣称可交付。
+
+### 12.4 验收标准
+
+- 至少 2 个非 ADP 系统完成接入预检，并明确 `ready`、`ready-to-run` 或 `blocked` 原因。
+- 对每个 blocked 系统给出结构化阻塞分类和下一步 rerun/补证据建议。
+- 对可运行系统完成至少一次 bounded pipeline 或 batch dry-run，不污染其他系统输出。
+- 所有系统都保持 secrets/db 只作为脚本输入，prompt/白皮书/README/checkpoint 不出现密钥、cookie、连接串或原始敏感行。
+- V7 checkpoint 写明哪些系统真实运行、哪些只是 dry-run、哪些检查未覆盖。
+
+## 13. 质量门禁策略
 
 默认命令：
 
@@ -316,7 +386,7 @@ V0 可全部只写 docs 和 `.agents/4-agent-plan.json`，主 agent 合并后只
 - 未覆盖风险。
 - 是否需要真实 ADP/SIT 授权。
 
-## 12. 版本验收报告模板
+## 14. 版本验收报告模板
 
 每个版本完成后，在 `docs/checkpoints/` 写 checkpoint，建议文件名：
 
@@ -336,15 +406,16 @@ YYYY-MM-DD-v<version>-checkpoint.md
 - 是否触碰真实环境、DB、secrets、outputs。
 - 下一版本建议。
 
-## 13. 当前建议启动顺序
+## 15. 当前建议启动顺序
 
-立即启动 V0，然后进入 V1。
+当前 `main` 已合并 V0-V6，最新主线提交为 PR #1 merge commit。后续从 `main` 新开 `codex/v7-roadmap-multisystem` 或具体 V7 子任务分支推进。
 
-V0 的目标是把本总控文档落地为执行制度，不做代码大改。V1 的目标是把“流程证据为空不能正式写稿”变成不可绕过的代码门禁。只有 V1 验收后，才进入 V2 的通用业务过程模型改造。
+V7 的目标是把 ADP 试点能力迁移为多系统接入治理能力。ADP 只保留为回归样例和 Golden Eval 参照，不再作为唯一验收系统。
 
 建议下一步：
 
-1. 创建 `docs/superpowers/plans/2026-06-09-v0-execution-governance.md`。
-2. 重写 `.agents/4-agent-plan.json` 为 V0 专用计划。
-3. 跑 `npm run agent:isolation` 和 `npm run test:gate:auto -- --dry-run`。
-4. V0 checkpoint 完成后启动 V1。
+1. 创建 `docs/superpowers/plans/2026-06-11-v7-multisystem-generalization-governance.md`。
+2. 先做 V7 接入治理计划，不直接跑真实系统。
+3. 根据用户授权选择 2-3 个非 ADP 系统做 `doctor`、`real:check`、低风险 pipeline 节点。
+4. 若另一项目仍占用多 agent/AI 写稿资源，V7 先用单 agent 顺序推进。
+5. V7 checkpoint 完成后，再决定是否进入 V8 的批量真实多系统交付。
