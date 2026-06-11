@@ -2781,6 +2781,53 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf8");
 }
 
+function classifyBlockedCategory(id = "") {
+  const value = String(id || "").toLowerCase();
+  const normalized = value.startsWith("doctor.") ? value.slice("doctor.".length) : value;
+  if (normalized.startsWith("auth.") || normalized.includes("token") || normalized.includes("cookie")) return "auth";
+  if (normalized.startsWith("database.") || normalized.includes("database-")) return "db";
+  if (normalized.includes("workflow")) return "workflow";
+  if (normalized.includes("narrative") || normalized.includes("fact-check") || normalized.includes("quality")) {
+    return "narrative";
+  }
+  if (
+    normalized.includes("delivery") ||
+    normalized.includes("acceptance") ||
+    normalized.includes("final") ||
+    normalized.startsWith("batch.run-state") ||
+    normalized.startsWith("batch.not-success") ||
+    normalized.startsWith("batch.diagnosis") ||
+    normalized.startsWith("batch.repair")
+  ) {
+    return "delivery";
+  }
+  if (normalized.includes("menu")) return "menu";
+  if (normalized.includes("evidence") || normalized.includes("collect") || normalized.includes("screenshot")) {
+    return "evidence";
+  }
+  if (
+    normalized.includes("duplicate") ||
+    normalized.includes("concurrency") ||
+    normalized.includes("resource") ||
+    normalized.includes("agent-writing")
+  ) {
+    return "resource";
+  }
+  if (normalized.startsWith("repair.")) return "delivery";
+  if (normalized.startsWith("system.") || normalized.startsWith("runtime.") || normalized.startsWith("config.")) {
+    return "config";
+  }
+  return "config";
+}
+
+function countBlockedCategories(blockers = []) {
+  return (Array.isArray(blockers) ? blockers : []).reduce((counts, blocker) => {
+    const category = blocker.blockedCategory || classifyBlockedCategory(blocker.id);
+    counts[category] = (counts[category] || 0) + 1;
+    return counts;
+  }, {});
+}
+
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i += 1) {
@@ -2959,8 +3006,10 @@ module.exports = {
   shouldCollectMenu,
   buildAuthCookies,
   buildCookiesFromHeader,
+  classifyBlockedCategory,
   classifyCaptureAction,
   completeHuntianQuickLogin,
+  countBlockedCategories,
   continueHuntianBrowserLogin,
   waitForApplicationReady,
   createInitialEvidence,

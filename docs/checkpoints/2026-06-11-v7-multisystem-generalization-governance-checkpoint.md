@@ -26,6 +26,11 @@ This checkpoint records the first V7 implementation slice: intake governance bef
   - `summary.blockedCategories` aggregates categories for coordinator decisions.
   - The Markdown report displays blocker categories in both system and blocker tables.
   - `buildRealRunReadinessStateSummary()` exposes category counts for dashboard or controller use.
+- Promoted blocked-category helpers to `scripts/system-whitepaper-lib.js` and reused them in batch acceptance:
+  - Batch acceptance blockers now include `blockedCategory`.
+  - `acceptance-report.json` summary includes `blockedCategories`.
+  - Batch acceptance Markdown now displays blocker categories.
+  - Batch acceptance state summary exposes category counts for coordinator views.
 
 ## System Intake Checklist
 
@@ -115,13 +120,19 @@ Reason: another project may still consume multi-agent and AI-writing capacity, a
 - `node --check scripts/system-whitepaper.test.js`: exited 0.
 - `node --test --test-name-pattern "real run readiness|batch active run|delivery readiness" scripts/system-whitepaper.test.js`: exited 0. Result: selected 3 tests passed, 437 skipped.
 - `npm run test:gate:core *> .tmp\v7-real-run-categories-test-gate-core.log`: exited 0. Result: tests 440/440 passed, package dry-run passed with `entryCount=72`, and agent isolation passed with workers 4/4.
+- RED: `node --test --test-name-pattern "batch acceptance report gates 95\+ truth delivery without reading secrets" scripts/system-whitepaper.test.js *> .tmp\v7-batch-categories-red.log`: exited 1 before implementation. Result: `blockedCategory` was `undefined` for `batch.run-state-system-skipped`.
+- `node --check scripts/system-whitepaper-lib.js`: exited 0.
+- `node --check scripts/check-batch-acceptance.js`: exited 0.
+- `node --test --test-name-pattern "real run readiness classifies V7 blocked categories|batch acceptance report gates 95\+ truth delivery without reading secrets" scripts/system-whitepaper.test.js`: exited 0. Result: selected 2 tests passed, 438 skipped.
+- `npm run test:gate:core *> .tmp\v7-batch-categories-test-gate-core.log`: exited 0. Result: tests 440/440 passed, package dry-run passed with `entryCount=72`, and agent isolation passed with workers 4/4.
+- `npm run test:gate:full *> .tmp\v7-batch-categories-test-gate-full.log`: exited 0. Result: tests 440/440 passed, package dry-run passed with `entryCount=72`, agent isolation passed, truth readiness 100% with `canSubmitReview=true`, batch acceptance `accepted=1/1`, delivery readiness `ready=1/1`, and real-run readiness `status=ready`, `canStart=true`, `canDeliver=true`.
 
 ## Residual Risk
 
 - No non-ADP systems have been selected yet.
 - `npm run doctor` and `npm run real:check -- --systems <code>` were not run for V7 candidate systems because no system codes were authorized.
 - No low-risk pipeline, AI narrative, DB profile, batch, delivery, or real-system browser run was started.
-- Blocked-category taxonomy is emitted by `real:check`; batch acceptance, batch diagnosis, repair queue, and dashboard views still need a later V7 slice to consume or display the same taxonomy end to end.
+- Blocked-category taxonomy is emitted by `real:check` and batch acceptance; batch diagnosis, repair queue, and dashboard views still need a later V7 slice to consume or display the same taxonomy end to end.
 - `npm run test:gate:auto -- --dry-run` still needs a non-sandbox rerun when used as the authoritative automatic gate selector, because the sandbox blocks its internal Git child process.
 
 ## Environment And Data Safety
@@ -131,6 +142,7 @@ Reason: another project may still consume multi-agent and AI-writing capacity, a
 - DB metadata touched: no.
 - Secrets, cookies, tokens, or connection strings touched: no.
 - Runtime outputs or customer artifacts committed: no.
+- Ignored runtime outputs refreshed by verification: yes, `npm run test:gate:full` refreshed local ignored ADP readiness artifacts under `outputs/adp/`; these are not tracked or committed.
 - Prompt or whitepaper inputs changed: no.
 
 ## Next Step

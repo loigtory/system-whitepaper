@@ -7,6 +7,8 @@ const {
   parseArgs,
   parseSystemsConfig,
   resolveConfigRelativePath,
+  classifyBlockedCategory,
+  countBlockedCategories,
   writeJson,
 } = require("./system-whitepaper-lib");
 const {
@@ -59,31 +61,6 @@ function mdCell(value) {
     .replace(/\|/g, "\\|");
 }
 
-function classifyBlockedCategory(id = "") {
-  const value = String(id || "").toLowerCase();
-  const normalized = value.startsWith("doctor.") ? value.slice("doctor.".length) : value;
-  if (normalized.startsWith("auth.") || normalized.includes("token") || normalized.includes("cookie")) return "auth";
-  if (normalized.startsWith("database.") || normalized.includes("database-")) return "db";
-  if (normalized.includes("workflow")) return "workflow";
-  if (normalized.includes("narrative") || normalized.includes("fact-check") || normalized.includes("quality")) {
-    return "narrative";
-  }
-  if (normalized.includes("delivery") || normalized.includes("acceptance") || normalized.includes("final")) {
-    return "delivery";
-  }
-  if (normalized.includes("menu")) return "menu";
-  if (normalized.includes("evidence") || normalized.includes("collect") || normalized.includes("screenshot")) {
-    return "evidence";
-  }
-  if (normalized.includes("duplicate") || normalized.includes("concurrency") || normalized.includes("resource")) {
-    return "resource";
-  }
-  if (normalized.startsWith("system.") || normalized.startsWith("runtime.") || normalized.startsWith("config.")) {
-    return "config";
-  }
-  return "config";
-}
-
 function issue(id, message, extra = {}) {
   const blockedCategory = extra.blockedCategory || classifyBlockedCategory(id);
   return {
@@ -111,14 +88,6 @@ function readJsonObjectIfExists(filePath) {
   } catch {
     return null;
   }
-}
-
-function countBlockedCategories(blockers = []) {
-  return (Array.isArray(blockers) ? blockers : []).reduce((counts, blocker) => {
-    const category = blocker.blockedCategory || classifyBlockedCategory(blocker.id);
-    counts[category] = (counts[category] || 0) + 1;
-    return counts;
-  }, {});
 }
 
 function loadRealRunContext(options = {}) {

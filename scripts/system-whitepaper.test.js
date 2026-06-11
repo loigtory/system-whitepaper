@@ -10674,7 +10674,12 @@ test("batch acceptance report gates 95+ truth delivery without reading secrets",
   );
   const skippedRunState = buildBatchAcceptanceReport({ args: { config: configPath } });
   assert.equal(skippedRunState.status, "blocked");
-  assert.ok(skippedRunState.blockers.some((item) => item.id === "batch.run-state-system-skipped"));
+  const skippedRunStateBlocker = skippedRunState.blockers.find((item) => item.id === "batch.run-state-system-skipped");
+  assert.equal(skippedRunStateBlocker.blockedCategory, "delivery");
+  assert.equal(skippedRunState.summary.blockedCategories.delivery, 1);
+  const skippedRunStateMarkdown = renderBatchAcceptanceMarkdown(skippedRunState);
+  assert.match(skippedRunStateMarkdown, /\| Severity \| System \| ID \| Category \| Message \|/);
+  assert.match(skippedRunStateMarkdown, /batch\.run-state-system-skipped \| delivery \|/);
   fs.writeFileSync(path.join(outputRoot, "_batch", "run-state.json"), JSON.stringify(acceptedRunState), "utf8");
 
   const acceptedClosureArtifact = JSON.parse(fs.readFileSync(repairClosurePath, "utf8"));

@@ -3,6 +3,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const {
+  classifyBlockedCategory,
+  countBlockedCategories,
   finalizeWhitepaperMarkdown,
   parseArgs,
   readOptionalJsonObject,
@@ -75,10 +77,12 @@ function mdCell(value) {
 }
 
 function blocker(id, message, extra = {}) {
+  const blockedCategory = extra.blockedCategory || classifyBlockedCategory(id);
   return {
     id,
     severity: extra.severity || "P0",
     systemCode: extra.systemCode || "",
+    blockedCategory,
     message,
     rerunNodes: Array.isArray(extra.rerunNodes) ? extra.rerunNodes : [],
   };
@@ -1229,6 +1233,7 @@ function buildBatchAcceptanceReport(input = {}) {
     summary: {
       ...summary,
       blockers: blockers.length,
+      blockedCategories: countBlockedCategories(blockers),
       warnings: warnings.length,
     },
     batch,
@@ -1252,10 +1257,17 @@ function renderBatchAcceptanceMarkdown(report = {}) {
       mdCell(item.missingWritableClaimCount ?? "-"),
       mdCell(item.staleSourceCount || 0),
       mdCell(item.blockers?.map((blockerItem) => blockerItem.id).join(", ") || "-"),
+      mdCell([...new Set((item.blockers || []).map((blockerItem) => blockerItem.blockedCategory || classifyBlockedCategory(blockerItem.id)))].join(", ") || "-"),
     ].join(" | "),
   );
   const blockerRows = (report.blockers || []).map((item) =>
-    [mdCell(item.severity), mdCell(item.systemCode || "-"), mdCell(item.id), mdCell(item.message)].join(" | "),
+    [
+      mdCell(item.severity),
+      mdCell(item.systemCode || "-"),
+      mdCell(item.id),
+      mdCell(item.blockedCategory || classifyBlockedCategory(item.id)),
+      mdCell(item.message),
+    ].join(" | "),
   );
   const warningRows = (report.warnings || []).map((item) =>
     [mdCell(item.systemCode || "-"), mdCell(item.id), mdCell(item.message)].join(" | "),
@@ -1277,15 +1289,15 @@ function renderBatchAcceptanceMarkdown(report = {}) {
     "",
     "## Systems",
     "",
-    "| System | Status | Truth | Submit | Whitepaper | DB evidence | Missing writable | Stale sources | Blockers |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    rows.length ? rows.join("\n") : "| - | - | - | - | - | - | - | - | - |",
+    "| System | Status | Truth | Submit | Whitepaper | DB evidence | Missing writable | Stale sources | Blockers | Categories |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    rows.length ? rows.join("\n") : "| - | - | - | - | - | - | - | - | - | - |",
     "",
     "## Blockers",
     "",
-    "| Severity | System | ID | Message |",
-    "| --- | --- | --- | --- |",
-    blockerRows.length ? blockerRows.join("\n") : "| - | - | - | - |",
+    "| Severity | System | ID | Category | Message |",
+    "| --- | --- | --- | --- | --- |",
+    blockerRows.length ? blockerRows.join("\n") : "| - | - | - | - | - |",
     "",
     "## Warnings",
     "",
@@ -1317,6 +1329,7 @@ function buildBatchAcceptanceStateSummary(report = {}, artifacts = {}) {
     status: report.status || "",
     canSubmitAll: Boolean(report.canSubmitAll),
     summary: report.summary || {},
+    blockedCategories: report.summary?.blockedCategories || countBlockedCategories(report.blockers || []),
     artifacts: artifacts.artifacts || artifacts || {},
     generatedAt: report.generatedAt || "",
   };
