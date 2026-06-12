@@ -7841,6 +7841,11 @@ test("dashboard frontend labels phase3b run kind in usage history", () => {
   assert.match(html, /SDK 发送目标/);
   assert.match(html, /SDK 发送分片/);
   assert.match(html, /function formatSentPromptRuns\(runs = \[\], totalCount = 0\)/);
+  assert.match(html, /function formatBlockedCategories\(blockedCategories = \{\}\)/);
+  assert.match(html, /formatBlockedCategories\(diagnosisSummary\.blockedCategories\)/);
+  assert.match(html, /formatBlockedCategories\(repairQueueSummary\.blockedCategories\)/);
+  assert.match(html, /formatBlockedCategories\(acceptanceSummary\.blockedCategories\)/);
+  assert.match(html, /formatBlockedCategories\(realRunSummary\.blockedCategories\)/);
   assert.match(html, /const total = Math\.max\(Number\(totalCount \|\| 0\), items\.length\)/);
   assert.match(html, /formatSentPromptRuns\(usage\.sentPromptRuns, usage\.sentPromptRunCount\)/);
   assert.match(html, /const sentTargetsLabel = formatSentPromptRuns\(item\.sentPromptRuns, item\.sentPromptRunCount\)/);
@@ -9466,6 +9471,8 @@ test("V5 batch diagnosis summarizes generic gate gaps for non ADP systems", () =
   const {
     buildBatchDiagnosis,
     buildBatchRepairQueue,
+    renderBatchDiagnosisMarkdown,
+    renderBatchRepairQueueMarkdown,
   } = require("./run-whitepaper-batch");
 
   const diagnosis = buildBatchDiagnosis({
@@ -9553,22 +9560,33 @@ test("V5 batch diagnosis summarizes generic gate gaps for non ADP systems", () =
   assert.equal(diagnosis.summary.gapTypes["business-process"], 1);
   assert.equal(diagnosis.summary.gapTypes["whitepaper-plan"], 1);
   assert.equal(diagnosis.summary.gapTypes["golden-eval"], 1);
+  assert.deepEqual(diagnosis.summary.blockedCategories, { workflow: 1, narrative: 1 });
+  assert.deepEqual(diagnosis.systems[0].blockedCategories, ["workflow", "narrative"]);
   assert.ok(diagnosis.systems[0].gaps.some((gap) => gap.type === "workflow-evidence"));
   assert.ok(diagnosis.systems[0].gaps.some((gap) => gap.type === "business-process"));
   assert.ok(diagnosis.systems[0].gaps.some((gap) => gap.type === "whitepaper-plan"));
   assert.ok(diagnosis.systems[0].gaps.some((gap) => gap.type === "golden-eval"));
+  const diagnosisMarkdown = renderBatchDiagnosisMarkdown(diagnosis);
+  assert.match(diagnosisMarkdown, /\| System \| Name \| Categories \| Ready \|/);
+  assert.match(diagnosisMarkdown, /finance \| 财务费用系统 \| .*workflow, narrative/);
 
   const repairQueue = buildBatchRepairQueue(diagnosis, { allowAgentWriting: false });
+  assert.deepEqual(repairQueue.summary.blockedCategories, { workflow: 1, narrative: 1 });
   assert.deepEqual(repairQueue.items[0].gapTypes, [
     "workflow-evidence",
     "business-process",
     "whitepaper-plan",
     "golden-eval",
   ]);
+  assert.equal(repairQueue.items[0].blockedCategory, "workflow");
+  assert.deepEqual(repairQueue.items[0].blockedCategories, ["workflow", "narrative"]);
   assert.equal(repairQueue.items[0].primaryGapType, "workflow-evidence");
   assert.equal(repairQueue.items[0].canAutoRun, false);
   assert.equal(repairQueue.items[0].quotaImpact, "agent-writing");
   assert.ok(repairQueue.items[0].nodes.includes("golden-eval"));
+  const repairMarkdown = renderBatchRepairQueueMarkdown(repairQueue);
+  assert.match(repairMarkdown, /\| Priority \| System \| Category \|/);
+  assert.match(repairMarkdown, /finance \| workflow \| workflow, narrative/);
 });
 
 test("batch runner refreshes aggregate state from per-system pipeline states", () => {
@@ -12363,17 +12381,29 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
         quotaSensitive: 1,
       },
       diagnosis: {
-        summary: { total: 2, ready: 1, blocked: 1, missingWritableClaims: 1 },
+        summary: {
+          total: 2,
+          ready: 1,
+          blocked: 1,
+          missingWritableClaims: 1,
+          blockedCategories: { narrative: 1 },
+        },
         artifacts: { diagnosisMarkdown: "diagnosis.md", diagnosisJson: "diagnosis.json" },
       },
       repairQueue: {
-        summary: { total: 1, autoRunnable: 0, blocked: 1, requiresAgentWriting: 1 },
+        summary: {
+          total: 1,
+          autoRunnable: 0,
+          blocked: 1,
+          requiresAgentWriting: 1,
+          blockedCategories: { narrative: 1 },
+        },
         artifacts: { repairQueueMarkdown: "repair-queue.md", repairQueueJson: "repair-queue.json" },
       },
       acceptance: {
         status: "blocked",
         canSubmitAll: false,
-        summary: { total: 2, accepted: 1, blocked: 1, blockers: 1 },
+        summary: { total: 2, accepted: 1, blocked: 1, blockers: 1, blockedCategories: { delivery: 1 } },
         artifacts: { acceptanceMarkdown: "acceptance-report.md", acceptanceJson: "acceptance-report.json" },
       },
       deliveryReadiness: {
@@ -12389,7 +12419,7 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
         status: "blocked",
         canStartRealRun: false,
         canDeliver: false,
-        summary: { systems: 2, readyToRun: 1, databaseEnabled: 1, blockers: 1 },
+        summary: { systems: 2, readyToRun: 1, databaseEnabled: 1, blockers: 1, blockedCategories: { db: 1 } },
         artifacts: {
           realRunReadinessMarkdown: "real-run-readiness-report.md",
           realRunReadinessJson: "real-run-readiness-report.json",
@@ -12407,14 +12437,18 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(batchActiveRun.failureSummary.recoverable, 1);
   assert.equal(batchActiveRun.failureSummary.quotaSensitive, 1);
   assert.equal(batchActiveRun.diagnosis.summary.ready, 1);
+  assert.deepEqual(batchActiveRun.diagnosis.summary.blockedCategories, { narrative: 1 });
   assert.equal(batchActiveRun.repairQueue.summary.total, 1);
   assert.equal(batchActiveRun.repairQueue.summary.requiresAgentWriting, 1);
+  assert.deepEqual(batchActiveRun.repairQueue.summary.blockedCategories, { narrative: 1 });
   assert.equal(batchActiveRun.acceptance.status, "blocked");
   assert.equal(batchActiveRun.acceptance.summary.accepted, 1);
+  assert.deepEqual(batchActiveRun.acceptance.summary.blockedCategories, { delivery: 1 });
   assert.equal(batchActiveRun.deliveryReadiness.status, "blocked");
   assert.equal(batchActiveRun.deliveryReadiness.summary.ready, 1);
   assert.equal(batchActiveRun.realRunReadiness.status, "blocked");
   assert.equal(batchActiveRun.realRunReadiness.summary.databaseEnabled, 1);
+  assert.deepEqual(batchActiveRun.realRunReadiness.summary.blockedCategories, { db: 1 });
 
   const fs = require("node:fs");
   const os = require("node:os");
@@ -12459,7 +12493,7 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
     path.join(dir, "outputs", "_batch", "diagnosis.json"),
     JSON.stringify({
       artifactType: "batch-diagnosis",
-      summary: { total: 1, ready: 0, blocked: 1, missingWritableClaims: 2 },
+      summary: { total: 1, ready: 0, blocked: 1, missingWritableClaims: 2, blockedCategories: { workflow: 1 } },
       systems: [],
     }),
     "utf8",
@@ -12469,7 +12503,7 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
     path.join(dir, "outputs", "_batch", "repair-queue.json"),
     JSON.stringify({
       artifactType: "batch-repair-queue",
-      summary: { total: 1, autoRunnable: 0, blocked: 1, requiresAgentWriting: 1 },
+      summary: { total: 1, autoRunnable: 0, blocked: 1, requiresAgentWriting: 1, blockedCategories: { workflow: 1 } },
       items: [],
     }),
     "utf8",
@@ -12481,7 +12515,7 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
       artifactType: "batch-acceptance-report",
       status: "blocked",
       canSubmitAll: false,
-      summary: { total: 1, accepted: 0, blocked: 1, blockers: 1 },
+      summary: { total: 1, accepted: 0, blocked: 1, blockers: 1, blockedCategories: { delivery: 1 } },
       blockers: [{ id: "batch.repair-queue-not-empty", message: "Batch repair queue is not empty." }],
     }),
     "utf8",
@@ -12511,7 +12545,7 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
       status: "blocked",
       canStartRealRun: false,
       canDeliver: false,
-      summary: { systems: 1, readyToRun: 0, databaseEnabled: 0, blockers: 1, warnings: 1 },
+      summary: { systems: 1, readyToRun: 0, databaseEnabled: 0, blockers: 1, warnings: 1, blockedCategories: { delivery: 1 } },
       acceptance: { status: "blocked", canSubmitAll: false },
       deliveryReadiness: { status: "blocked", canDeliver: false },
       nextAction: "Resolve blockers, rerun the required pipeline or repair nodes, then rerun npm run real:check.",
@@ -12592,18 +12626,22 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(snapshot.activeRun.mode, "batch");
   assert.equal(snapshot.activeRun.systems[0].currentNode, "narrative");
   assert.equal(snapshot.batchDiagnosis.summary.blocked, 1);
+  assert.deepEqual(snapshot.batchDiagnosis.summary.blockedCategories, { workflow: 1 });
   assert.equal(snapshot.batchDiagnosisArtifacts.markdown.exists, true);
   assert.equal(snapshot.batchRepairQueue.summary.total, 1);
+  assert.deepEqual(snapshot.batchRepairQueue.summary.blockedCategories, { workflow: 1 });
   assert.equal(snapshot.batchRepairQueueArtifacts.markdown.exists, true);
   assert.equal(snapshot.batchAcceptanceReport.status, "blocked");
   assert.equal(snapshot.batchAcceptanceArtifacts.markdown.exists, true);
   assert.equal(snapshot.activeRun.acceptance.summary.blockers, 1);
+  assert.deepEqual(snapshot.activeRun.acceptance.summary.blockedCategories, { delivery: 1 });
   assert.equal(snapshot.batchDeliveryReadinessReport.status, "blocked");
   assert.equal(snapshot.batchDeliveryReadinessArtifacts.markdown.exists, true);
   assert.equal(snapshot.activeRun.deliveryReadiness.summary.blockers, 1);
   assert.equal(snapshot.batchRealRunReadinessReport.status, "blocked");
   assert.equal(snapshot.batchRealRunReadinessArtifacts.markdown.exists, true);
   assert.equal(snapshot.activeRun.realRunReadiness.summary.blockers, 1);
+  assert.deepEqual(snapshot.activeRun.realRunReadiness.summary.blockedCategories, { delivery: 1 });
   assert.equal(snapshot.batchRepairRunPlan.summary.runnableGroups, 1);
   assert.equal(snapshot.batchRepairRunState.status, "dry-run");
   assert.equal(snapshot.batchRepairClosure.status, "blocked");
@@ -12615,6 +12653,7 @@ test("dashboard supports batch pipeline command and active run snapshot", () => 
   assert.equal(snapshot.batchRepairRunArtifacts.followUpLoopState.exists, true);
   assert.equal(snapshot.activeRun.repairFollowUp.status, "needs-agent-writing");
   assert.equal(snapshot.activeRun.repairQueue.summary.requiresAgentWriting, 1);
+  assert.deepEqual(snapshot.activeRun.repairQueue.summary.blockedCategories, { workflow: 1 });
 });
 
 test("dashboard rejected wording review records overview rewrite scope", () => {

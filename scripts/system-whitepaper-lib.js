@@ -2787,7 +2787,16 @@ function classifyBlockedCategory(id = "") {
   if (normalized.startsWith("auth.") || normalized.includes("token") || normalized.includes("cookie")) return "auth";
   if (normalized.startsWith("database.") || normalized.includes("database-")) return "db";
   if (normalized.includes("workflow")) return "workflow";
-  if (normalized.includes("narrative") || normalized.includes("fact-check") || normalized.includes("quality")) {
+  if (
+    normalized.includes("narrative") ||
+    normalized.includes("fact-check") ||
+    normalized.includes("quality") ||
+    normalized.includes("business-process") ||
+    normalized.includes("whitepaper-plan") ||
+    normalized.includes("golden-eval") ||
+    normalized.includes("truth-readiness") ||
+    normalized.includes("truth-score")
+  ) {
     return "narrative";
   }
   if (

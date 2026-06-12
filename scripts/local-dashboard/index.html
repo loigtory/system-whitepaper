@@ -659,6 +659,15 @@
         return Number(value || 0).toLocaleString();
       }
 
+      function formatBlockedCategories(blockedCategories = {}) {
+        const entries = Object.entries(blockedCategories || {})
+          .filter(([, count]) => Number(count || 0) > 0)
+          .sort(([left], [right]) => left.localeCompare(right));
+        return entries.length
+          ? entries.map(([category, count]) => `${category}:${Number(count || 0)}`).join(", ")
+          : "-";
+      }
+
       function phase3bRunKindLabel(kind) {
         return (
           {
@@ -828,6 +837,9 @@
             ${repairQueue ? `<div class="muted" style="margin-top: 6px">修复队列 自动 ${escapeHtml(String(repairQueueSummary.autoRunnable || 0))}/${escapeHtml(String(repairQueueSummary.total || 0))} · 阻塞 ${escapeHtml(String(repairQueueSummary.blocked || 0))} · 写稿额度 ${escapeHtml(String(repairQueueSummary.requiresAgentWriting || 0))}</div>` : ""}
             ${acceptance ? `<div class="muted" style="margin-top: 6px">验收 ${escapeHtml(acceptance.status || "-")} · accepted ${escapeHtml(String(acceptanceSummary.accepted || 0))}/${escapeHtml(String(acceptanceSummary.total || 0))} · blockers ${escapeHtml(String(acceptanceSummary.blockers || 0))} · 可提交 ${acceptance.canSubmitAll ? "是" : "否"}</div>` : ""}
             ${repairFollowUp ? `<div class="muted" style="margin-top: 6px">Repair follow-up ${escapeHtml(repairFollowUp.status || "-")} · commands ${escapeHtml(String(repairFollowUpSummary.commands || 0))} · ${escapeHtml(repairFollowUp.nextBestAction || "-")}</div>` : ""}
+            ${diagnosis ? `<div class="muted" style="margin-top: 6px">Blocked categories ${escapeHtml(formatBlockedCategories(diagnosisSummary.blockedCategories))}</div>` : ""}
+            ${repairQueue ? `<div class="muted" style="margin-top: 6px">Repair categories ${escapeHtml(formatBlockedCategories(repairQueueSummary.blockedCategories))}</div>` : ""}
+            ${acceptance ? `<div class="muted" style="margin-top: 6px">Acceptance categories ${escapeHtml(formatBlockedCategories(acceptanceSummary.blockedCategories))}</div>` : ""}
             ${stoppedCards ? `<div class="batch-grid">${stoppedCards}</div>` : ""}
           </section>
         `;
@@ -953,6 +965,10 @@
                   ${realRunReadiness ? `<div class="muted">Real run ${escapeHtml(realRunReadiness.status || "-")} · start ${realRunReadiness.canStartRealRun ? "yes" : "no"} · deliver ${realRunReadiness.canDeliver ? "yes" : "no"} · DB ${escapeHtml(String(realRunSummary.databaseEnabled || 0))}/${escapeHtml(String(realRunSummary.systems || 0))}</div>` : ""}
                   ${realRunArtifacts.realRunReadinessMarkdown ? `<div class="muted">Real run file ${escapeHtml(realRunArtifacts.realRunReadinessMarkdown)}</div>` : ""}
                   ${repairFollowUp ? `<div class="muted">Repair follow-up ${escapeHtml(repairFollowUp.status || "-")} · commands ${escapeHtml(String(repairFollowUpSummary.commands || 0))} · ${escapeHtml(repairFollowUp.nextBestAction || "-")}</div>` : ""}
+                  ${diagnosis ? `<div class="muted">Blocked categories ${escapeHtml(formatBlockedCategories(diagnosisSummary.blockedCategories))}</div>` : ""}
+                  ${repairQueue ? `<div class="muted">Repair categories ${escapeHtml(formatBlockedCategories(repairQueueSummary.blockedCategories))}</div>` : ""}
+                  ${acceptance ? `<div class="muted">Acceptance categories ${escapeHtml(formatBlockedCategories(acceptanceSummary.blockedCategories))}</div>` : ""}
+                  ${realRunReadiness ? `<div class="muted">Real-run categories ${escapeHtml(formatBlockedCategories(realRunSummary.blockedCategories))}</div>` : ""}
                   ${repairFollowUpArtifacts.followUpMarkdown ? `<div class="muted">Repair follow-up file ${escapeHtml(repairFollowUpArtifacts.followUpMarkdown)}</div>` : ""}
                   ${run.lastError ? `<div class="status failed">${escapeHtml(run.lastError)}</div>` : ""}
                 </div>

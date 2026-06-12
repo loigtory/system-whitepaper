@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const {
+  classifyBlockedCategory,
   normalizeAuthPaths,
   parseArgs,
   parseSystemsConfig,
@@ -234,11 +235,53 @@ function countGapTypes(systems = []) {
   return counts;
 }
 
+function uniqueCategories(categories = []) {
+  return [
+    ...new Set(
+      (Array.isArray(categories) ? categories : [])
+        .map((item) => String(item || "").trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function categoryFromGapType(type = "") {
+  const value = String(type || "").toLowerCase();
+  if (value.includes("workflow")) return "workflow";
+  if (value.includes("business-process") || value.includes("whitepaper-plan") || value.includes("golden-eval")) {
+    return "narrative";
+  }
+  if (value.includes("database")) return "db";
+  if (value.includes("pipeline-failure")) return "resource";
+  return "";
+}
+
+function collectDiagnosticBlockedCategories(system = {}) {
+  const categories = [];
+  for (const gap of Array.isArray(system.gaps) ? system.gaps : []) {
+    categories.push(gap.blockedCategory || categoryFromGapType(gap.type) || classifyBlockedCategory(gap.type));
+  }
+  for (const action of Array.isArray(system.actions) ? system.actions : []) {
+    categories.push(action.blockedCategory || classifyBlockedCategory(action.id));
+  }
+  return uniqueCategories(categories);
+}
+
+function countSystemBlockedCategories(systems = []) {
+  return (Array.isArray(systems) ? systems : []).reduce((counts, system) => {
+    for (const category of collectDiagnosticBlockedCategories(system)) {
+      counts[category] = (counts[category] || 0) + 1;
+    }
+    return counts;
+  }, {});
+}
+
 function sanitizeDiagnosticItem(item = {}) {
   return {
     id: item.id || "",
     severity: item.severity || "",
     message: item.message || item.description || "",
+    blockedCategory: item.blockedCategory || classifyBlockedCategory(item.id),
     rerunNodes: compactItems(item.rerunNodes, 12),
     rewriteScope: item.rewriteScope || "",
     narrativePart: item.narrativePart || "",
@@ -791,11 +834,13 @@ function buildSystemDiagnosis(item = {}) {
     gaps.push({
       type: "pipeline-failure",
       severity: failure.recoverable ? "P1" : "P0",
+      blockedCategory: classifyBlockedCategory(`failure.${failure.category || "unknown"}`),
       message: failure.label || failure.category || "Pipeline failed.",
     });
     actions.push({
       id: `failure.${failure.category || "unknown"}`,
       message: failure.action || failure.message || "Inspect per-system log and pipeline-state.json.",
+      blockedCategory: classifyBlockedCategory(`failure.${failure.category || "unknown"}`),
       rerunNodes: compactItems(failure.retryPlan?.nodes ? splitCsv(failure.retryPlan.nodes) : [], 12),
       quotaImpact: failure.retryPlan?.quotaImpact || "",
       canRetry: Boolean(failure.retryPlan?.canRetry),
@@ -806,11 +851,13 @@ function buildSystemDiagnosis(item = {}) {
     gaps.push({
       type: "truth-readiness-missing",
       severity: "P0",
+      blockedCategory: "narrative",
       message: "truth-readiness-report.json is missing or invalid.",
     });
     actions.push({
       id: "truth-readiness.missing",
       message: "Run truth-readiness after evidence, claims, fact-check, and quality artifacts exist.",
+      blockedCategory: classifyBlockedCategory("truth-readiness.missing"),
       rerunNodes: ["truth-readiness"],
       quotaImpact: "low",
       canRetry: true,
@@ -822,6 +869,7 @@ function buildSystemDiagnosis(item = {}) {
       gaps.push({
         type: "truth-score",
         severity: "P0",
+        blockedCategory: "narrative",
         message: `Truth readiness is ${score}% and review requires ${TARGET_TRUTH_SCORE}%+.`,
       });
     }
@@ -829,11 +877,13 @@ function buildSystemDiagnosis(item = {}) {
       gaps.push({
         type: blocker.id || "truth-blocker",
         severity: blocker.severity || "P0",
+        blockedCategory: blocker.blockedCategory || classifyBlockedCategory(blocker.id),
         message: blocker.message || "Truth readiness blocker.",
       });
       actions.push({
         id: blocker.id || "truth-blocker",
         message: blocker.message || "Resolve truth readiness blocker.",
+        blockedCategory: blocker.blockedCategory || classifyBlockedCategory(blocker.id),
         rerunNodes: compactItems(blocker.rerunNodes, 12),
         rewriteScope: blocker.rewriteScope || "",
         narrativePart: blocker.narrativePart || "",
@@ -846,6 +896,7 @@ function buildSystemDiagnosis(item = {}) {
       actions.push({
         id: action.id || "truth-improvement",
         message: action.message || "Apply truth readiness improvement action.",
+        blockedCategory: action.blockedCategory || classifyBlockedCategory(action.id),
         rerunNodes: compactItems(action.rerunNodes, 12),
         rewriteScope: action.rewriteScope || "",
         narrativePart: action.narrativePart || "",
@@ -860,11 +911,13 @@ function buildSystemDiagnosis(item = {}) {
     gaps.push({
       type: "writable-claim-coverage",
       severity: "P0",
+      blockedCategory: "narrative",
       message: `${missingWritableClaimCount} writable claim(s) are not covered by the pending-review narrative.`,
     });
     actions.push({
       id: "narrative.cover-missing-writable-claims",
       message: "Rerun function-section narrative with missing writable claim IDs.",
+      blockedCategory: "narrative",
       rerunNodes: ["narrative", "fact-check", "golden-eval", "quality", "truth-readiness"],
       narrativePart: repair?.narrativePart || "function-sections",
       missingWritableClaimIds: compactItems(coverage?.missingWritableClaimIds, 12),
@@ -877,13 +930,14 @@ function buildSystemDiagnosis(item = {}) {
     gaps.push({
       type: "coverage-repair-incomplete",
       severity: "P1",
+      blockedCategory: "narrative",
       message: `Coverage repair status is ${repair.status}.`,
     });
   }
 
   const canSubmitReview = Boolean(truth?.canSubmitReview) && score >= TARGET_TRUTH_SCORE;
   const ready = canSubmitReview && !failure && missingWritableClaimCount === 0;
-  return {
+  const result = {
     code: item.code || "",
     name: item.name || "",
     status: item.status || "",
@@ -901,6 +955,8 @@ function buildSystemDiagnosis(item = {}) {
     actions,
     logFile: item.logFile || "",
   };
+  result.blockedCategories = result.ready ? [] : collectDiagnosticBlockedCategories(result);
+  return result;
 }
 
 function summarizeDiagnosisSystems(systems = []) {
@@ -917,6 +973,7 @@ function summarizeDiagnosisSystems(systems = []) {
     0,
   );
   const gapTypes = countGapTypes(systems);
+  const blockedCategories = countSystemBlockedCategories(systems.filter((item) => !item.ready));
   return {
     total,
     ready,
@@ -925,6 +982,7 @@ function summarizeDiagnosisSystems(systems = []) {
     quotaSensitive,
     missingWritableClaims,
     gapTypes,
+    blockedCategories,
   };
 }
 
@@ -963,6 +1021,7 @@ function renderBatchDiagnosisMarkdown(diagnosis = {}) {
     [
       mdCell(item.code),
       mdCell(item.name),
+      mdCell((item.blockedCategories || []).join(", ") || "-"),
       mdCell(item.ready ? "是" : "否"),
       mdCell(item.truthScorePercent === null ? "缺失" : `${item.truthScorePercent}%`),
       mdCell(item.missingWritableClaimCount || 0),
@@ -984,9 +1043,9 @@ function renderBatchDiagnosisMarkdown(diagnosis = {}) {
     `- Agent-writing quota sensitive: ${summary.quotaSensitive || 0}`,
     `- Missing writable claims: ${summary.missingWritableClaims || 0}`,
     "",
-    "| System | Name | Ready | Truth | Missing writable claims | Failure | Recoverable | Next action |",
-    "| --- | --- | --- | --- | ---: | --- | --- | --- |",
-    rows.length ? rows.join("\n") : "| - | - | - | - | 0 | - | - | - |",
+    "| System | Name | Categories | Ready | Truth | Missing writable claims | Failure | Recoverable | Next action |",
+    "| --- | --- | --- | --- | --- | ---: | --- | --- | --- |",
+    rows.length ? rows.join("\n") : "| - | - | - | - | - | 0 | - | - | - |",
     "",
     "## Details",
     "",
@@ -998,6 +1057,7 @@ function renderBatchDiagnosisMarkdown(diagnosis = {}) {
       `- Truth readiness: ${item.truthScorePercent === null ? "missing" : `${item.truthScorePercent}%`} / canSubmitReview=${item.canSubmitReview}`,
       `- Missing writable claims: ${item.missingWritableClaimCount || 0}`,
       `- Failure category: ${item.failureCategory || "-"}`,
+      `- Blocked categories: ${(item.blockedCategories || []).join(", ") || "-"}`,
       `- Log: ${item.logFile || "-"}`,
       "",
       item.gaps.length ? "**Gaps**" : "**Gaps**: none",
@@ -1099,6 +1159,8 @@ function buildRepairQueueItem(system = {}, index = 0, options = {}) {
   const nodes = normalizeRepairQueueNodes(action?.rerunNodes || []);
   const nodesCsv = nodes.join(",");
   const gapTypes = collectRepairGapTypes(system.gaps);
+  const blockedCategories = collectDiagnosticBlockedCategories(system);
+  const blockedCategory = blockedCategories[0] || "";
   const requiresAgentWriting = action?.quotaImpact === "agent-writing" || nodes.includes("narrative");
   const allowAgentWriting = Boolean(options.allowAgentWriting);
   const missingWritableClaimIds = uniqueCompactItems(
@@ -1135,6 +1197,8 @@ function buildRepairQueueItem(system = {}, index = 0, options = {}) {
     systemCode: system.code || "",
     systemName: system.name || "",
     priority: resolveRepairPriority(system.gaps),
+    blockedCategory,
+    blockedCategories,
     gapTypes,
     primaryGapType: gapTypes[0] || "",
     reason: gapReason,
@@ -1178,6 +1242,12 @@ function buildBatchRepairQueue(diagnosisOrState = {}, options = {}) {
     .map((system, index) => buildRepairQueueItem(system, index, options));
   const requiresAgentWriting = items.filter((item) => item.requiresAgentWriting).length;
   const autoRunnable = items.filter((item) => item.canAutoRun).length;
+  const blockedCategories = items.reduce((counts, item) => {
+    for (const category of uniqueCategories(item.blockedCategories || [item.blockedCategory])) {
+      counts[category] = (counts[category] || 0) + 1;
+    }
+    return counts;
+  }, {});
   return {
     artifactType: "batch-repair-queue",
     version: 1,
@@ -1202,6 +1272,7 @@ function buildBatchRepairQueue(diagnosisOrState = {}, options = {}) {
       requiresAgentWriting,
       lowQuota: items.length - requiresAgentWriting,
       truncated,
+      blockedCategories,
     },
     items,
   };
@@ -1213,6 +1284,8 @@ function renderBatchRepairQueueMarkdown(repairQueue = {}) {
     [
       mdCell(item.priority),
       mdCell(item.systemCode),
+      mdCell(item.blockedCategory || "-"),
+      mdCell((item.blockedCategories || []).join(", ") || "-"),
       mdCell(item.systemName),
       mdCell(item.canAutoRun ? "yes" : "no"),
       mdCell(item.quotaImpact || "-"),
@@ -1233,9 +1306,9 @@ function renderBatchRepairQueueMarkdown(repairQueue = {}) {
     `- Truncated: ${summary.truncated ? "yes" : "no"}`,
     `- Policy: reset=false, reviewNodeAllowed=false, allowAgentWriting=${repairQueue.policy?.allowAgentWriting ? "true" : "false"}`,
     "",
-    "| Priority | System | Name | Auto | Quota | Nodes | Reason | Blocked reason |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |",
-    rows.length ? rows.join("\n") : "| - | - | - | - | - | - | - | - |",
+    "| Priority | System | Category | Categories | Name | Auto | Quota | Nodes | Reason | Blocked reason |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    rows.length ? rows.join("\n") : "| - | - | - | - | - | - | - | - | - | - |",
     "",
     "## Commands",
     "",
@@ -1243,6 +1316,8 @@ function renderBatchRepairQueueMarkdown(repairQueue = {}) {
       `### ${item.systemCode || "-"} ${item.systemName || ""}`.trim(),
       "",
       `- Can auto-run: ${item.canAutoRun ? "yes" : "no"}`,
+      `- Blocked category: ${item.blockedCategory || "-"}`,
+      `- Blocked categories: ${(item.blockedCategories || []).join(", ") || "-"}`,
       `- Command: npm run ${item.command?.npmScript || "batch"} -- ${(item.command?.args || []).join(" ")}`,
       `- Reset: ${item.reset ? "true" : "false"}`,
       `- Narrative part: ${item.narrativePart || "-"}`,
